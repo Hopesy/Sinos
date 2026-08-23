@@ -331,3 +331,92 @@ jobs:
             echo "uploading: $(basename "$f")"
             gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
           done
+
+  verify-release-assets:
+    name: Verify release assets
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "$TAG" = "$GITHUB_REF" ]; then
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify draft and required assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_SHA=$(git rev-list -n 1 "$TAG")
+          if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag $TAG points to $TAG_SHA, workflow is building $GITHUB_SHA"
+            exit 1
+          fi
+
+          RELEASE_JSON=$(gh release view "$TAG" \
+            --repo "${{ github.repository }}" \
+            --json tagName,isDraft,assets)
+
+          ACTUAL_TAG=$(jq -r '.tagName' <<< "$RELEASE_JSON")
+          IS_DRAFT=$(jq -r '.isDraft' <<< "$RELEASE_JSON")
+          if [ "$ACTUAL_TAG" != "$TAG" ]; then
+            echo "::error::Release tag is $ACTUAL_TAG, expected $TAG"
+            exit 1
+          fi
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::Release $TAG must remain a draft until asset review is complete"
+            exit 1
+          fi
+
+          EXPECTED=(
+            "Sinos.CLI_${VERSION}_Windows_x64-setup.exe"
+            "Sinos.CLI_${VERSION}_Windows_x64.msi"
+            "Sinos.CLI_${VERSION}_macOS_arm64.dmg"
+            "Sinos.CLI_${VERSION}_macOS_x64.dmg"
+            "Sinos.CLI_${VERSION}_Linux_x64.deb"
+            "Sinos.CLI_${VERSION}_Linux_arm64.deb"
+            "Sinos.CLI_${VERSION}_Linux_x64.rpm"
+            "Sinos.CLI_${VERSION}_Linux_arm64.rpm"
+            "Sinos.CLI_${VERSION}_Linux_x64.AppImage"
+            "Sinos.CLI_${VERSION}_Linux_arm64.AppImage"
+          )
+
+          FAILED=0
+          for NAME in "${EXPECTED[@]}"; do
+            if jq -e --arg name "$NAME" \
+              '.assets[] | select(.name == $name and .state == "uploaded" and .size > 0)' \
+              <<< "$RELEASE_JSON" >/dev/null; then
+              SIZE=$(jq -r --arg name "$NAME" \
+                '.assets[] | select(.name == $name) | .size' \
+                <<< "$RELEASE_JSON")
+              echo "verified: $NAME ($SIZE bytes)"
+            else
+              echo "::error::Missing or empty release asset: $NAME"
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "Assets currently present:"
+            jq -r '.assets[] | "  \(.name) (\(.size) bytes, \(.state))"' <<< "$RELEASE_JSON"
+            exit 1
+          fi
+
+          echo "Verified ${#EXPECTED[@]} required assets for $TAG"

@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "rpm", "dmg", "app", "msi", "nsis"],
+    "targets": ["deb", "rpm", "appimage", "dmg", "app", "msi", "nsis"],
     "publisher": "Sinos Team",
     "resources": [],
     "icon": [
