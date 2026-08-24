@@ -1,0 +1,142 @@
+.image-surface {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 18px 10px;
+  box-sizing: border-box;
+  color: var(--text-1);
+  background: var(--bg-terminal);
+}
+
+.image-surface-toolbar,
+.image-surface-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.image-surface-toolbar { min-height: 36px; }
+.image-surface-heading,
+.image-surface-actions { display: flex; align-items: center; min-width: 0; }
+.image-surface-heading { gap: 9px; }
+.image-surface-title {
+  max-width: min(55vw, 720px);
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-surface-counter,
+.image-surface-footer { color: var(--text-3); font-size: 11px; }
+.image-surface-actions { gap: 5px; flex-shrink: 0; }
+.image-surface-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 31px;
+  height: 29px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs, 5px);
+  background: var(--bg-card);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.image-surface-actions button:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.image-surface-actions .image-surface-zoom { width: 54px; color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.image-surface-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 10px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: var(--radius-sm, 8px);
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--text-1) 4%, transparent) 25%, transparent 25%, transparent 75%, color-mix(in srgb, var(--text-1) 4%, transparent) 75%),
+    linear-gradient(45deg, color-mix(in srgb, var(--text-1) 4%, transparent) 25%, transparent 25%, transparent 75%, color-mix(in srgb, var(--text-1) 4%, transparent) 75%),
+    var(--bg-app);
+  background-position: 0 0, 12px 12px;
+  background-size: 24px 24px;
+  overscroll-behavior: contain;
+}
+.image-surface-stage img {
+  display: block;
+  max-width: 92%;
+  max-height: 92%;
+  object-fit: contain;
+  transform-origin: center;
+  user-select: none;
+  transition: opacity 120ms ease, transform 140ms ease-out;
+}
+.image-surface-loading,
+.image-surface-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+}
+.image-surface-error { color: #e9a6a6; }
+.image-surface-error code {
+  max-width: min(80vw, 720px);
+  overflow-wrap: anywhere;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+.image-surface-nav {
+  position: absolute;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 58px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 32px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.image-surface-nav:hover { background: var(--bg-hover); color: var(--text-1); opacity: 1; }
+.image-surface-nav-prev { left: 12px; }
+.image-surface-nav-next { right: 12px; }
+.image-surface-footer { line-height: 1.35; }
+.image-surface-footer span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) {
+  .image-surface { padding: 10px 9px 8px; }
+  .image-surface-title { max-width: 45vw; }
+  .image-surface-nav { width: 31px; height: 50px; }
+  .image-surface-nav-prev { left: 7px; }
+  .image-surface-nav-next { right: 7px; }
+}

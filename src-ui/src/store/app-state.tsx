@@ -289,6 +289,8 @@ export interface EditorTab {
   id: string;
   path: string;
   workspaceRoot: string;
+  kind: 'text' | 'image';
+  imageItems?: Array<{ path: string; name: string; size: number }>;
   dirty: boolean;
   externalChanged: boolean;
 }
@@ -383,7 +385,9 @@ type Action =
   | { type: 'SET_DIFF_MODE'; mode: 'overlay' | 'tab' }
   | { type: 'SET_DIFF_TAB_ACTIVE'; active: boolean }
   | { type: 'OPEN_EDITOR'; path: string; workspaceRoot: string }
+  | { type: 'OPEN_IMAGE'; path: string; workspaceRoot: string; items: Array<{ path: string; name: string; size: number }> }
   | { type: 'SET_EDITOR_ACTIVE'; id: string }
+  | { type: 'SET_EDITOR_PATH'; id: string; path: string }
   | { type: 'SET_EDITOR_DIRTY'; id: string; dirty: boolean }
   | { type: 'SET_EDITOR_EXTERNAL_CHANGED'; id: string; externalChanged: boolean }
   | { type: 'CLOSE_EDITOR'; id: string };
@@ -668,6 +672,38 @@ function reducer(state: AppState, action: Action): AppState {
         id: crypto.randomUUID(),
         path: action.path,
         workspaceRoot: action.workspaceRoot,
+        kind: 'text',
+        dirty: false,
+        externalChanged: false,
+      };
+      return {
+        ...state,
+        editorTabs: [...state.editorTabs, tab],
+        activeEditorId: tab.id,
+        editorTabActive: true,
+        diffTabActive: false,
+      };
+    }
+    case 'OPEN_IMAGE': {
+      const key = editorPathKey(action.path);
+      const existing = state.editorTabs.find(tab => editorPathKey(tab.path) === key);
+      if (existing) {
+        return {
+          ...state,
+          activeEditorId: existing.id,
+          editorTabActive: true,
+          diffTabActive: false,
+          editorTabs: state.editorTabs.map(tab => tab.id === existing.id && tab.kind === 'image'
+            ? { ...tab, imageItems: action.items }
+            : tab),
+        };
+      }
+      const tab: EditorTab = {
+        id: crypto.randomUUID(),
+        path: action.path,
+        workspaceRoot: action.workspaceRoot,
+        kind: 'image',
+        imageItems: action.items,
         dirty: false,
         externalChanged: false,
       };
@@ -682,6 +718,11 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_EDITOR_ACTIVE':
       if (!state.editorTabs.some(tab => tab.id === action.id)) return state;
       return { ...state, activeEditorId: action.id, editorTabActive: true, diffTabActive: false };
+    case 'SET_EDITOR_PATH':
+      return {
+        ...state,
+        editorTabs: state.editorTabs.map(tab => tab.id === action.id ? { ...tab, path: action.path } : tab),
+      };
     case 'SET_EDITOR_DIRTY':
       return {
         ...state,

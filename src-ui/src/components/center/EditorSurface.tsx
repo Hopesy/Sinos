@@ -104,6 +104,16 @@ function formatError(error: unknown, t: ReturnType<typeof useT>): string {
   if (message.includes('EDITOR_UNSUPPORTED_ENCODING')) return t('editor.encoding');
   if (message.includes('EDITOR_FILE_TOO_LARGE')) return t('editor.too_large');
   if (message.includes('EDITOR_PATH_OUTSIDE_WORKSPACE')) return t('editor.outside_workspace');
+  if (message.includes('EDITOR_FILE_UNAVAILABLE')) return t('editor.file_unavailable');
+  if (message.includes('EDITOR_WORKSPACE_UNAVAILABLE')) return t('editor.workspace_unavailable');
+  if (message.includes('EDITOR_NOT_A_FILE')) return t('editor.not_a_file');
+  if (message.includes('EDITOR_REPLACE_FAILED')) return t('editor.replace_failed');
+  if (message.includes('EDITOR_PERMISSION_COPY_FAILED')) return t('editor.permission_copy_failed');
+  if (message.includes('EDITOR_PARENT_UNAVAILABLE')) return t('editor.parent_unavailable');
+  if (message.includes('EDITOR_TEMP_CREATE_FAILED')) return t('editor.temp_create_failed');
+  if (message.includes('EDITOR_WRITE_FAILED')) return t('editor.write_failed');
+  if (message.includes('EDITOR_FLUSH_FAILED')) return t('editor.flush_failed');
+  if (message.includes('EDITOR_READ_FAILED')) return t('editor.read_failed');
   return message.replace(/^Error:\s*/, '') || t('editor.read_failed');
 }
 
@@ -120,7 +130,7 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
   const documentRef = useRef<EditorDocument | null>(null);
   const savingRef = useRef(false);
   const revisionRef = useRef('');
-  const lineEndingRef = useRef<'lf' | 'crlf'>('lf');
+  const lineEndingRef = useRef<'lf' | 'crlf' | 'mixed'>('lf');
   const bomRef = useRef(false);
   const externalChangedRef = useRef(false);
   const applyingSnapshotRef = useRef(false);
@@ -159,7 +169,9 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
         }
       }
       const keepLocalDocument = Boolean(existing && tab?.dirty);
-      const effectiveSnapshot = keepLocalDocument ? existing!.snapshot : snapshot;
+      const effectiveSnapshot = keepLocalDocument
+        ? existing!.snapshot
+        : { ...snapshot, content: model.getValue() };
       const document: EditorDocument = {
         snapshot: effectiveSnapshot,
         model,
@@ -173,6 +185,7 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
       externalChangedRef.current = Boolean(tab?.externalChanged);
       if (!keepLocalDocument) dispatch({ type: 'SET_EDITOR_EXTERNAL_CHANGED', id: tabId, externalChanged: false });
       setDirty(model.getValue() !== effectiveSnapshot.content);
+      setNotice(effectiveSnapshot.line_ending === 'mixed' ? t('editor.mixed_line_endings') : null);
       editor.setModel(model);
       if (previousModel && previousModel !== model) previousModel.dispose();
       if (document.viewState) editor.restoreViewState(document.viewState);
@@ -224,10 +237,13 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
         return;
       }
       revisionRef.current = response.revision;
+      const savedLineEnding = lineEndingRef.current === 'mixed' ? 'lf' : lineEndingRef.current;
+      lineEndingRef.current = savedLineEnding;
       document.snapshot = {
         ...document.snapshot,
         content: savedContent,
         revision: response.revision,
+        line_ending: savedLineEnding,
         size: response.size,
       };
       if (mountedRef.current && !document.model.isDisposed()) {
@@ -265,13 +281,14 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
       } finally {
         applyingSnapshotRef.current = false;
       }
-      document.snapshot = snapshot;
+      document.snapshot = { ...snapshot, content: document.model.getValue() };
       revisionRef.current = snapshot.revision;
       lineEndingRef.current = snapshot.line_ending;
       bomRef.current = snapshot.has_utf8_bom;
       externalChangedRef.current = false;
       dispatch({ type: 'SET_EDITOR_EXTERNAL_CHANGED', id: tabId, externalChanged: false });
       setDirty(false);
+      setNotice(snapshot.line_ending === 'mixed' ? t('editor.mixed_line_endings') : null);
     } catch (reloadError) {
       setNotice(formatError(reloadError, t));
     }
@@ -313,12 +330,12 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
             applyingSnapshotRef.current = false;
           }
           revisionRef.current = snapshot.revision;
-          document.snapshot = snapshot;
+          document.snapshot = { ...snapshot, content: document.model.getValue() };
           lineEndingRef.current = snapshot.line_ending;
           bomRef.current = snapshot.has_utf8_bom;
           externalChangedRef.current = false;
           dispatch({ type: 'SET_EDITOR_EXTERNAL_CHANGED', id: tabId, externalChanged: false });
-          setNotice(null);
+          setNotice(snapshot.line_ending === 'mixed' ? t('editor.mixed_line_endings') : null);
           setDirty(false);
           return;
         }

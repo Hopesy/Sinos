@@ -1,6 +1,6 @@
 /* Half-year contribution heatmap above the Launchpad pinned cards.
-   Cells follow the active theme's --accent so the grid recolours
-   automatically across Dark / Light / Sakura / Lavender / etc.
+   Cells use GitHub's green contribution ramp. Empty cells switch between
+   GitHub dark/light neutrals so activity remains legible in either mode.
 
    No card chrome — heatmap blends into the launchpad surface so the
    pinned cards below stay the visual anchor. */
@@ -10,6 +10,22 @@
   box-sizing: border-box;
   padding: 12px 0 0;
   margin-top: 24px;
+
+  /* GitHub-style contribution ramp. Keep the activity scale independent
+     from the selected Sinos theme so the heatmap always reads as activity. */
+  --heatmap-empty: #161b22;
+  --heatmap-level-1: #0e4429;
+  --heatmap-level-2: #006d32;
+  --heatmap-level-3: #26a641;
+  --heatmap-level-4: #39d353;
+}
+
+[data-theme="light"] .heatmap-card {
+  --heatmap-empty: #ebedf0;
+  --heatmap-level-1: #9be9a8;
+  --heatmap-level-2: #40c463;
+  --heatmap-level-3: #30a14e;
+  --heatmap-level-4: #216e39;
 }
 
 .heatmap-loading {
@@ -82,7 +98,7 @@
   width: 100%;
   aspect-ratio: 1;
   border-radius: 3px;
-  background: var(--bg-hover);
+  background: var(--heatmap-empty);
   transition: outline-color 0.12s ease, background 0.18s ease;
   /* position:relative anchors the ::after / ::before tooltip pseudos. */
   position: relative;
@@ -90,14 +106,13 @@
   outline-offset: 1px;
 }
 
-/* color-mix lets every theme reuse the same intensity ramp without
-   shipping per-theme heatmap palettes. Falls through to var(--accent)
-   at level 4 for the loudest stop. */
-.heatmap-cell[data-level="0"] { background: var(--bg-hover); }
-.heatmap-cell[data-level="1"] { background: color-mix(in srgb, var(--accent) 22%, var(--bg-hover)); }
-.heatmap-cell[data-level="2"] { background: color-mix(in srgb, var(--accent) 48%, var(--bg-hover)); }
-.heatmap-cell[data-level="3"] { background: color-mix(in srgb, var(--accent) 75%, var(--bg-hover)); }
-.heatmap-cell[data-level="4"] { background: var(--accent); }
+/* GitHub's contribution colors are intentionally explicit rather than
+   derived from --accent: the green ramp is the heatmap's visual language. */
+.heatmap-cell[data-level="0"] { background: var(--heatmap-empty); }
+.heatmap-cell[data-level="1"] { background: var(--heatmap-level-1); }
+.heatmap-cell[data-level="2"] { background: var(--heatmap-level-2); }
+.heatmap-cell[data-level="3"] { background: var(--heatmap-level-3); }
+.heatmap-cell[data-level="4"] { background: var(--heatmap-level-4); }
 
 /* Future cells (this week's tail past today) stay transparent and inert
    so the right column doesn't get visually truncated. */

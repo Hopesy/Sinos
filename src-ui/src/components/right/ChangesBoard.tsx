@@ -140,6 +140,27 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
 
   const repoRoot = changes?.state === 'ok' ? changes.repo_root : null;
 
+  // Select one Git-backed file change. A single click keeps the lightweight
+  // bottom preview; a double click promotes the exact same Git diff to the
+  // center diff tab. The selection carries the change kind/commit hash so
+  // DiffPanel can resolve the correct Git revisions (working tree, untracked
+  // file, or <commit>~1 ↔ <commit>) instead of opening the file editor.
+  const selectDiff = (entry: GitFileEntry, group: Group, openTab = false) => {
+    const folderPath = resolveDiffContext(activeSession)?.folderPath ?? '';
+    const selection: DiffSelection = {
+      repoRoot: repoRoot ?? '',
+      folderPath,
+      path: entry.path,
+      rel: entry.rel,
+      kind: group.kind,
+      commitHash: group.commitHash,
+      added: entry.added,
+      deleted: entry.deleted,
+    };
+    dispatch({ type: 'SET_DIFF_SELECTION', selection });
+    if (openTab) dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' });
+  };
+
   // Flatten to render items: session commits made this window (if any), then
   // uncommitted / untracked below when the tree is dirty. An old project just
   // opened has no session commits and (when clean) shows the empty/clean state
@@ -340,34 +361,26 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
               <div
                 key={it.key}
                 className={`changes-row ${effectiveSelected === it.key ? 'selected' : ''}`}
-                onClick={() => {
+                onClick={(event) => {
+                  // React dispatches a second click with detail=2 before the
+                  // dblclick event. Ignore that second click so a double
+                  // click cannot briefly clear the selected Git diff.
+                  if (event.detail > 1) return;
                   // Toggle off when re-clicking the already-selected row.
                   if (effectiveSelected === it.key) {
                     dispatch({ type: 'CLEAR_DIFF' });
                     return;
                   }
-                  // Snapshot the active terminal tab's folderPath alongside the
-                  // clicked row's diff params — a center diff tab is not a
-                  // terminal and has no own cwd to resolveDiffContext against
-                  // later, so the folderPath must travel with the selection.
-                  const folderPath = resolveDiffContext(activeSession)?.folderPath ?? '';
-                  const selection: DiffSelection = {
-                    repoRoot: repoRoot ?? '',
-                    folderPath,
-                    path: entry.path,
-                    rel: entry.rel,
-                    kind: group.kind,
-                    commitHash: group.commitHash,
-                    added: entry.added,
-                    deleted: entry.deleted,
-                  };
-                  dispatch({ type: 'SET_DIFF_SELECTION', selection });
+                  selectDiff(entry, group);
                 }}
                 onDoubleClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  const workspaceRoot = repoRoot ?? resolveDiffContext(activeSession)?.folderPath ?? '';
-                  if (workspaceRoot) dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot });
+                  // Double-click is intentionally Git-diff-only. It must not
+                  // open Monaco/the file editor: the row belongs to the Git
+                  // modification record, so the requested action is the
+                  // corresponding read-only diff.
+                  selectDiff(entry, group, true);
                 }}
                 onMouseDown={(e) => beginExplorerDrag(entry.path, e)}
                 onContextMenu={(e) => {

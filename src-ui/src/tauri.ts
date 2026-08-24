@@ -130,7 +130,7 @@ export interface FontInfo {
 export interface EditorFileSnapshot {
   content: string;
   revision: string;
-  line_ending: 'lf' | 'crlf';
+  line_ending: 'lf' | 'crlf' | 'mixed';
   has_utf8_bom: boolean;
   size: number;
 }
@@ -274,7 +274,7 @@ export const commands = {
     workspaceRoot: string,
     content: string,
     expectedRevision: string,
-    lineEnding: 'lf' | 'crlf',
+    lineEnding: 'lf' | 'crlf' | 'mixed',
     hasUtf8Bom: boolean,
   ) => invoke<EditorSaveResponse>('write_editor_file', {
     path,
@@ -286,10 +286,12 @@ export const commands = {
   }),
 
   // File system operations
-  fsDelete: (path: string) => invoke<void>('fs_delete', { path }),
-  fsRename: (path: string, newName: string) => invoke<void>('fs_rename', { path, newName }),
-  fsPaste: (action: string, srcPath: string, targetDir: string) =>
-    invoke<void>('fs_paste', { action, srcPath, targetDir }),
+  fsDelete: (path: string, workspaceRoot: string) =>
+    invoke<void>('fs_delete', { path, workspaceRoot }),
+  fsRename: (path: string, newName: string, workspaceRoot: string) =>
+    invoke<void>('fs_rename', { path, newName, workspaceRoot }),
+  fsPaste: (action: string, srcPath: string, targetDir: string, workspaceRoot: string) =>
+    invoke<void>('fs_paste', { action, srcPath, targetDir, workspaceRoot }),
   showInFolder: (path: string) => invoke<void>('show_in_folder', { path }),
 
   // Task Board persistence (~/.coffee-cli/tasks.json)

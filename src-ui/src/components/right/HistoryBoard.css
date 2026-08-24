@@ -159,19 +159,27 @@
    the right edge. */
 .agent-session-search-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
 }
 .agent-session-search-row .agent-session-search-wrap {
-  flex: 1;
+  flex: 1 1 100%;
   margin-bottom: 0;
+}
+.agent-session-search-row .history-tool-filter-trigger {
+  flex: 1 1 0;
+  max-width: none;
 }
 
 .history-tool-filter-trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
   height: var(--history-search-h);
   box-sizing: border-box;
   padding: 8px 10px;
@@ -186,10 +194,40 @@
   cursor: pointer;
   transition: all 0.15s ease;
 }
+.history-tool-filter-trigger:hover,
+.history-tool-filter-trigger:focus-visible,
+.history-tool-filter-trigger.active {
+  color: var(--text-1);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: var(--bg-hover);
+}
+.history-filter-trigger-icon,
+.history-filter-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: currentColor;
+}
+.history-filter-trigger-icon img,
+.history-filter-option-icon img,
+.history-filter-trigger-icon > span,
+.history-filter-option-icon > span {
+  width: 14px !important;
+  height: 14px !important;
+}
+.history-filter-chevron {
+  flex: 0 0 12px;
+  opacity: 0.72;
+}
 .history-tool-filter-label {
-  max-width: 72px;
+  min-width: 0;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-tool-filter-backdrop {
@@ -227,6 +265,10 @@
   font-family: var(--font, system-ui);
   text-align: left;
   cursor: pointer;
+}
+.history-tool-filter-opt:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -1px;
 }
 .history-tool-filter-opt:hover {
   background: var(--bg-hover);

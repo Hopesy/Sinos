@@ -20,6 +20,31 @@ import './Explorer.css';
 // right-side ChangesBoard can read the same data when the left panel is
 // collapsed. Explorer is now a pure consumer.
 const normPath = (p: string) => p.replace(/\\/g, '/');
+const basenamePath = (p: string) => normPath(p).replace(/\/+$/, '').split('/').pop() || p;
+
+function formatExplorerError(error: unknown, t: ReturnType<typeof useT>): string {
+  const message = String(error);
+  if (message.includes('FS_PATH_OUTSIDE_WORKSPACE')) return t('explorer.error_outside_workspace');
+  if (message.includes('FS_WORKSPACE_ROOT_PROTECTED')) return t('explorer.error_workspace_root');
+  if (message.includes('FS_INVALID_NAME')) return t('explorer.error_invalid_name');
+  if (message.includes('FS_PASTE_SAME_PATH')) return t('explorer.error_paste_same_path');
+  if (message.includes('FS_PASTE_INTO_SELF')) return t('explorer.error_paste_self');
+  if (message.includes('FS_DESTINATION_EXISTS')) return t('explorer.error_destination_exists');
+  if (message.includes('FS_SYMLINK_UNSUPPORTED')) return t('explorer.error_symlink');
+  if (message.includes('FS_WORKSPACE_UNAVAILABLE')) return t('explorer.error_workspace_unavailable');
+  if (message.includes('FS_TARGET_UNAVAILABLE')) return t('explorer.error_target_unavailable');
+  if (message.includes('FS_PATH_UNAVAILABLE')) return t('explorer.error_path_unavailable');
+  if (message.includes('FS_SOURCE_UNAVAILABLE')) return t('explorer.error_path_unavailable');
+  if (message.includes('FS_DELETE_FAILED')) return t('explorer.error_delete_failed');
+  if (message.includes('FS_RENAME_FAILED')) return t('explorer.error_rename_failed');
+  if (message.includes('FS_MOVE_FAILED')) return t('explorer.error_move_failed');
+  if (message.includes('FS_COPY_ROLLBACK_FAILED')) return t('explorer.error_copy_rollback_failed');
+  if (message.includes('FS_COPY_FAILED')) return t('explorer.error_copy_failed');
+  if (message.includes('FS_PARENT_UNAVAILABLE') || message.includes('FS_DESTINATION_UNAVAILABLE')) return t('explorer.error_path_unavailable');
+  if (message.includes('FS_INVALID_ACTION')) return t('explorer.error_generic');
+  if (message.includes('FS_DIRECTORY_UNAVAILABLE') || message.includes('FS_ENTRY_UNAVAILABLE')) return t('explorer.directory_error');
+  return message.replace(/^Error:\s*/, '') || t('explorer.error_generic');
+}
 
 // ─── Context Menu ────────────────────────────────────────────────────────────
 
@@ -29,6 +54,7 @@ export interface CtxMenuState {
   absolutePath: string;
   relativePath: string;
   isDir?: boolean;
+  workspaceRoot?: string;
   onRename?: () => void;
   onOpenEditor?: () => void;
   // ChangesBoard reuses this menu read-only — the audit view shouldn't
@@ -52,7 +78,7 @@ function dispatchFsRefresh(dirPath: string) {
   window.dispatchEvent(new CustomEvent('fs-refresh', { detail: { dirPath } }));
 }
 
-export function ContextMenu({ menu, onClose }: { menu: CtxMenuState; onClose: () => void }) {
+export function ContextMenu({ menu, onClose, onError }: { menu: CtxMenuState; onClose: () => void; onError?: (error: unknown) => void }) {
   const t = useT();
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -89,8 +115,13 @@ export function ContextMenu({ menu, onClose }: { menu: CtxMenuState; onClose: ()
     const targetDir = menu.isDir ? menu.absolutePath : menu.absolutePath.replace(/[\\/][^\\/]+$/, '');
     const sourcePath = fsClipboard.path;
     const action = fsClipboard.action;
+    if (!menu.workspaceRoot) {
+      onError?.('FS_WORKSPACE_UNAVAILABLE');
+      onClose();
+      return;
+    }
     try {
-      await commands.fsPaste(action, sourcePath, targetDir);
+      await commands.fsPaste(action, sourcePath, targetDir, menu.workspaceRoot);
       
       // Refresh the destination directory where we just pasted
       dispatchFsRefresh(targetDir);
@@ -103,18 +134,33 @@ export function ContextMenu({ menu, onClose }: { menu: CtxMenuState; onClose: ()
       }
     } catch (e) {
       console.error('[Explorer] paste failed:', e);
+      onError?.(e);
     }
     onClose();
   };
 
   const handleDelete = async () => {
+    const itemName = basenamePath(menu.absolutePath);
+    const message = menu.isDir
+      ? t('explorer.delete_confirm_dir', { name: itemName, path: menu.absolutePath })
+      : t('explorer.delete_confirm_file', { name: itemName, path: menu.absolutePath });
+    if (!window.confirm(message)) {
+      onClose();
+      return;
+    }
+    if (!menu.workspaceRoot) {
+      onError?.('FS_WORKSPACE_UNAVAILABLE');
+      onClose();
+      return;
+    }
     onClose();
     try {
-      await commands.fsDelete(menu.absolutePath);
+      await commands.fsDelete(menu.absolutePath, menu.workspaceRoot);
       const parentDir = menu.absolutePath.replace(/[\\/][^\\/]+$/, '');
       dispatchFsRefresh(parentDir);
     } catch (e) {
       console.error('[Explorer] delete failed:', e);
+      onError?.(e);
     }
   };
 
@@ -261,6 +307,17 @@ function formatBytes(b: number) {
   return b < 1024 ? b + ' B' : (b / 1024).toFixed(1) + ' KB';
 }
 
+const IMAGE_EXTENSIONS = new Set([
+  'avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'webp',
+]);
+
+function isImageFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return !!ext && IMAGE_EXTENSIONS.has(ext);
+}
+
+type ImageOpenHandler = (entry: DirEntryInfo, siblings: DirEntryInfo[], workspaceRoot: string) => void;
+
 // ─── Icon Themes ──────────────────────────────────────────────────────────────
 // Every theme ships a complete 19-SVG set under /icons/themes/<id>/.
 // No root-level fallback: adding a theme = dropping a new folder + listing it
@@ -320,11 +377,13 @@ function getFileIcon(ext: string): string {
 
 /** A single expandable directory node for the "My Computer" tab.
  *  Loads children lazily from the backend on first expand. */
-function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { name: string; dirPath: string; workspaceRoot: string; icon?: string; onCtxMenu: (menu: CtxMenuState) => void }) {
+function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu, onError, onOpenImage }: { name: string; dirPath: string; workspaceRoot: string; icon?: string; onCtxMenu: (menu: CtxMenuState) => void; onError: (error: unknown) => void; onOpenImage: ImageOpenHandler }) {
   const { state: { iconTheme } } = useAppState();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<DirEntryInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   // True when any descendant file has uncommitted changes. Used to tint the
   // folder name as a "trail" leading to the change — folded folders still
@@ -339,24 +398,35 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
     [dirtyDirs, dirPath],
   );
 
-  const toggle = async () => {
-    if (!open && children === null) {
-      setLoading(true);
-      try {
-        const entries = await commands.listDirectory(dirPath);
-        setChildren(entries);
-      } catch (e) {
-        console.warn('[Explorer] list_directory failed:', e);
-        setChildren([]);
-      }
+  const loadChildren = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const entries = await commands.listDirectory(dirPath);
+      setChildren(entries);
+    } catch (e) {
+      console.warn('[Explorer] list_directory failed:', e);
+      setChildren([]);
+      setLoadError(true);
+      onError(e);
+    } finally {
       setLoading(false);
     }
-    setOpen(!open);
+  }, [dirPath, onError]);
+
+  const toggle = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (children === null && !loading) void loadChildren();
   };
 
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState(name);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const cancelRenameRef = useRef(false);
 
   // Listen for fs-refresh events targeting our own directory
   useEffect(() => {
@@ -365,27 +435,34 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
       const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
       if (norm(ev.detail.dirPath) === norm(dirPath)) {
         if (open) {
-          commands.listDirectory(dirPath).then(setChildren).catch(() => setChildren([]));
+          void loadChildren();
         } else {
           setChildren(null);
+          setLoadError(false);
         }
       }
     };
     window.addEventListener('fs-refresh', handler);
     return () => window.removeEventListener('fs-refresh', handler);
-  }, [dirPath, open]);
+  }, [dirPath, loadChildren, open]);
 
   useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
 
   const commitRename = async () => {
+    if (cancelRenameRef.current) {
+      cancelRenameRef.current = false;
+      setRenameVal(name);
+      setRenaming(false);
+      return;
+    }
     if (renameVal.trim() && renameVal !== name) {
       const absPath = dirPath.replace(/\\/g, '/');
       try {
-        await commands.fsRename(absPath, renameVal.trim());
+        await commands.fsRename(absPath, renameVal.trim(), workspaceRoot);
         // Notify parent directory to refresh
         const parentDir = absPath.replace(/\/[^/]+$/, '');
         dispatchFsRefresh(parentDir);
-      } catch (e) { console.error('[Explorer] rename failed:', e); }
+      } catch (e) { console.error('[Explorer] rename failed:', e); onError(e); }
     }
     setRenaming(false);
   };
@@ -399,7 +476,12 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
       absolutePath: dirPath.replace(/\\/g, '/'),
       relativePath: dirPath.replace(/\\/g, '/'),
       isDir: true,
-      onRename: () => setRenaming(true),
+      workspaceRoot,
+      onRename: () => {
+        cancelRenameRef.current = false;
+        setRenameVal(name);
+        setRenaming(true);
+      },
     });
   };
 
@@ -434,8 +516,15 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
           onChange={e => setRenameVal(e.target.value)}
           onBlur={commitRename}
           onKeyDown={e => {
-            if (e.key === 'Enter') commitRename();
-            if (e.key === 'Escape') setRenaming(false);
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelRenameRef.current = true;
+              e.currentTarget.blur();
+            }
           }}
           onClick={e => e.stopPropagation()}
         />
@@ -443,17 +532,24 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
       {open && (
         <div className="tree-children">
           {loading ? (
-            <div style={{ padding: '6px 8px', color: 'var(--text-3)', fontSize: 12 }}>Loading...</div>
+            <div className="tree-state" role="status">{t('explorer.loading')}</div>
+          ) : loadError ? (
+            <div className="tree-state tree-state-error">
+              <span>{t('explorer.directory_error')}</span>
+              <button type="button" onClick={(event) => { event.stopPropagation(); void loadChildren(); setOpen(true); }}>
+                {t('editor.retry')}
+              </button>
+            </div>
           ) : children && children.length === 0 ? (
-            <div style={{ padding: '6px 8px', color: 'var(--text-3)', fontSize: 12, opacity: 0.5 }}>(empty)</div>
+            <div className="tree-state" role="status">{t('explorer.empty')}</div>
           ) : children?.slice().sort((a, b) => {
             if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
             return a.name.localeCompare(b.name);
-          }).map(entry => (
+      }).map(entry => (
             entry.is_dir ? (
-              <BrowserDirNode key={entry.path} name={entry.name} dirPath={entry.path} workspaceRoot={workspaceRoot} onCtxMenu={onCtxMenu} />
+              <BrowserDirNode key={entry.path} name={entry.name} dirPath={entry.path} workspaceRoot={workspaceRoot} onCtxMenu={onCtxMenu} onError={onError} onOpenImage={onOpenImage} />
             ) : (
-              <BrowserFileNode key={entry.path} entry={entry} parentDirPath={dirPath} workspaceRoot={workspaceRoot} onCtxMenu={onCtxMenu} />
+              <BrowserFileNode key={entry.path} entry={entry} parentDirPath={dirPath} siblings={children ?? []} workspaceRoot={workspaceRoot} onCtxMenu={onCtxMenu} onError={onError} onOpenImage={onOpenImage} />
             )
           ))}
         </div>
@@ -463,11 +559,14 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu }: { nam
 }
 
 /** A leaf file node inside the My Computer tree with inline rename support. */
-function BrowserFileNode({ entry, parentDirPath, workspaceRoot, onCtxMenu }: {
+function BrowserFileNode({ entry, parentDirPath, siblings, workspaceRoot, onCtxMenu, onError, onOpenImage }: {
   entry: DirEntryInfo;
   parentDirPath: string;
+  siblings: DirEntryInfo[];
   workspaceRoot: string;
   onCtxMenu: (menu: CtxMenuState) => void;
+  onError: (error: unknown) => void;
+  onOpenImage: ImageOpenHandler;
 }) {
   const { state: { iconTheme }, dispatch } = useAppState();
   const fileStats = useFileStats();
@@ -475,16 +574,23 @@ function BrowserFileNode({ entry, parentDirPath, workspaceRoot, onCtxMenu }: {
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState(entry.name);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const cancelRenameRef = useRef(false);
 
   useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
 
   const commitRename = async () => {
+    if (cancelRenameRef.current) {
+      cancelRenameRef.current = false;
+      setRenameVal(entry.name);
+      setRenaming(false);
+      return;
+    }
     if (renameVal.trim() && renameVal !== entry.name) {
       try {
-        await commands.fsRename(entry.path, renameVal.trim());
+        await commands.fsRename(entry.path, renameVal.trim(), workspaceRoot);
         const parentNorm = parentDirPath.replace(/\\/g, '/');
         dispatchFsRefresh(parentNorm);
-      } catch (e) { console.error('[Explorer] rename failed:', e); }
+      } catch (e) { console.error('[Explorer] rename failed:', e); onError(e); }
     }
     setRenaming(false);
   };
@@ -498,8 +604,19 @@ function BrowserFileNode({ entry, parentDirPath, workspaceRoot, onCtxMenu }: {
       absolutePath: entry.path.replace(/\\/g, '/'),
       relativePath: entry.path.replace(/\\/g, '/'),
       isDir: false,
-      onRename: () => setRenaming(true),
-      onOpenEditor: () => dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot }),
+      workspaceRoot,
+      onRename: () => {
+        cancelRenameRef.current = false;
+        setRenameVal(entry.name);
+        setRenaming(true);
+      },
+      onOpenEditor: () => {
+        if (isImageFile(entry.name)) {
+          onOpenImage(entry, siblings, workspaceRoot);
+        } else {
+          dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot });
+        }
+      },
     });
   };
 
@@ -508,12 +625,21 @@ function BrowserFileNode({ entry, parentDirPath, workspaceRoot, onCtxMenu }: {
     beginExplorerDrag(entry.path, e);
   };
 
+  const handleFileDoubleClick = () => {
+    if (isImageFile(entry.name)) {
+      onOpenImage(entry, siblings, workspaceRoot);
+    } else {
+      dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot });
+    }
+  };
+
   return (
     <div
       className={`tree-file ${renaming ? 'renaming' : ''}`}
       onContextMenu={handleCtxMenu}
       onMouseDown={onFileMouseDown}
-      onDoubleClick={() => dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot })}
+      onDoubleClick={handleFileDoubleClick}
+      title={isImageFile(entry.name) ? 'Double-click to open image tab' : undefined}
     >
       <span className="tree-icon">
         <ThemedIcon
@@ -531,8 +657,15 @@ function BrowserFileNode({ entry, parentDirPath, workspaceRoot, onCtxMenu }: {
         onChange={e => setRenameVal(e.target.value)}
         onBlur={commitRename}
         onKeyDown={e => {
-          if (e.key === 'Enter') commitRename();
-          if (e.key === 'Escape') setRenaming(false);
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelRenameRef.current = true;
+            e.currentTarget.blur();
+          }
         }}
         onClick={e => e.stopPropagation()}
       />
@@ -559,21 +692,56 @@ export function Explorer() {
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const reportError = useCallback((error: unknown) => {
+    setOperationError(formatExplorerError(error, t));
+  }, [t]);
   const handleCtxMenu = useCallback((menu: CtxMenuState) => setCtxMenu(menu), []);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+  const handleOpenImage = useCallback((entry: DirEntryInfo, siblings: DirEntryInfo[], workspaceRoot: string) => {
+    const items = siblings
+      .filter(item => !item.is_dir && isImageFile(item.name))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      .map(item => ({ path: item.path, name: item.name, size: item.size }));
+    dispatch({ type: 'OPEN_IMAGE', path: entry.path, workspaceRoot, items });
+  }, [dispatch]);
 
   // Workspace tree: read one directory level at a time from the OS — same
   // semantics as Windows Explorer / Finder / GNOME Files. No filtering,
   // no recursion, no MAX_FILES cap. Subdirs lazy-load via BrowserDirNode.
   const [rootEntries, setRootEntries] = useState<DirEntryInfo[] | null>(null);
+  const [rootLoading, setRootLoading] = useState(false);
+  const [rootError, setRootError] = useState(false);
+  const rootLoadGenerationRef = useRef(0);
+  const reloadRoot = useCallback(async () => {
+    if (!folderPath) return;
+    const generation = ++rootLoadGenerationRef.current;
+    setRootLoading(true);
+    setRootError(false);
+    try {
+      const entries = await commands.listDirectory(folderPath);
+      if (generation === rootLoadGenerationRef.current) setRootEntries(entries);
+    } catch (error) {
+      if (generation === rootLoadGenerationRef.current) {
+        setRootEntries([]);
+        setRootError(true);
+        reportError(error);
+      }
+    } finally {
+      if (generation === rootLoadGenerationRef.current) setRootLoading(false);
+    }
+  }, [folderPath, reportError]);
+
   useEffect(() => {
-    if (!folderPath) { setRootEntries(null); return; }
-    let cancelled = false;
-    commands.listDirectory(folderPath)
-      .then(entries => { if (!cancelled) setRootEntries(entries); })
-      .catch(() => { if (!cancelled) setRootEntries([]); });
-    return () => { cancelled = true; };
-  }, [folderPath]);
+    if (!folderPath) {
+      rootLoadGenerationRef.current += 1;
+      setRootEntries(null);
+      setRootError(false);
+      setRootLoading(false);
+      return;
+    }
+    void reloadRoot();
+  }, [folderPath, reloadRoot]);
 
   // Snapshot lifecycle and the +N/-M map are owned by FileStatsProvider at
   // App level (lib/file-stats.tsx) so the right-side ChangesBoard can read
@@ -588,12 +756,12 @@ export function Explorer() {
       const ev = e as CustomEvent<{ dirPath: string }>;
       const dir = norm(ev.detail.dirPath);
       if (dir === target) {
-        commands.listDirectory(folderPath).then(setRootEntries).catch(() => setRootEntries([]));
+        void reloadRoot();
       }
     };
     window.addEventListener('fs-refresh', handler);
     return () => window.removeEventListener('fs-refresh', handler);
-  }, [folderPath]);
+  }, [folderPath, reloadRoot]);
 
   // Update check
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -858,9 +1026,9 @@ export function Explorer() {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
-        ) : rootEntries === null ? (
+        ) : rootEntries === null || rootLoading ? (
           <ScrollPanel>
-            <div className="file-tree-container" style={{ pointerEvents: 'none' }}>
+            <div className="file-tree-container" style={{ pointerEvents: 'none' }} role="status" aria-label={t('explorer.loading')}>
               {Array.from({ length: 12 }).map((_, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', opacity: Math.max(0.1, 1 - i * 0.08) }}>
                   <div className="shimmer-box" style={{ width: 14, height: 14, borderRadius: 'var(--radius-xs)', flexShrink: 0 }}></div>
@@ -869,17 +1037,26 @@ export function Explorer() {
               ))}
             </div>
           </ScrollPanel>
+        ) : rootError ? (
+          <div className="explorer-state explorer-state-error" role="alert">
+            <div>{t('explorer.root_error')}</div>
+            <button type="button" onClick={() => void reloadRoot()}>{t('editor.retry')}</button>
+          </div>
+        ) : rootEntries?.length === 0 ? (
+          <div className="explorer-state" role="status">
+            <div>{t('explorer.empty')}</div>
+          </div>
         ) : (
           <ScrollPanel>
             <div className="file-tree-container">
-              {rootEntries.slice().sort((a, b) => {
+              {rootEntries!.slice().sort((a, b) => {
                 if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
                 return a.name.localeCompare(b.name);
               }).map(entry => (
                 entry.is_dir ? (
-                  <BrowserDirNode key={entry.path} name={entry.name} dirPath={entry.path} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} />
+                <BrowserDirNode key={entry.path} name={entry.name} dirPath={entry.path} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
                 ) : (
-                  <BrowserFileNode key={entry.path} entry={entry} parentDirPath={folderPath!} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} />
+                  <BrowserFileNode key={entry.path} entry={entry} parentDirPath={folderPath!} siblings={rootEntries ?? []} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
                 )
               ))}
             </div>
@@ -889,8 +1066,15 @@ export function Explorer() {
 
 
 
+      {operationError && (
+        <div className="explorer-operation-error" role="alert">
+          <span>{operationError}</span>
+          <button type="button" aria-label={t('editor.close_error')} onClick={() => setOperationError(null)}>×</button>
+        </div>
+      )}
+
       {/* Right-click context menu */}
-      {ctxMenu && <ContextMenu menu={ctxMenu} onClose={closeCtxMenu} />}
+      {ctxMenu && <ContextMenu menu={ctxMenu} onClose={closeCtxMenu} onError={reportError} />}
 
       {/* Theme + language pickers now live in the titlebar-gear SettingsModal
           (App-level), not here. */}

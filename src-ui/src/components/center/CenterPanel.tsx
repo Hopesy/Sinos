@@ -17,6 +17,9 @@ import { useT } from '../../i18n/useT';
 const EditorSurface = lazy(() => import('./EditorSurface').then(module => ({
   default: module.EditorSurface,
 })));
+const ImageSurface = lazy(() => import('./ImageSurface').then(module => ({
+  default: module.ImageSurface,
+})));
 
 // Dropdown shown when a tool card's folder icon is clicked: the globally
 // recent project folders (any tool that used one) + "Open folder…" last.
@@ -1416,12 +1419,20 @@ export function CenterPanel() {
               className={`chrome-tab ${isActiveEditor ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_EDITOR_ACTIVE', id: editorTab.id })}
             >
-              <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="8" y1="13" x2="16" y2="13" />
-                <line x1="8" y1="17" x2="14" y2="17" />
-              </svg>
+              {editorTab.kind === 'image' ? (
+                <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="m21 15-5-5L5 21" />
+                </svg>
+              ) : (
+                <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="8" y1="13" x2="16" y2="13" />
+                  <line x1="8" y1="17" x2="14" y2="17" />
+                </svg>
+              )}
               <span className="tab-title" title={editorTab.path} style={{ flex: '0 1 auto', minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                 {editorTab.dirty ? `● ${title}` : title}
               </span>
@@ -1619,12 +1630,21 @@ export function CenterPanel() {
               style={{ display: isActiveEditor ? 'flex' : 'none', width: '100%', height: '100%', position: 'relative' }}
             >
               <Suspense fallback={<div className="editor-loading-surface">{t('editor.loading')}</div>}>
-                <EditorSurface
-                  tabId={editorTab.id}
-                  path={editorTab.path}
-                  workspaceRoot={editorTab.workspaceRoot}
-                  isActive={isActiveEditor}
-                />
+                {editorTab.kind === 'image' ? (
+                  <ImageSurface
+                    path={editorTab.path}
+                    initialItems={editorTab.imageItems}
+                    isActive={isActiveEditor}
+                    onPathChange={path => dispatch({ type: 'SET_EDITOR_PATH', id: editorTab.id, path })}
+                  />
+                ) : (
+                  <EditorSurface
+                    tabId={editorTab.id}
+                    path={editorTab.path}
+                    workspaceRoot={editorTab.workspaceRoot}
+                    isActive={isActiveEditor}
+                  />
+                )}
               </Suspense>
             </div>
           );

@@ -37,16 +37,75 @@ fn editor_revision(bytes: &[u8]) -> String {
 }
 
 fn editor_line_ending(bytes: &[u8]) -> &'static str {
-    if bytes.windows(2).any(|pair| pair == b"\r\n") { "crlf" } else { "lf" }
+    let has_crlf = bytes.windows(2).any(|pair| pair == b"\r\n");
+    let has_lf = bytes.iter().enumerate().any(|(index, byte)| {
+        *byte == b'\n' && (index == 0 || bytes[index - 1] != b'\r')
+    });
+    let has_lone_cr = bytes.iter().enumerate().any(|(index, byte)| {
+        *byte == b'\r' && bytes.get(index + 1) != Some(&b'\n')
+    });
+    match (has_crlf, has_lf, has_lone_cr) {
+        (true, false, false) => "crlf",
+        (false, true, false) => "lf",
+        (false, false, false) => "lf",
+        _ => "mixed",
+    }
 }
 
 fn editor_workspace_path(path: &str, workspace_root: &str) -> Result<(PathBuf, PathBuf), String> {
     let file = std::fs::canonicalize(path).map_err(|e| format!("EDITOR_FILE_UNAVAILABLE: {e}"))?;
     let root = std::fs::canonicalize(workspace_root).map_err(|e| format!("EDITOR_WORKSPACE_UNAVAILABLE: {e}"))?;
-    if !file.starts_with(&root) {
+    if !path_is_within(&file, &root) {
         return Err("EDITOR_PATH_OUTSIDE_WORKSPACE".to_string());
     }
     Ok((file, root))
+}
+
+fn path_component_eq(
+    left: &std::path::Component<'_>,
+    right: &std::path::Component<'_>,
+) -> bool {
+    #[cfg(windows)]
+    {
+        left.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn path_is_within(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let mut path_components = path.components();
+    for root_component in root.components() {
+        match path_components.next() {
+            Some(path_component) if path_component_eq(&path_component, &root_component) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn path_eq(left: &std::path::Path, right: &std::path::Path) -> bool {
+    path_is_within(left, right) && path_is_within(right, left)
+}
+
+fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 fn read_editor_bytes(path: &str, workspace_root: &str) -> Result<(PathBuf, Vec<u8>), String> {
@@ -86,10 +145,13 @@ fn read_editor_file(path: String, workspace_root: String) -> Result<EditorFileSn
 }
 
 fn normalize_editor_content(content: &str, line_ending: &str) -> Result<Vec<u8>, String> {
-    if line_ending != "lf" && line_ending != "crlf" {
+    if !matches!(line_ending, "lf" | "crlf" | "mixed") {
         return Err("EDITOR_INVALID_LINE_ENDING".to_string());
     }
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    // Monaco exposes a normalized text model, so an edited mixed-ending file
+    // cannot preserve each original separator. Use LF as the least surprising
+    // canonical form instead of silently manufacturing CRLF throughout it.
     let output = if line_ending == "crlf" {
         normalized.replace('\n', "\r\n")
     } else {
@@ -229,6 +291,13 @@ mod editor_file_tests {
             normalize_editor_content("one\r\ntwo\rthree\n", "crlf").unwrap(),
             b"one\r\ntwo\r\nthree\r\n",
         );
+        assert_eq!(editor_line_ending(b"one\r\ntwo\n"), "mixed");
+        assert_eq!(editor_line_ending(b"one\r\ntwo\r"), "mixed");
+        assert_eq!(editor_line_ending(b"one\rtwo\r"), "mixed");
+        assert_eq!(
+            normalize_editor_content("one\ntwo\n", "mixed").unwrap(),
+            b"one\ntwo\n",
+        );
         assert_eq!(
             normalize_editor_content("text", "native").unwrap_err(),
             "EDITOR_INVALID_LINE_ENDING",
@@ -294,6 +363,173 @@ mod editor_file_tests {
             std::fs::read(&path).expect("read conflicted fixture"),
             b"external\n",
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod fs_operation_tests {
+    use super::*;
+
+    fn fixture_dir(name: &str) -> PathBuf {
+        let sequence = EDITOR_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "sinos-cli-fs-{name}-{}-{sequence}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create filesystem fixture directory");
+        dir
+    }
+
+    #[test]
+    fn entry_names_cannot_escape_or_become_paths() {
+        assert!(validate_entry_name("../outside").is_err());
+        assert!(validate_entry_name("nested/name").is_err());
+        assert!(validate_entry_name("nested\\name").is_err());
+        assert!(validate_entry_name(".").is_err());
+        assert!(validate_entry_name("  ").is_err());
+        assert!(validate_entry_name("report.txt").is_ok());
+    }
+
+    #[test]
+    fn workspace_root_and_outside_paths_are_rejected() {
+        let root = fixture_dir("path-boundary");
+        let outside = root.parent().expect("fixture parent").join(format!(
+            "{}-outside.txt",
+            root.file_name().expect("fixture name").to_string_lossy(),
+        ));
+        std::fs::write(&outside, b"outside").expect("write outside fixture");
+
+        assert_eq!(
+            validate_workspace_path(
+                &root.to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err(),
+            "FS_WORKSPACE_ROOT_PROTECTED",
+        );
+        assert_eq!(
+            validate_workspace_path(
+                &outside.to_string_lossy(),
+                &root.to_string_lossy(),
+            )
+            .unwrap_err(),
+            "FS_PATH_OUTSIDE_WORKSPACE",
+        );
+
+        let _ = std::fs::remove_file(outside);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_uses_a_single_trimmed_entry_name() {
+        let root = fixture_dir("rename");
+        let source = root.join("before.txt");
+        std::fs::write(&source, b"data").expect("write rename fixture");
+
+        fs_rename(
+            source.to_string_lossy().into_owned(),
+            "after.txt  ".to_string(),
+            root.to_string_lossy().into_owned(),
+        )
+        .expect("rename fixture");
+
+        assert!(root.join("after.txt").is_file());
+        assert!(!source.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_does_not_overwrite_an_existing_entry() {
+        let root = fixture_dir("rename-collision");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        std::fs::write(&source, b"source").expect("write rename source fixture");
+        std::fs::write(&destination, b"destination").expect("write rename destination fixture");
+
+        assert_eq!(
+            fs_rename(
+                source.to_string_lossy().into_owned(),
+                "destination.txt".to_string(),
+                root.to_string_lossy().into_owned(),
+            )
+            .unwrap_err(),
+            "FS_DESTINATION_EXISTS",
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"source");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"destination");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn directory_cannot_be_pasted_into_itself() {
+        let root = fixture_dir("paste-self");
+        let source = root.join("source");
+        let target = source.join("nested");
+        std::fs::create_dir_all(&target).expect("create paste fixture");
+
+        assert_eq!(
+            fs_paste(
+                "copy".to_string(),
+                source.to_string_lossy().into_owned(),
+                target.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+            )
+            .unwrap_err(),
+            "FS_PASTE_INTO_SELF",
+        );
+        assert!(!target.join("source").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_cannot_be_pasted_onto_itself() {
+        let root = fixture_dir("paste-same-path");
+        let source = root.join("source.txt");
+        std::fs::write(&source, b"keep me").expect("write paste fixture");
+
+        assert_eq!(
+            fs_paste(
+                "copy".to_string(),
+                source.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+            )
+            .unwrap_err(),
+            "FS_PASTE_SAME_PATH",
+        );
+        assert_eq!(
+            std::fs::read(&source).expect("read paste fixture"),
+            b"keep me",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn paste_does_not_overwrite_an_existing_entry() {
+        let root = fixture_dir("paste-collision");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create paste source fixture");
+        std::fs::create_dir_all(&target_dir).expect("create paste target fixture");
+        let source = source_dir.join("same.txt");
+        let destination = target_dir.join("same.txt");
+        std::fs::write(&source, b"source").expect("write paste source fixture");
+        std::fs::write(&destination, b"destination").expect("write paste destination fixture");
+
+        assert_eq!(
+            fs_paste(
+                "copy".to_string(),
+                source.to_string_lossy().into_owned(),
+                target_dir.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+            )
+            .unwrap_err(),
+            "FS_DESTINATION_EXISTS",
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"source");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"destination");
         let _ = std::fs::remove_dir_all(root);
     }
 }
@@ -606,24 +842,20 @@ struct DirEntry {
 fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     let dir = std::path::Path::new(&path);
     if !dir.is_dir() {
-        return Err(format!("Not a directory: {}", path));
+        return Err(format!("FS_DIRECTORY_UNAVAILABLE: not a directory: {}", path));
     }
 
     let mut entries: Vec<DirEntry> = Vec::new();
 
-    let read_dir = std::fs::read_dir(dir).map_err(|e| format!("Cannot read directory: {}", e))?;
+    let read_dir = std::fs::read_dir(dir)
+        .map_err(|e| format!("FS_DIRECTORY_UNAVAILABLE: {}", e))?;
 
     for entry in read_dir {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue, // Skip unreadable entries
-        };
+        let entry = entry.map_err(|e| format!("FS_ENTRY_UNAVAILABLE: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue, // Skip unreadable entries
-        };
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|e| format!("FS_ENTRY_UNAVAILABLE: {}", e))?;
 
         entries.push(DirEntry {
             name,
@@ -867,86 +1099,203 @@ fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate that a path is safe to operate on:
-/// - Canonicalizes the path (resolves `..` and symlinks)
-/// - Rejects paths with fewer than 3 components (drive root, OS dirs, etc.)
-fn validate_fs_path(path: &str) -> Result<std::path::PathBuf, String> {
+/// Validate that a path exists inside the selected workspace.
+/// Canonicalizing both sides also prevents symlink-based escapes.
+fn validate_workspace_path(path: &str, workspace_root: &str) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let input = std::path::Path::new(path);
+    let input_metadata = std::fs::symlink_metadata(input)
+        .map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?;
+    if metadata_is_link_or_reparse(&input_metadata) {
+        return Err("FS_SYMLINK_UNSUPPORTED".to_string());
+    }
+    let root = std::path::Path::new(workspace_root)
+        .canonicalize()
+        .map_err(|e| format!("FS_WORKSPACE_UNAVAILABLE: {e}"))?;
+    if !root.is_dir() {
+        return Err("FS_WORKSPACE_UNAVAILABLE".to_string());
+    }
     let canonical = std::path::Path::new(path)
         .canonicalize()
-        .map_err(|e| format!("Invalid path: {e}"))?;
-    // Require at least 3 components, e.g. C:\Users\foo or /home/user
-    // This blocks C:\, C:\Windows, /, /etc, /usr, etc.
-    if canonical.components().count() < 3 {
-        return Err("Operation rejected: path is too shallow (system-level directory)".to_string());
+        .map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?;
+    if !path_is_within(&canonical, &root) {
+        return Err("FS_PATH_OUTSIDE_WORKSPACE".to_string());
     }
-    Ok(canonical)
+    if canonical == root {
+        return Err("FS_WORKSPACE_ROOT_PROTECTED".to_string());
+    }
+    Ok((canonical, root))
 }
 
-/// Delete a file or directory permanently (no recycle bin).
+fn validate_entry_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return Err("FS_INVALID_NAME".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.chars().any(char::is_control) {
+        return Err("FS_INVALID_NAME".to_string());
+    }
+    Ok(())
+}
+
+fn reject_existing_destination(
+    destination: &std::path::Path,
+    source: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => {
+            if metadata_is_link_or_reparse(&metadata) {
+                return Err("FS_SYMLINK_UNSUPPORTED".to_string());
+            }
+            if let Some(source) = source {
+                let existing = destination
+                    .canonicalize()
+                    .map_err(|e| format!("FS_DESTINATION_UNAVAILABLE: {e}"))?;
+                if path_eq(&existing, source) {
+                    return Ok(());
+                }
+            }
+            Err("FS_DESTINATION_EXISTS".to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("FS_DESTINATION_UNAVAILABLE: {error}")),
+    }
+}
+
+/// Delete a file or directory after explicit user confirmation in the UI.
 #[tauri::command]
-fn fs_delete(path: String) -> Result<(), String> {
-    let p = validate_fs_path(&path)?;
+fn fs_delete(path: String, workspace_root: String) -> Result<(), String> {
+    let (p, _root) = validate_workspace_path(&path, &workspace_root)?;
     if p.is_dir() {
-        std::fs::remove_dir_all(&p).map_err(|e| format!("Delete failed: {e}"))
+        std::fs::remove_dir_all(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"))
     } else {
-        std::fs::remove_file(&p).map_err(|e| format!("Delete failed: {e}"))
+        std::fs::remove_file(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"))
     }
 }
 
 /// Rename / move a path to a new name within the same parent directory.
 #[tauri::command]
-fn fs_rename(path: String, new_name: String) -> Result<(), String> {
-    let src = validate_fs_path(&path)?;
-    let dest = src.parent()
-        .ok_or_else(|| "No parent directory".to_string())?
-        .join(&new_name);
-    std::fs::rename(&src, dest).map_err(|e| format!("Rename failed: {e}"))
+fn fs_rename(path: String, new_name: String, workspace_root: String) -> Result<(), String> {
+    validate_entry_name(&new_name)?;
+    let trimmed_name = new_name.trim();
+    let (src, root) = validate_workspace_path(&path, &workspace_root)?;
+    let parent = src.parent().ok_or_else(|| "FS_PARENT_UNAVAILABLE".to_string())?;
+    if !path_is_within(parent, &root) {
+        return Err("FS_PATH_OUTSIDE_WORKSPACE".to_string());
+    }
+    let dest = parent.join(trimmed_name);
+    if path_eq(&dest, &src) {
+        if dest == src {
+            return Ok(());
+        }
+        // Case-only renames need to proceed on case-insensitive file systems.
+        // `reject_existing_destination` recognizes that the existing entry is
+        // the source itself instead of reporting a collision.
+        reject_existing_destination(&dest, Some(&src))?;
+    } else {
+        reject_existing_destination(&dest, None)?;
+    }
+    std::fs::rename(&src, dest).map_err(|e| format!("FS_RENAME_FAILED: {e}"))
 }
 
 /// Paste (copy or move) a file/directory into a target directory.
 /// `action` is either "copy" or "cut".
 #[tauri::command]
-fn fs_paste(action: String, src_path: String, target_dir: String) -> Result<(), String> {
-    let src = validate_fs_path(&src_path)?;
-    // target_dir may not exist yet for copy — validate its parent instead
+fn fs_paste(action: String, src_path: String, target_dir: String, workspace_root: String) -> Result<(), String> {
+    let (src, root) = validate_workspace_path(&src_path, &workspace_root)?;
+    let target_input = std::path::Path::new(&target_dir);
+    let target_metadata = std::fs::symlink_metadata(target_input)
+        .map_err(|e| format!("FS_TARGET_UNAVAILABLE: {e}"))?;
+    if metadata_is_link_or_reparse(&target_metadata) {
+        return Err("FS_SYMLINK_UNSUPPORTED".to_string());
+    }
     let target_canonical = std::path::Path::new(&target_dir)
         .canonicalize()
-        .map_err(|e| format!("Invalid target directory: {e}"))?;
-    if target_canonical.components().count() < 3 {
-        return Err("Operation rejected: target is a system-level directory".to_string());
+        .map_err(|e| format!("FS_TARGET_UNAVAILABLE: {e}"))?;
+    if !path_is_within(&target_canonical, &root) || !target_canonical.is_dir() {
+        return Err("FS_PATH_OUTSIDE_WORKSPACE".to_string());
     }
-    let file_name = src.file_name().ok_or("Invalid source path")?;
+    let file_name = src
+        .file_name()
+        .ok_or_else(|| "FS_SOURCE_UNAVAILABLE".to_string())?;
     let dest = target_canonical.join(file_name);
+    if path_eq(&dest, &src) {
+        return Err("FS_PASTE_SAME_PATH".to_string());
+    }
+    if src.is_dir() && path_is_within(&dest, &src) {
+        return Err("FS_PASTE_INTO_SELF".to_string());
+    }
+    reject_existing_destination(&dest, None)?;
 
     match action.as_str() {
         "cut" => {
-            std::fs::rename(&src, &dest).map_err(|e| format!("Move failed: {e}"))
+            std::fs::rename(&src, &dest).map_err(|e| format!("FS_MOVE_FAILED: {e}"))
         }
         "copy" => {
             if src.is_dir() {
-                copy_dir_all(&src, &dest).map_err(|e| format!("Copy dir failed: {e}"))
+                if let Err(copy_error) = copy_dir_all(&src, &dest) {
+                    return match std::fs::remove_dir_all(&dest) {
+                        Ok(()) => Err(format!("FS_COPY_FAILED: {copy_error}")),
+                        Err(rollback_error) if rollback_error.kind() == std::io::ErrorKind::NotFound => {
+                            Err(format!("FS_COPY_FAILED: {copy_error}"))
+                        }
+                        Err(rollback_error) => Err(format!(
+                            "FS_COPY_ROLLBACK_FAILED: {copy_error}; cleanup failed: {rollback_error}",
+                        )),
+                    };
+                }
+                Ok(())
             } else {
-                std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| format!("Copy failed: {e}"))
+                copy_file_new(&src, &dest).map_err(|e| format!("FS_COPY_FAILED: {e}"))
             }
         }
-        _ => Err(format!("Unknown action: {action}")),
+        _ => Err("FS_INVALID_ACTION".to_string()),
     }
 }
 
 /// Recursively copy a directory and all its contents.
 fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dest)?;
+    std::fs::create_dir(dest)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
-        let ty = entry.file_type()?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata_is_link_or_reparse(&metadata) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "symbolic links and reparse points are not supported",
+            ));
+        }
         let target = dest.join(entry.file_name());
-        if ty.is_dir() {
+        if metadata.is_dir() {
             copy_dir_all(&entry.path(), &target)?;
         } else {
-            std::fs::copy(entry.path(), target)?;
+            copy_file_new(&entry.path(), &target)?;
         }
     }
+    std::fs::set_permissions(dest, std::fs::metadata(src)?.permissions())?;
     Ok(())
+}
+
+fn copy_file_new(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut source = std::fs::File::open(src)?;
+    let source_permissions = source.metadata()?.permissions();
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)?;
+    let copy_result = (|| -> std::io::Result<()> {
+        std::io::copy(&mut source, &mut destination)?;
+        destination.flush()?;
+        destination.sync_all()?;
+        std::fs::set_permissions(dest, source_permissions)?;
+        Ok(())
+    })();
+    drop(destination);
+    if copy_result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    copy_result
 }
 
 // ─── Tier Terminal API ────────────────────────────────────────────────────────

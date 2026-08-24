@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../../i18n/useT';
-import { useAppState, type ToolType } from '../../store/app-state';
+import { resolveDiffContext, useAppState, type ToolType } from '../../store/app-state';
 import { isTauri } from '../../tauri';
 import type { SavedSession } from '../../tauri';
 import { getToolDisplayName } from '../../lib/tool-info';
@@ -137,6 +137,19 @@ const pathBasename = (p: string) => {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 };
 
+// These are terminal/layout entries rather than agent types. They can still
+// appear as a SavedSession in legacy data, but they should not become the
+// default "Agent" scope in the history UI.
+const NON_AGENT_TOOLS = new Set([
+  'terminal', 'remote', 'installer',
+  'two-split', 'three-split', 'four-split',
+]);
+
+const isAgentTool = (tool: string | null | undefined): tool is string =>
+  !!tool && !NON_AGENT_TOOLS.has(tool);
+
+type HistoryFilterKind = 'agent' | 'project';
+
 export function HistoryBoard() {
   const t = useT();
   const { state, dispatch } = useAppState();
@@ -176,28 +189,35 @@ export function HistoryBoard() {
   const isLoading = isTauri && (status === 'idle' || status === 'loading') && cachedSessions.length === 0;
 
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
-  // Project (workspace) filter dropdown: which cwd's sessions to show
-  // (null = all). The option list is derived from the *visible* (unhidden)
-  // data so its counts always match what the list would show.
+  // Both filters are explicit state so their AND semantics stay visible and
+  // predictable: Agent narrows the tool type, Project narrows cwd. The
+  // initial values are filled from the active terminal below.
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<string | null>(null);
-  // The filter is a themed dropdown (NOT a native <select> — that can't be
-  // themed, and can't even open while a terminal is active because the
-  // global focus enforcer steals focus back; see FontPicker.tsx). React-
-  // state controlled + portaled to body like FontPicker's.
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  // The filters use themed, portaled menus rather than native <select> so the
+  // controls remain usable while a terminal is focused and match the app's
+  // existing context-menu treatment.
+  const [filterMenuOpen, setFilterMenuOpen] = useState<HistoryFilterKind | null>(null);
   const [filterMenuPos, setFilterMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const agentFilterTriggerRef = useRef<HTMLButtonElement>(null);
+  const projectFilterTriggerRef = useRef<HTMLButtonElement>(null);
 
-  const toggleFilterMenu = () => {
-    if (filterMenuOpen) { setFilterMenuOpen(false); return; }
-    const r = filterTriggerRef.current?.getBoundingClientRect();
+  const activeTerminal = state.terminals.find(s => s.id === state.activeTerminalId);
+  const activeContext = resolveDiffContext(activeTerminal);
+  const defaultAgent = (activeContext?.tool ?? activeTerminal?.tool ?? null);
+  const defaultAgentFilter = isAgentTool(defaultAgent) ? defaultAgent : null;
+  const defaultProjectFilter = activeContext?.folderPath ?? activeTerminal?.folderPath ?? null;
+  const activeContextKey = `${defaultAgentFilter ?? ''}\x00${defaultProjectFilter ? normCwd(defaultProjectFilter) : ''}`;
+
+  const toggleFilterMenu = (kind: HistoryFilterKind) => {
+    if (filterMenuOpen === kind) { setFilterMenuOpen(null); return; }
+    const trigger = kind === 'agent' ? agentFilterTriggerRef.current : projectFilterTriggerRef.current;
+    const r = trigger?.getBoundingClientRect();
     if (r) {
-      // Right-align to the trigger — the menu is wider than the button and
-      // the trigger hugs the rail's right edge.
-      const width = Math.max(r.width, 180);
+      const width = Math.max(r.width, kind === 'agent' ? 210 : 220);
       setFilterMenuPos({ left: r.right - width, top: r.bottom + 4, width });
     }
-    setFilterMenuOpen(true);
+    setFilterMenuOpen(kind);
   };
 
   // Keep the portaled menu glued to its trigger on scroll/resize (it's
@@ -205,9 +225,12 @@ export function HistoryBoard() {
   useEffect(() => {
     if (!filterMenuOpen) return;
     const reposition = () => {
-      const r = filterTriggerRef.current?.getBoundingClientRect();
+      const trigger = filterMenuOpen === 'agent'
+        ? agentFilterTriggerRef.current
+        : projectFilterTriggerRef.current;
+      const r = trigger?.getBoundingClientRect();
       if (r) {
-        const width = Math.max(r.width, 180);
+        const width = Math.max(r.width, filterMenuOpen === 'agent' ? 210 : 220);
         setFilterMenuPos({ left: r.right - width, top: r.bottom + 4, width });
       }
     };
@@ -222,7 +245,7 @@ export function HistoryBoard() {
   // click menu and the rename input.
   useEffect(() => {
     if (!filterMenuOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFilterMenuOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFilterMenuOpen(null); };
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('keydown', onKey); };
   }, [filterMenuOpen]);
@@ -240,6 +263,18 @@ export function HistoryBoard() {
     { id: 'mock-3', name: 'refactor components', tool: 'qwen', cwd: '~/projects/coffee', session_token: 'tk3', saved_at: new Date(nowMs - 86400000 * 2).toISOString() },
   ], [cachedSessions, nowMs]);
 
+  const agentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of baseSessions) {
+      if (!isAgentTool(s.tool) || hidden.has(`${s.tool}:${s.id}`)) continue;
+      if (activeProject && (!s.cwd || normCwd(s.cwd) !== activeProject)) continue;
+      counts.set(s.tool, (counts.get(s.tool) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([tool, count]) => ({ tool, count }))
+      .sort((a, b) => b.count - a.count || getToolName(a.tool).localeCompare(getToolName(b.tool)));
+  }, [activeProject, baseSessions, hidden]);
+
   // Project (workspace) filter: which cwd's sessions to show (null = all).
   // Keyed by normalized cwd (trailing slashes trimmed, separators unified —
   // no case-folding: Linux paths are case-sensitive).
@@ -254,6 +289,7 @@ export function HistoryBoard() {
     const display = new Map<string, string>();
     for (const s of baseSessions) {
       if (s.tool === 'openclaw') continue;
+      if (activeAgent && s.tool !== activeAgent) continue;
       const raw = (s.cwd ?? '').trim();
       if (!raw || hidden.has(`${s.tool ?? ''}:${s.id}`)) continue;
       const key = normCwd(raw);
@@ -263,7 +299,7 @@ export function HistoryBoard() {
     return [...counts.entries()]
       .map(([key, count]) => ({ key, cwd: display.get(key)!, count }))
       .sort((a, b) => b.count - a.count);
-  }, [baseSessions, hidden]);
+  }, [activeAgent, baseSessions, hidden]);
 
   // Basename collisions (two different parents both named "coffee") get the
   // parent dir appended in the menu label so they're tellable apart.
@@ -281,20 +317,15 @@ export function HistoryBoard() {
     };
   }, [projectCounts]);
 
-  // Same auto-reset discipline as the agent filter. Also closes the portaled
-  // menu if the trigger is about to unmount: soft-deleting sessions down to
-  // <2 projects makes projectCounts.length drop below the render threshold,
-  // the trigger vanishes, and the fixed-position menu would otherwise strand
-  // at stale screen coordinates.
-  /* eslint-disable react-hooks/set-state-in-effect -- Invalid filter selections are reset when the available project set changes. */
+  // The active terminal is the source of truth for the initial scope. This
+  // follows tab/pane switches, while manual changes remain untouched until the
+  // user changes the active terminal again.
+  /* eslint-disable react-hooks/set-state-in-effect -- Active terminal changes intentionally update the history scope. */
   useEffect(() => {
-    if (projectCounts.length < 2 && filterMenuOpen) {
-      setFilterMenuOpen(false);
-    }
-    if (activeProject && !projectCounts.some(p => p.key === activeProject)) {
-      setActiveProject(null);
-    }
-  }, [projectCounts, activeProject, filterMenuOpen]);
+    setActiveAgent(defaultAgentFilter);
+    setActiveProject(defaultProjectFilter ? normCwd(defaultProjectFilter) : null);
+    setFilterMenuOpen(null);
+  }, [activeContextKey, defaultAgentFilter, defaultProjectFilter]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Debounce the raw query so fast typing doesn't re-filter the full session
@@ -323,6 +354,11 @@ export function HistoryBoard() {
     if (hidden.size > 0) {
       list = list.filter(s => !hidden.has(`${s.tool ?? ''}:${s.id}`));
     }
+    // Agent and project scopes are independent controls; both are applied so
+    // the default view is exactly the active agent in the active workspace.
+    if (activeAgent) {
+      list = list.filter(s => s.tool === activeAgent);
+    }
     // Project (cwd) filter — AND semantics with the text query below.
     if (activeProject) {
       list = list.filter(s => !!s.cwd && normCwd(s.cwd) === activeProject);
@@ -347,7 +383,7 @@ export function HistoryBoard() {
       });
     }
     return list;
-  }, [baseSessions, debouncedQuery, hidden, pinned, activeProject, renamed]);
+  }, [baseSessions, debouncedQuery, hidden, pinned, activeAgent, activeProject, renamed]);
 
   // Progressive render: data is already fully in memory (history-cache reads
   // every jsonl on startup), so "load more" is just rendering more rows.
@@ -359,7 +395,7 @@ export function HistoryBoard() {
   const PAGE = 30;
   const [visibleCount, setVisibleCount] = useState(PAGE);
   /* eslint-disable-next-line react-hooks/set-state-in-effect -- A changed query/filter starts a new pagination window. */
-  useEffect(() => { setVisibleCount(PAGE); }, [debouncedQuery, activeProject]);
+  useEffect(() => { setVisibleCount(PAGE); }, [debouncedQuery, activeAgent, activeProject]);
   const filteredSessions = matchedSessions.slice(0, visibleCount);
   const hasMore = matchedSessions.length > visibleCount;
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -420,29 +456,48 @@ export function HistoryBoard() {
             onContextMenu={(e) => openCtxMenu(e, setSessionSearchQuery)}
           />
         </div>
-        {/* Project (workspace) filter dropdown, keyed by normalized cwd.
-            Only worth the control when 2+ distinct projects exist. Shows the
-            active project's folder icon + name. */}
-        {projectCounts.length >= 2 && (
-          <button
-            ref={filterTriggerRef}
-            type="button"
-            className={`history-tool-filter-trigger${activeProject ? ' active' : ''}`}
-            onClick={toggleFilterMenu}
-          >
+        <button
+          ref={agentFilterTriggerRef}
+          type="button"
+          className={`history-tool-filter-trigger${activeAgent ? ' active' : ''}`}
+          onClick={() => toggleFilterMenu('agent')}
+          aria-label={t('task.filter_agent') || 'Filter by agent'}
+          title={t('task.filter_agent') || 'Filter by agent'}
+        >
+          <span className="history-filter-trigger-icon">{activeAgent ? getToolIcon(activeAgent) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>
+            </svg>
+          )}</span>
+          <span className="history-tool-filter-label">
+            {activeAgent ? getToolName(activeAgent) : (t('task.filter_all_agents') || 'All agents')}
+          </span>
+          <svg className="history-filter-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+        <button
+          ref={projectFilterTriggerRef}
+          type="button"
+          className={`history-tool-filter-trigger${activeProject ? ' active' : ''}`}
+          onClick={() => toggleFilterMenu('project')}
+          aria-label={t('task.filter_project') || 'Filter by project'}
+          title={t('task.filter_project') || 'Filter by project'}
+        >
+          <span className="history-filter-trigger-icon">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
-            <span className="history-tool-filter-label">
-              {activeProject
-                ? projectLabel(projectCounts.find(p => p.key === activeProject)?.cwd ?? '')
-                : (t('task.filter_all_projects') || 'All projects')}
-            </span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 9l6 6 6-6" />
-            </svg>
-          </button>
-        )}
+          </span>
+          <span className="history-tool-filter-label">
+            {activeProject
+              ? projectLabel(projectCounts.find(p => p.key === activeProject)?.cwd ?? pathBasename(activeProject))
+              : (t('task.filter_all_projects') || 'All projects')}
+          </span>
+          <svg className="history-filter-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
       </div>
       <div className="task-list" style={{ marginTop: '0', paddingBottom: '20px' }}>
       {isLoading && Array.from({ length: 6 }).map((_, i) => (
@@ -592,39 +647,82 @@ export function HistoryBoard() {
 
       {!isLoading && filteredSessions.length === 0 && (
         <div className="task-empty">
-          <div className="task-empty-text">{t('menu.no_recent') || 'No recent sessions'}</div>
+          <div className="task-empty-text">
+            {sessionSearchQuery || activeAgent || activeProject
+              ? (t('task.no_matching_sessions') || 'No sessions match the selected filters')
+              : (t('menu.no_recent') || 'No recent sessions')}
+          </div>
         </div>
       )}
     </div>
     {filterMenuOpen && filterMenuPos && createPortal(
       <>
-        <div className="history-tool-filter-backdrop" onClick={() => setFilterMenuOpen(false)} />
+        <div className="history-tool-filter-backdrop" onClick={() => setFilterMenuOpen(null)} />
         <div
           className="history-tool-filter-menu"
           style={{ position: 'fixed', left: filterMenuPos.left, top: filterMenuPos.top, width: filterMenuPos.width }}
         >
-          <button
-            type="button"
-            className={`history-tool-filter-opt${activeProject === null ? ' active' : ''}`}
-            onClick={() => { setActiveProject(null); setFilterMenuOpen(false); }}
-          >
-            <span className="history-tool-filter-opt-name">{t('task.filter_all_projects') || 'All projects'}</span>
-            <span className="history-tool-filter-count">{baseSessions.reduce((n, s) => (hidden.has(`${s.tool ?? ''}:${s.id}`) ? n : n + 1), 0)}</span>
-          </button>
-          {projectCounts.map((p) => (
-            <button
-              type="button"
-              key={p.key}
-              className={`history-tool-filter-opt${activeProject === p.key ? ' active' : ''}`}
-              onClick={() => { setActiveProject(activeProject === p.key ? null : p.key); setFilterMenuOpen(false); }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              <span className="history-tool-filter-opt-name">{projectLabel(p.cwd)}</span>
-              <span className="history-tool-filter-count">{p.count}</span>
-            </button>
-          ))}
+          {filterMenuOpen === 'agent' ? (
+            <>
+              <button
+                type="button"
+                className={`history-tool-filter-opt${activeAgent === null ? ' active' : ''}`}
+                onClick={() => { setActiveAgent(null); setFilterMenuOpen(null); }}
+              >
+                <span className="history-filter-option-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>
+                  </svg>
+                </span>
+                <span className="history-tool-filter-opt-name">{t('task.filter_all_agents') || 'All agents'}</span>
+                <span className="history-tool-filter-count">{agentCounts.reduce((n, item) => n + item.count, 0)}</span>
+              </button>
+              {agentCounts.map(({ tool, count }) => (
+                <button
+                  type="button"
+                  key={tool}
+                  className={`history-tool-filter-opt${activeAgent === tool ? ' active' : ''}`}
+                  onClick={() => { setActiveAgent(activeAgent === tool ? null : tool); setFilterMenuOpen(null); }}
+                >
+                  <span className="history-filter-option-icon">{getToolIcon(tool)}</span>
+                  <span className="history-tool-filter-opt-name">{getToolName(tool)}</span>
+                  <span className="history-tool-filter-count">{count}</span>
+                </button>
+              ))}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={`history-tool-filter-opt${activeProject === null ? ' active' : ''}`}
+                onClick={() => { setActiveProject(null); setFilterMenuOpen(null); }}
+              >
+                <span className="history-filter-option-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18M6 12h12M10 18h4"/>
+                  </svg>
+                </span>
+                <span className="history-tool-filter-opt-name">{t('task.filter_all_projects') || 'All projects'}</span>
+                <span className="history-tool-filter-count">{baseSessions.reduce((n, s) => (hidden.has(`${s.tool ?? ''}:${s.id}`) ? n : n + 1), 0)}</span>
+              </button>
+              {projectCounts.map((p) => (
+                <button
+                  type="button"
+                  key={p.key}
+                  className={`history-tool-filter-opt${activeProject === p.key ? ' active' : ''}`}
+                  onClick={() => { setActiveProject(activeProject === p.key ? null : p.key); setFilterMenuOpen(null); }}
+                >
+                  <span className="history-filter-option-icon">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  </span>
+                  <span className="history-tool-filter-opt-name">{projectLabel(p.cwd)}</span>
+                  <span className="history-tool-filter-count">{p.count}</span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </>,
       document.body
