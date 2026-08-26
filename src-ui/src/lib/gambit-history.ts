@@ -1,8 +1,8 @@
-// Gambit prompt history — app-level singleton for ↑/↓ input recall.
+// Gambit prompt history — app-level singleton for ←/→ input recall.
 //
 // This is the Gambit composer's counterpart to a shell's `.bash_history`: a
 // global, localStorage-persisted list of the prompts the user has sent, so
-// pressing ↑ in the textarea refills the box with an earlier prompt and ↓
+// pressing ← in the textarea refills the box with an earlier prompt and →
 // walks back toward the present.
 //
 // Why a module-level singleton (not component state):

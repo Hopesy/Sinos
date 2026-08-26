@@ -178,7 +178,7 @@ Apague esta nota quando quiser e comece a sua primeira tarefa.`,
   'theme.color.indigo': 'Índigo',
   'theme.color.fuchsia': 'Fúcsia',
   'gambit.title': 'Gambito',
-  'gambit.placeholder': 'Planeje sua jogada... ({send} para enviar, {newline} para nova linha, cole imagens, Alt+↑↓ para o histórico)',
+  'gambit.placeholder': 'Planeje sua jogada... ({send} para enviar, {newline} para nova linha, cole imagens, ←→ para o histórico)',
   'gambit.send_failed_hint': 'Abra primeiro uma sessão ativa',
   'gambit.send_empty_hint': 'Digite uma mensagem ou cole uma imagem primeiro (Ctrl+V)',
 

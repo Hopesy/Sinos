@@ -177,7 +177,7 @@ Supprimez cette note quand vous voulez et commencez votre première tâche.`,
   'theme.color.indigo': 'Indigo',
   'theme.color.fuchsia': 'Fuchsia',
   'gambit.title': 'Gambit',
-  'gambit.placeholder': 'Préparez votre coup... ({send} pour envoyer, {newline} pour une nouvelle ligne, collez des images, Alt+↑↓ pour l’historique)',
+  'gambit.placeholder': 'Préparez votre coup... ({send} pour envoyer, {newline} pour une nouvelle ligne, collez des images, ←→ pour l’historique)',
   'gambit.send_failed_hint': "Ouvrez d'abord une session active",
   'gambit.send_empty_hint': "Saisissez un message ou collez d'abord une image (Ctrl+V)",
 

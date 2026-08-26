@@ -95,6 +95,7 @@ const DOCK_MAX_HEIGHT_RATIO = 0.7; // never let the dock eat more than 70% of vi
 const LS_DOCK_H = 'cc-gambit-dock-h';
 
 function GambitImpl({
+  sessionId,
   draft,
   onDraftChange,
   onClose,
@@ -119,17 +120,17 @@ function GambitImpl({
   // so only the former is allowed to move the scroll position.
   const lastSizedDraftRef = useRef(draft);
 
-  // ─── Prompt history (↑/↓ recall) ──────────────────────────────────
+  // ─── Prompt history (←/→ recall) ──────────────────────────────────
   // Global, localStorage-persisted, shared across every tab's Gambit
   // (see lib/gambit-history.ts). The navigation cursor + the in-progress
-  // draft saved on first ↑ are this instance's interaction state — they
+  // draft saved on first ← are this instance's interaction state — they
   // reset when the user switches tabs (Gambit unmounts), which is fine:
   // nobody is mid-recall across a tab switch.
   const history = useSyncExternalStore(subscribeGambitHistory, getGambitHistorySnapshot);
   // Index into `history` while navigating, or null at the live prompt.
-  // When ↓ scrolls PAST the newest entry the cursor returns to null and we
+  // When → scrolls PAST the newest entry the cursor returns to null and we
   // restore `savedDraftRef` — the text the user was typing before they
-  // pressed ↑ — standard shell/REPL behavior so you never lose a half-typed
+  // pressed ← — standard shell/REPL behavior so you never lose a half-typed
   // prompt by peeking at history.
   const historyCursorRef = useRef<number | null>(null);
   const savedDraftRef = useRef('');
@@ -491,13 +492,13 @@ function GambitImpl({
   };
 
   // ─── History navigation ──────────────────────────────────────────
-  // Walk the global prompt history (lib/gambit-history.ts) with ↑/↓.
-  //   • First ↑ from the live prompt: save the in-progress draft and jump
-  //     to the newest entry. Subsequent ↑ moves toward older entries.
-  //   • ↓ moves toward newer entries; scrolling past the newest restores
+  // Walk the global prompt history (lib/gambit-history.ts) with ←/→.
+  //   • First ← from an empty prompt: save the in-progress draft and jump
+  //     to the newest entry. Subsequent ← moves toward older entries.
+  //   • → moves toward newer entries; scrolling past the newest restores
   //     the saved in-progress draft (so peeking at history never costs
   //     you the half-typed prompt you were working on).
-  //   • ↑ at the oldest / ↓ at the newest is a no-op (cursor clamps).
+  //   • ← at the oldest / → at the newest is a no-op (cursor clamps).
   // Returns false for no-ops so onKeyDown can leave native caret movement
   // untouched when there's nothing to recall.
   const navigateHistory = useCallback((direction: -1 | 1): boolean => {
@@ -570,18 +571,42 @@ function GambitImpl({
     onDraftChange('');
   }, [draft, onSend, onDraftChange]);
 
+  // Scroll the active agent surface in small increments while the Gambit
+  // textarea stays focused. The textarea is a controlled editor, so letting
+  // ArrowUp/ArrowDown reach it would move its caret instead of the transcript.
+  const scrollAgentView = useCallback((direction: -1 | 1): boolean => {
+    const wrapper = Array.from(document.querySelectorAll<HTMLElement>('.terminal-wrapper[data-session-id]'))
+      .find(element => element.dataset.sessionId === sessionId);
+    if (!wrapper) return false;
+    const selector = viewMode === 'chat' ? '.conversation-scroll' : '.xterm-viewport';
+    const scroller = wrapper.querySelector<HTMLElement>(selector);
+    if (!scroller) return false;
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + direction * 48));
+    scroller.scrollTo({ top: nextScrollTop, behavior: 'smooth' });
+    return true;
+  }, [sessionId, viewMode]);
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition in progress — let the IME keep Enter for confirming
     // candidates. nativeEvent.isComposing is the canonical flag.
     if (e.nativeEvent.isComposing) return;
-    // History recall is gated behind Alt+↑/↓. Bare ↑/↓ stays native caret
-    // movement — users complained that hijacking them stole vertical caret
-    // positioning inside a multi-line draft. Alt+arrow has no native
-    // behavior in a textarea, so it's a conflict-free dedicated gesture
-    // (Shift+arrow is off-limits — that's the browser's vertical text
-    // selection). The placeholder advertises "Alt+↑↓ 翻历史".
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey) {
-      if (navigateHistory(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
+    // Bare ←/→ recall history only from an empty prompt, or while already
+    // browsing history. With regular text in the box they retain native
+    // caret movement, including Shift+arrow selection and modifier chords.
+    const bareArrow = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+    const historyMode = historyCursorRef.current !== null;
+    if (bareArrow && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && (draft.length === 0 || historyMode)) {
+      const navigated = navigateHistory(e.key === 'ArrowLeft' ? -1 : 1);
+      // At a history boundary, keep the key from moving the caret inside the
+      // recalled prompt. A no-history empty prompt remains native/no-op.
+      if (navigated || historyMode) e.preventDefault();
+      return;
+    }
+    // ↑/↓ scroll the active terminal or conversation in a deliberately small
+    // step. Smooth scrolling keeps key-repeat movement readable and precise.
+    if (bareArrow && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      if (scrollAgentView(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
       return;
     }
     // Send key is user-configurable (settings modal → Keyboard), because the

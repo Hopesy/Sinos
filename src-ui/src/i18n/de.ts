@@ -178,7 +178,7 @@ Lösch diesen Zettel, wann du willst, und starte deine erste Aufgabe.`,
   'theme.color.indigo': 'Indigo',
   'theme.color.fuchsia': 'Fuchsia',
   'gambit.title': 'Gambit',
-  'gambit.placeholder': 'Plane deinen Zug... ({send} zum Senden, {newline} für eine neue Zeile, Bilder einfügen, Alt+↑↓ für den Verlauf)',
+  'gambit.placeholder': 'Plane deinen Zug... ({send} zum Senden, {newline} für eine neue Zeile, Bilder einfügen, ←→ für den Verlauf)',
   'gambit.send_failed_hint': 'Öffne zuerst eine aktive Sitzung',
   'gambit.send_empty_hint': 'Gib zuerst eine Nachricht ein oder füge ein Bild ein (Ctrl+V)',
 

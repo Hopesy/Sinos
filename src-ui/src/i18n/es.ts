@@ -177,7 +177,7 @@ Borra esta nota cuando quieras y empieza tu primera tarea.`,
   'theme.color.indigo': 'Índigo',
   'theme.color.fuchsia': 'Fucsia',
   'gambit.title': 'Gambito',
-  'gambit.placeholder': 'Piensa tu jugada... ({send} para enviar, {newline} para una nueva línea, pega imágenes, Alt+↑↓ para el historial)',
+  'gambit.placeholder': 'Piensa tu jugada... ({send} para enviar, {newline} para una nueva línea, pega imágenes, ←→ para el historial)',
   'gambit.send_failed_hint': 'Abre primero una sesión activa',
   'gambit.send_empty_hint': 'Escribe un mensaje o pega una imagen primero (Ctrl+V)',
 

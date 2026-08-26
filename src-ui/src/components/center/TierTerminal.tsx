@@ -139,15 +139,10 @@ function deriveSelectionBg(hex: string, isDark: boolean): string {
   return `rgba(${r},${g},${b},${isDark ? 0.55 : 0.45})`;
 }
 
-// In AI-agent tabs the upstream TUI (each agent's input box, the Compose
-// textarea) paints its own caret, so xterm's cursor is either redundant or a
-// stranded artifact. Paint its cell in the terminal background, but keep
-// cursorAccent equal to the foreground so xterm does not erase the character
-// beneath that cell. The DOM renderer is also covered by `.xterm-cursor {
-// display: none }` in TierTerminal.css.
-// Raw-shell tabs (local terminal / remote SSH) are the exception: no TUI
-// draws a caret there, so the xterm cursor is the only input-position
-// indicator — keep it visible with the foreground color (issue #95).
+// Keep xterm's caret visible for every terminal type. AI-agent TUIs do not
+// expose a reliable caret through every renderer, and the xterm caret is the
+// only position indicator when the user moves with the arrow keys. The accent
+// colour gives it contrast against both opaque themes and wallpapers.
 // Build the xterm fontFamily stack. `userFont` (from Settings) is prepended
 // so it wins for the glyphs it has; the bundled CascadiaMono + Nerd Fonts +
 // platform monospace faces follow, and the CJK cascade backstops Chinese/
@@ -200,10 +195,9 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
     ...base,
     background: bg,
     foreground: fg,
-    // AI-agent tabs: the cursor cell blends into the background while its
-    // character remains readable. Raw shells get a real, visible caret.
-    cursor: rawShell ? fg : bgOpaque,
-    cursorAccent: fg,
+    // The accent cursor remains visible in both AI-agent and raw-shell tabs.
+    cursor: rawShell ? fg : selectionAccent,
+    cursorAccent: bgOpaque,
   };
 }
 
@@ -501,17 +495,19 @@ function TierTerminalImpl({
       // Cursor blink fires a GPU repaint every ~530ms for the entire app
       // lifetime. On laptops (especially Apple Silicon Air without a fan)
       // that's a constant power draw users feel as warmth. Off in AI-agent
-      // tabs (cursor invisible there anyway) and raw shells alike — a
-      // static, non-blinking caret costs nothing once painted.
+      // tabs and raw shells alike — a static, non-blinking caret costs nothing
+      // once painted.
       cursorBlink: false,
+      cursorStyle: 'bar',
+      cursorWidth: 2,
       // Default `cursorInactiveStyle: 'outline'` makes xterm flip the
       // cursor presentation on blur, which dirties the WebGL buffer and
       // re-composites the whole canvas — visible as a one-frame flicker
       // of the upstream CLI's own caret character (Claude Code, Codex)
       // every time the user clicks anywhere outside the terminal.
       // 'none' suppresses the inactive cursor entirely so blur is a
-      // no-op for the renderer. The win is that the redraw stops; in raw
-      // shells the caret simply hides while the terminal is unfocused.
+      // no-op for the renderer. The active terminal still shows the static
+      // bar caret; the compose textarea owns the caret while it has focus.
       cursorInactiveStyle: 'none',
       scrollback: 5000,
       // Required to load Unicode11Addon below (xterm 6 gates the unicode

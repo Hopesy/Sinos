@@ -198,6 +198,7 @@
     outline: none;
     resize: none;
     color: var(--text-1, #e8e4de);
+    caret-color: var(--accent, #c4956a);
     font-family: var(--font, inherit);
     font-size: 14px;
     line-height: 1.5;
