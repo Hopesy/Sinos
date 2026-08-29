@@ -1,7 +1,7 @@
 <details open>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-### Sinos CLI v3.5.2
+### Sinos CLI v3.5.3
 
 - **Coffee CLI 已正式更名为 Sinos CLI。** 应用名称、安装包、仓库地址、桌面标识和全套图标均已统一更新，同时保留旧配置目录与 Hook 标识的兼容读取，现有用户升级后无需迁移配置。
 - **文件浏览器现在集成 Monaco Editor。** 双击或通过右键菜单即可打开文件，支持多标签、常见语言高亮及 `Ctrl+S` / `Cmd+S` 保存；UTF-8 BOM 和换行格式会被保留，并通过文件大小、二进制、工作区边界和外部修改检查保护写入安全。
@@ -17,7 +17,7 @@
 <details>
 <summary><b>🇬🇧 English</b></summary>
 
-### Sinos CLI v3.5.2
+### Sinos CLI v3.5.3
 
 - **Coffee CLI is now Sinos CLI.** The application name, installer packages, repository links, desktop identity and complete icon set have been updated consistently, while legacy configuration directories and hook identifiers remain readable so existing users can upgrade without migrating settings.
 - **The file explorer now opens files in Monaco Editor.** Double-click or use the context menu to edit with multiple tabs, language-aware highlighting and `Ctrl+S` / `Cmd+S` saving. UTF-8 BOM and line endings are preserved, while file-size, binary, workspace-boundary and external-change checks protect writes.
@@ -33,7 +33,7 @@
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-### Sinos CLI v3.5.2
+### Sinos CLI v3.5.3
 
 - **Coffee CLI 已正式更名為 Sinos CLI。** 應用程式名稱、安裝套件、儲存庫連結、桌面識別與整套圖示均已一致更新，同時保留舊設定目錄與 Hook 識別的相容讀取，現有使用者升級後無須搬移設定。
 - **檔案瀏覽器現在整合 Monaco Editor。** 雙擊或使用右鍵選單即可開啟檔案，支援多分頁、常見語言醒目提示及 `Ctrl+S` / `Cmd+S` 儲存；UTF-8 BOM 與換行格式會被保留，並透過檔案大小、二進位、工作區邊界及外部修改檢查保護寫入安全。
@@ -49,7 +49,7 @@
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-### Sinos CLI v3.5.2
+### Sinos CLI v3.5.3
 
 - **Coffee CLI は Sinos CLI に正式に改名されました。** アプリ名、インストーラー、リポジトリリンク、デスクトップ識別子、アイコン一式を統一して更新しました。従来の設定ディレクトリと Hook 識別子は互換性のため引き続き読み込まれるため、既存ユーザーの設定移行は不要です。
 - **ファイルエクスプローラーに Monaco Editor を統合しました。** ダブルクリックまたはコンテキストメニューからファイルを開き、複数タブ、主要言語のハイライト、`Ctrl+S` / `Cmd+S` 保存を利用できます。UTF-8 BOM と改行形式を保持し、サイズ、バイナリ、ワークスペース境界、外部変更の検査で安全に保存します。
@@ -65,7 +65,7 @@
 <details>
 <summary><b>🇰🇷 한국어</b></summary>
 
-### Sinos CLI v3.5.2
+### Sinos CLI v3.5.3
 
 - **Coffee CLI가 Sinos CLI로 공식 변경되었습니다.** 앱 이름, 설치 패키지, 저장소 링크, 데스크톱 식별자와 전체 아이콘 세트를 일관되게 갱신했습니다. 기존 설정 디렉터리와 Hook 식별자는 호환성을 위해 계속 읽으므로 기존 사용자는 설정을 이전할 필요가 없습니다.
 - **파일 탐색기에 Monaco Editor가 통합되었습니다.** 더블 클릭하거나 컨텍스트 메뉴에서 파일을 열어 다중 탭, 주요 언어 강조 표시, `Ctrl+S` / `Cmd+S` 저장을 사용할 수 있습니다. UTF-8 BOM과 줄바꿈 형식을 유지하며 파일 크기, 바이너리, 작업 공간 경계, 외부 변경 검사를 통해 안전하게 저장합니다.
