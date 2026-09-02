@@ -43,8 +43,8 @@ import './TierTerminal.css';
 // Each scheme overrides ONLY the terminal foreground color. The 16 ANSI
 // palette stays whatever the active theme provides, so switching schemes only
 // re-tints the text — no full theme swap, no style shift. Raw-shell cursors
-// follow the selected foreground; AI-agent cursor bars stay transparent
-// because the upstream TUI owns the prompt caret. The chip's own swatch in
+// follow the selected foreground; AI-agent cursor decoration stays transparent
+// while the cursor cell keeps the foreground text. The chip's own swatch in
 // the picker reuses the same fg value.
 export interface TermColorScheme {
   id: string;
@@ -196,11 +196,12 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
     background: bg,
     foreground: fg,
     // AI-agent TUIs paint their own input caret. xterm's buffer cursor is not
-    // guaranteed to be on that input row, so showing it creates a stray bar
-    // above/beside the real prompt. Raw shells have no TUI caret and keep the
-    // xterm caret as their input-position indicator.
+    // guaranteed to be on that input row, so its decoration is suppressed by
+    // CSS while the cursor cell's text remains readable. Keep cursorAccent at
+    // the foreground so WebGL does not erase a TUI caret character beneath a
+    // block-style application cursor. Raw shells keep a normal xterm caret.
     cursor: rawShell ? fg : bg,
-    cursorAccent: bg,
+    cursorAccent: rawShell ? bg : fg,
   };
 }
 
@@ -1980,8 +1981,8 @@ function TierTerminalImpl({
           // If no image found, let the event propagate to xterm for normal text paste
         }}
       >
-        {/* Raw shells get the `raw-shell` class so the CSS cursor-hiding
-            rule skips them (issue #95 — see TierTerminal.css). */}
+        {/* Raw shells get the `raw-shell` class so the cursor-decoration rule
+            skips them (issue #95 — see TierTerminal.css). */}
         <div ref={termRef} className={`tier-xterm${isRawShell ? ' raw-shell' : ''}`} />
       </div>
 

@@ -137,16 +137,26 @@
     opacity: 0.9;
 }
 
-/* AI-agent TUIs paint their own input caret. The PTY cursor can be left on a
-   different buffer row (often above the prompt), so exposing xterm's caret
-   produces a stray blinking bar. Raw-shell tabs opt out because xterm is the
-   only input-position indicator there. Keep both DOM and canvas-adjacent
-   cursor layers hidden for non-shell tabs; the theme cursor is transparent as
-   a second guard for the WebGL renderer. */
-.tier-xterm:not(.raw-shell) .xterm-cursor,
-.tier-xterm:not(.raw-shell) .xterm-cursor-layer {
-    display: none !important;
-    opacity: 0 !important;
+/* AI-agent TUIs paint their own input caret, while xterm's PTY cursor can be
+   left on a different buffer row (often above the prompt). Do not hide the
+   whole `.xterm-cursor` span: the span also owns the character in that cell,
+   so display:none removes the agent's real input glyph in DOM-rendered mode.
+   Strip only xterm's caret decoration and preserve the cell text. The theme
+   cursor is transparent/background-coloured for WebGL; cursorAccent remains
+   the foreground so a TUI character under a block cursor is not erased. */
+.tier-xterm:not(.raw-shell) .xterm-cursor-bar {
+    box-shadow: none !important;
+}
+.tier-xterm:not(.raw-shell) .xterm-cursor-underline {
+    border-bottom-color: transparent !important;
+}
+.tier-xterm:not(.raw-shell) .xterm-cursor-outline {
+    outline-color: transparent !important;
+}
+.tier-xterm:not(.raw-shell) .xterm .xterm-rows
+    .xterm-cursor.xterm-cursor-block:not(.xterm-cursor-blink) {
+    background-color: transparent !important;
+    color: inherit !important;
 }
 
 /* ─── Startup Loading Splash ───────────────────────────────── */
