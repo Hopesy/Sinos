@@ -40,10 +40,12 @@ import './TierTerminal.css';
 // Full ANSI palettes for readability on different wallpapers.
 // "default" = use built-in warm theme, no override.
 
-// Each scheme overrides ONLY the terminal foreground (and matching cursor)
-// color. The 16 ANSI palette stays whatever the active theme provides, so
-// switching schemes only re-tints the text — no full theme swap, no style
-// shift. The chip's own swatch in the picker reuses the same fg value.
+// Each scheme overrides ONLY the terminal foreground color. The 16 ANSI
+// palette stays whatever the active theme provides, so switching schemes only
+// re-tints the text — no full theme swap, no style shift. Raw-shell cursors
+// follow the selected foreground; AI-agent cursor bars stay transparent
+// because the upstream TUI owns the prompt caret. The chip's own swatch in
+// the picker reuses the same fg value.
 export interface TermColorScheme {
   id: string;
   fg: string;
@@ -139,10 +141,8 @@ function deriveSelectionBg(hex: string, isDark: boolean): string {
   return `rgba(${r},${g},${b},${isDark ? 0.55 : 0.45})`;
 }
 
-// Keep xterm's caret visible for every terminal type. AI-agent TUIs do not
-// expose a reliable caret through every renderer, and the xterm caret is the
-// only position indicator when the user moves with the arrow keys. The accent
-// colour gives it contrast against both opaque themes and wallpapers.
+// AI-agent TUIs paint their own prompt caret; raw-shell tabs use xterm's caret
+// as their only input-position marker.
 // Build the xterm fontFamily stack. `userFont` (from Settings) is prepended
 // so it wins for the glyphs it has; the bundled CascadiaMono + Nerd Fonts +
 // platform monospace faces follow, and the CJK cascade backstops Chinese/
@@ -195,9 +195,12 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
     ...base,
     background: bg,
     foreground: fg,
-    // The accent cursor remains visible in both AI-agent and raw-shell tabs.
-    cursor: rawShell ? fg : selectionAccent,
-    cursorAccent: bgOpaque,
+    // AI-agent TUIs paint their own input caret. xterm's buffer cursor is not
+    // guaranteed to be on that input row, so showing it creates a stray bar
+    // above/beside the real prompt. Raw shells have no TUI caret and keep the
+    // xterm caret as their input-position indicator.
+    cursor: rawShell ? fg : bg,
+    cursorAccent: bg,
   };
 }
 
@@ -506,8 +509,8 @@ function TierTerminalImpl({
       // of the upstream CLI's own caret character (Claude Code, Codex)
       // every time the user clicks anywhere outside the terminal.
       // 'none' suppresses the inactive cursor entirely so blur is a
-      // no-op for the renderer. The active terminal still shows the static
-      // bar caret; the compose textarea owns the caret while it has focus.
+      // no-op for the renderer. Raw shells keep their active bar caret;
+      // agent TUIs and the compose textarea own their own caret.
       cursorInactiveStyle: 'none',
       scrollback: 5000,
       // Required to load Unicode11Addon below (xterm 6 gates the unicode

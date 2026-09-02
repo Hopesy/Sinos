@@ -294,8 +294,17 @@ fn join_abs(repo_root: &str, rel: &str) -> String {
 
 /// List the active folder's git working-tree changes. The frontend refreshes
 /// it from filesystem events plus a low-frequency polling backstop.
+/// Async command wrapper: Git status/log can take seconds on a large
+/// repository. Running the blocking subprocesses on Tauri's blocking pool
+/// keeps the IPC dispatcher available for terminal input and resize calls.
 #[tauri::command]
-pub fn git_changes(folder: String) -> GitChanges {
+pub async fn git_changes(folder: String) -> GitChanges {
+    tauri::async_runtime::spawn_blocking(move || git_changes_blocking(folder))
+        .await
+        .unwrap_or(GitChanges::NotRepo)
+}
+
+fn git_changes_blocking(folder: String) -> GitChanges {
     if !git_on_path() {
         return GitChanges::NoGit;
     }
@@ -415,8 +424,16 @@ pub fn git_changes(folder: String) -> GitChanges {
 ///   • unstaged tracked: old = `:rel` (index)   new = working file on disk
 ///   • staged   tracked: old = `HEAD:rel`        new = `:rel` (index)
 ///   • untracked:        old = ""                new = working file on disk
+/// Async wrapper for the potentially large file read used by the diff panel.
 #[tauri::command]
-pub fn git_show_file(repo_root: String, spec: String) -> Option<String> {
+pub async fn git_show_file(repo_root: String, spec: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || git_show_file_blocking(repo_root, spec))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn git_show_file_blocking(repo_root: String, spec: String) -> Option<String> {
     // Defense against arg-injection: `spec` is frontend-built (HEAD:rel,
     // <hash>:rel, :rel). Reject a leading '-' so a crafted commitHash can't
     // lead the spec and be parsed as a git option. (A legit spec never starts
@@ -458,8 +475,16 @@ pub fn git_capture_baseline(folder: String) {
 
 /// Files changed in a single commit (lazy — called when the user expands a
 /// session commit in the 修改记录 list). Reuses `commit_files`.
+/// Async wrapper for commit expansion. A commit may touch many files, so do
+/// not let `diff-tree` occupy the IPC dispatcher while the user types.
 #[tauri::command]
-pub fn git_commit_files(repo_root: String, hash: String) -> Vec<GitFileEntry> {
+pub async fn git_commit_files(repo_root: String, hash: String) -> Vec<GitFileEntry> {
+    tauri::async_runtime::spawn_blocking(move || git_commit_files_blocking(repo_root, hash))
+        .await
+        .unwrap_or_default()
+}
+
+fn git_commit_files_blocking(repo_root: String, hash: String) -> Vec<GitFileEntry> {
     // Defense against arg-injection: `hash` is round-tripped through the
     // frontend (session_commits[].hash). Reject non-hex so a crafted value
     // can't reach `git diff-tree` as an option. (Internal `commit_files("HEAD")`

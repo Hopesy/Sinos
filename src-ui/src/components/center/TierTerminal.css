@@ -137,8 +137,17 @@
     opacity: 0.9;
 }
 
-/* xterm's caret is intentionally visible for agent and raw-shell tabs. The
-   renderer paints a static accent bar so arrow-key movement remains legible. */
+/* AI-agent TUIs paint their own input caret. The PTY cursor can be left on a
+   different buffer row (often above the prompt), so exposing xterm's caret
+   produces a stray blinking bar. Raw-shell tabs opt out because xterm is the
+   only input-position indicator there. Keep both DOM and canvas-adjacent
+   cursor layers hidden for non-shell tabs; the theme cursor is transparent as
+   a second guard for the WebGL renderer. */
+.tier-xterm:not(.raw-shell) .xterm-cursor,
+.tier-xterm:not(.raw-shell) .xterm-cursor-layer {
+    display: none !important;
+    opacity: 0 !important;
+}
 
 /* ─── Startup Loading Splash ───────────────────────────────── */
 .tier-loading-splash {
