@@ -433,6 +433,38 @@
     flex-shrink: 0;
 }
 
+/* Compact footer tools stay icon-only so the dock remains usable at narrow
+   widths. Upload opens the native image picker. */
+.gambit-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    border-radius: var(--shape-radius-btn, 6px);
+    color: var(--text-2, #bdb5a3);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s, transform 0.08s, opacity 0.12s;
+}
+
+.gambit-tool-btn:hover:not(:disabled) {
+    color: var(--text-1, #e8e4de);
+    background: color-mix(in srgb, var(--accent, #c4956a) 16%, var(--bg-hover, rgba(255, 255, 255, 0.06)));
+}
+
+.gambit-tool-btn:active:not(:disabled) {
+    transform: scale(0.94);
+}
+
+.gambit-tool-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 .gambit-send {
     display: flex;
     align-items: center;
@@ -470,6 +502,19 @@
 .gambit-send--empty {
     opacity: 0.35;
     cursor: default;
+}
+
+/* While a PTY is suspended, the same action becomes a play/resume control.
+   Keep it on the accent fill so the state is visible even when the textarea
+   has no draft left after the original prompt was submitted. */
+.gambit-send--paused {
+    background: var(--accent, #C4956A);
+    filter: saturate(0.78);
+}
+
+.gambit-send:disabled {
+    opacity: 0.55;
+    cursor: wait;
 }
 
 /* Send-failure state: the draft is preserved and a one-line hint appears

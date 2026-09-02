@@ -185,6 +185,8 @@ Xóa tờ ghi chú này khi bạn sẵn sàng và bắt đầu tác vụ đầu 
   'gambit.placeholder': 'Cân nhắc nước cờ... ({send} để gửi, {newline} xuống dòng, dán ảnh được, ←→ xem lịch sử)',
   'gambit.send_failed_hint': 'Hãy mở một phiên hoạt động trước',
   'gambit.send_empty_hint': 'Nhập nội dung hoặc dán ảnh trước (Ctrl+V)',
+  'gambit.upload_image': 'Tải ảnh lên',
+  'gambit.interrupt': 'Dừng tác vụ hiện tại',
 
 
   'conversation.reasoning': 'Quá trình suy luận',
@@ -201,4 +203,7 @@ Xóa tờ ghi chú này khi bạn sẵn sàng và bắt đầu tác vụ đầu 
   'heatmap.tooltip_some': '{count} tin nhắn vào {date}',
   'heatmap.tooltip_one': '1 tin nhắn vào {date}',
   'heatmap.tooltip_none': 'Không có hoạt động vào {date}',
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

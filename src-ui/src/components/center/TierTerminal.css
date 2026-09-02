@@ -137,27 +137,12 @@
     opacity: 0.9;
 }
 
-/* AI-agent TUIs paint their own input caret, while xterm's PTY cursor can be
-   left on a different buffer row (often above the prompt). Do not hide the
-   whole `.xterm-cursor` span: the span also owns the character in that cell,
-   so display:none removes the agent's real input glyph in DOM-rendered mode.
-   Strip only xterm's caret decoration and preserve the cell text. The theme
-   cursor is transparent/background-coloured for WebGL; cursorAccent remains
-   the foreground so a TUI character under a block cursor is not erased. */
-.tier-xterm:not(.raw-shell) .xterm-cursor-bar {
-    box-shadow: none !important;
-}
-.tier-xterm:not(.raw-shell) .xterm-cursor-underline {
-    border-bottom-color: transparent !important;
-}
-.tier-xterm:not(.raw-shell) .xterm-cursor-outline {
-    outline-color: transparent !important;
-}
-.tier-xterm:not(.raw-shell) .xterm .xterm-rows
-    .xterm-cursor.xterm-cursor-block:not(.xterm-cursor-blink) {
-    background-color: transparent !important;
-    color: inherit !important;
-}
+/* Agent cursors are intentionally not hidden in CSS. The PTY applications
+   position the real composer caret through the terminal cursor protocol, and
+   hiding `.xterm-cursor` also hides its character in the DOM renderer. The
+   TypeScript output path temporarily paints the cursor with the terminal
+   background while a TUI frame is being repaired, then restores it at the
+   final input position for both DOM and WebGL renderers. */
 
 /* ─── Startup Loading Splash ───────────────────────────────── */
 .tier-loading-splash {

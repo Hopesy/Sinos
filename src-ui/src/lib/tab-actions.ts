@@ -16,6 +16,10 @@ export interface TabActions {
    *  yet, etc.). Callers use the return value to decide whether to clear
    *  the source draft — silent failures must not lose user text. */
   paste: (text: string) => boolean;
+  /** Pause or resume the running PTY process tree. The PTY stays alive and
+   *  keeps its input/output buffers intact. Returns false when the target is
+   *  not ready or the OS could not apply the requested state. */
+  setPaused: (paused: boolean) => Promise<boolean>;
   /** Insert text at the cursor without submitting. Used by file-drop:
    *  dragging a file into the terminal should mirror OS-native terminal
    *  behavior — the path appears at the cursor as if typed, and the user

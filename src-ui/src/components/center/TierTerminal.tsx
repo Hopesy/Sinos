@@ -43,9 +43,9 @@ import './TierTerminal.css';
 // Each scheme overrides ONLY the terminal foreground color. The 16 ANSI
 // palette stays whatever the active theme provides, so switching schemes only
 // re-tints the text — no full theme swap, no style shift. Raw-shell cursors
-// follow the selected foreground; AI-agent cursor decoration stays transparent
-// while the cursor cell keeps the foreground text. The chip's own swatch in
-// the picker reuses the same fg value.
+// follow the selected foreground; agent cursors use the same high-contrast
+// accent while output is idle. The chip's own swatch in the picker reuses the
+// same fg value.
 export interface TermColorScheme {
   id: string;
   fg: string;
@@ -163,7 +163,13 @@ export function buildFontFamily(userFont?: string): string {
   return userFont ? `"${userFont}", ${base}` : base;
 }
 
-function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId?: string, rawShell = false) {
+function buildXtermTheme(
+  themeName: string,
+  hasBg: boolean | undefined,
+  schemeId?: string,
+  rawShell = false,
+  cursorVisible = true,
+) {
   const isDark = themeName !== 'light';
   const scheme = schemeId ? TERM_COLOR_SCHEMES.find(s => s.id === schemeId) : undefined;
   const bgOpaque = THEME_TERMINAL_BG[themeName] || (isDark ? '#0c0c0c' : '#eeebe2');
@@ -191,17 +197,22 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
     brightBlack: '#5a5854',
   };
 
+  const cursorColor = rawShell ? fg : selectionAccent;
+
   return {
     ...base,
     background: bg,
     foreground: fg,
-    // AI-agent TUIs paint their own input caret. xterm's buffer cursor is not
-    // guaranteed to be on that input row, so its decoration is suppressed by
-    // CSS while the cursor cell's text remains readable. Keep cursorAccent at
-    // the foreground so WebGL does not erase a TUI caret character beneath a
-    // block-style application cursor. Raw shells keep a normal xterm caret.
-    cursor: rawShell ? fg : bg,
-    cursorAccent: rawShell ? bg : fg,
+    // Agent TUIs send their actual composer position through the terminal
+    // cursor protocol. Keep that cursor visible after output settles. While a
+    // frame is still arriving, the cursor is temporarily painted in the
+    // terminal background so the TUI's intermediate repair cursor cannot flash
+    // at its temporary anchor position (see suspendAgentCursor below).
+    cursor: cursorVisible ? cursorColor : bg,
+    // Keep the previous release's block-cursor contrast in both states. The
+    // temporary suppression changes only the cursor fill; changing this
+    // accent as well made the visible caret return with a different color.
+    cursorAccent: bgOpaque,
   };
 }
 
@@ -385,6 +396,17 @@ function TierTerminalImpl({
   // caret — the xterm cursor is the only input-position indicator, so these
   // tabs keep it visible (issue #95). Drives the theme + CSS below.
   const isRawShell = tool === 'terminal' || tool === 'remote';
+  // Keep the latest theme arguments available to the one-shot xterm init
+  // effect without re-creating the PTY when the user changes appearance.
+  const terminalThemeArgsRef = useRef({ theme, hasBg, termColorScheme, isRawShell });
+  terminalThemeArgsRef.current = { theme, hasBg, termColorScheme, isRawShell };
+  // Agent cursor suppression is renderer-independent: changing the xterm
+  // theme hides the WebGL rectangle and the DOM decoration without touching
+  // the cursor cell or the PTY byte stream. Start visible so a CLI that has
+  // not emitted output yet (or emits no startup banner) still has a usable
+  // composer caret.
+  const agentCursorVisibleRef = useRef(true);
+  const agentCursorRestoreTimerRef = useRef<number | undefined>(undefined);
   // Dispatch-only subscription. Never re-renders this component.
   const dispatch = useAppDispatch();
   // Sentinel scanner needs access to the latest state to look up sibling
@@ -509,16 +531,65 @@ function TierTerminalImpl({
       // re-composites the whole canvas — visible as a one-frame flicker
       // of the upstream CLI's own caret character (Claude Code, Codex)
       // every time the user clicks anywhere outside the terminal.
-      // 'none' suppresses the inactive cursor entirely so blur is a
-      // no-op for the renderer. Raw shells keep their active bar caret;
-      // agent TUIs and the compose textarea own their own caret.
-      cursorInactiveStyle: 'none',
+      // Keep the same bar style when the terminal briefly loses focus. The
+      // active-tab focus registry normally re-focuses xterm immediately, but
+      // using `none` here made the agent composer caret disappear during that
+      // handoff. The output-settle gate below still suppresses transient
+      // positions while a TUI frame is being parsed.
+      cursorInactiveStyle: 'bar',
       scrollback: 5000,
       // Required to load Unicode11Addon below (xterm 6 gates the unicode
       // provider API as proposed). No other proposed API is used.
       allowProposedApi: true,
-      theme: buildXtermTheme(theme, hasBg, termColorScheme, isRawShell),
+      theme: buildXtermTheme(
+        theme,
+        hasBg,
+        termColorScheme,
+        isRawShell,
+        agentCursorVisibleRef.current,
+      ),
     });
+
+    const setAgentCursorVisible = (visible: boolean) => {
+      if (isRawShell || agentCursorVisibleRef.current === visible) return;
+      agentCursorVisibleRef.current = visible;
+      const current = terminalThemeArgsRef.current;
+      term.options.theme = buildXtermTheme(
+        current.theme,
+        current.hasBg,
+        current.termColorScheme,
+        current.isRawShell,
+        visible,
+      );
+      // Theme changes schedule a renderer refresh. Refresh the full viewport
+      // as well so a WebGL cursor rectangle from the temporary anchor cannot
+      // survive the transition to the final composer position.
+      if (visible && term.rows > 0) term.refresh(0, term.rows - 1);
+    };
+
+    const scheduleAgentCursorRestore = () => {
+      if (agentCursorRestoreTimerRef.current !== undefined) {
+        window.clearTimeout(agentCursorRestoreTimerRef.current);
+      }
+      // Keep the cursor suppressed briefly after the parser has completed a
+      // write. A TUI frame commonly arrives as several writes: restoring after
+      // the first one would expose the temporary repair cursor again. The
+      // timer is restarted by every parsed write, so only the final composer
+      // position becomes visible after the frame settles.
+      agentCursorRestoreTimerRef.current = window.setTimeout(() => {
+        agentCursorRestoreTimerRef.current = undefined;
+        if (mounted) setAgentCursorVisible(true);
+      }, 120);
+    };
+
+    const suspendAgentCursor = () => {
+      if (isRawShell) return;
+      setAgentCursorVisible(false);
+      // This is a fallback for a queued write that has not reached xterm yet;
+      // the onWriteParsed listener below replaces it with a parser-relative
+      // quiet window as soon as xterm starts draining the write buffer.
+      scheduleAgentCursorRestore();
+    };
 
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -1075,6 +1146,15 @@ function TierTerminalImpl({
     // header); near-zero cost — one performance.now() + bounded ring-buffer
     // write per render, no-ops when no output armed this frame.
     term.onRender(() => rig.outputRenderEnd());
+    // PTY delivery and xterm parsing are separate queues. Restore the agent
+    // caret relative to `onWriteParsed`, not only relative to PTY receipt, so
+    // the cursor is revealed at the final position of a completed TUI frame.
+    const writeParsedSub = term.onWriteParsed(() => {
+      if (!isRawShell && !agentCursorVisibleRef.current) {
+        scheduleAgentCursorRestore();
+      }
+    });
+    unlisteners.push(() => writeParsedSub.dispose());
     const usesNativeStatus = supportsNativeAgentStatus(tool);
 
     let lastNativeAction = { fingerprint: '', switchedAt: 0 };
@@ -1181,6 +1261,7 @@ function TierTerminalImpl({
           hasOutputRef.current = true;
           outputBytesRef.current += data.length;
           lastOutputAtRef.current = Date.now();
+          suspendAgentCursor();
           outputScheduler.enqueue(sessionId, data);
 
           // Handle SSH Auto-login via Password injection
@@ -1462,6 +1543,10 @@ function TierTerminalImpl({
         window.clearTimeout(grokPermissionReleaseTimerRef.current);
         grokPermissionReleaseTimerRef.current = undefined;
       }
+      if (agentCursorRestoreTimerRef.current !== undefined) {
+        window.clearTimeout(agentCursorRestoreTimerRef.current);
+        agentCursorRestoreTimerRef.current = undefined;
+      }
       term.dispose();
       outputScheduler.unregisterSession(sessionId);
       xtermRef.current = null;
@@ -1482,7 +1567,13 @@ function TierTerminalImpl({
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    term.options.theme = buildXtermTheme(theme, hasBg, termColorScheme, isRawShell);
+    term.options.theme = buildXtermTheme(
+      theme,
+      hasBg,
+      termColorScheme,
+      isRawShell,
+      agentCursorVisibleRef.current,
+    );
   }, [theme, termColorScheme, hasBg, isRawShell]);
 
   // ── Terminal font sync (live, no PTY restart) ────────────────────────────
@@ -1588,6 +1679,15 @@ function TierTerminalImpl({
           commands.tierTerminalInput(sessionId, '\r').catch(() => {});
         }, 150);
         return true;
+      },
+      setPaused: async (paused: boolean): Promise<boolean> => {
+        if (!xtermRef.current) return false;
+        try {
+          await commands.tierTerminalPause(sessionId, paused);
+          return true;
+        } catch {
+          return false;
+        }
       },
       insertText: (text: string): boolean => {
         const term = xtermRef.current;

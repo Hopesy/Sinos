@@ -19,7 +19,7 @@ import { clipboardRead, clipboardWrite } from '../../lib/clipboard';
 import { subscribeGambitHistory, getGambitHistorySnapshot, pushGambitHistory } from '../../lib/gambit-history';
 import { commands } from '../../tauri';
 import { useT } from '../../i18n/useT';
-import { useAppState } from '../../store/app-state';
+import { useAppState, type AgentStatus } from '../../store/app-state';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import './Gambit.css';
@@ -35,6 +35,10 @@ interface GambitProps {
    *  signal to decide whether to clear the draft — failed sends preserve
    *  the text so the user never loses what they typed. */
   onSend: (text: string) => boolean;
+  /** Suspend/resume the active agent process without recreating its PTY. */
+  onTogglePause: (paused: boolean) => Promise<boolean>;
+  /** Native title status, when the active tool exposes one. */
+  agentStatus?: AgentStatus;
   /** Whether the left/right side panels are currently hidden. When Gambit
    *  is docked at the bottom it spans the center panel only, so we need
    *  to know which sides are absent to compute the inset offsets. */
@@ -100,6 +104,8 @@ function GambitImpl({
   onDraftChange,
   onClose,
   onSend,
+  onTogglePause,
+  agentStatus,
   leftPanelHidden,
   rightPanelHidden,
   workspaceName,
@@ -279,27 +285,31 @@ function GambitImpl({
   const onDraftChangeRef = useRef(onDraftChange);
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { onDraftChangeRef.current = onDraftChange; }, [onDraftChange]);
+
+  const insertPathsAtCursor = useCallback((paths: string[]) => {
+    if (paths.length === 0) return;
+    const formatted = formatPathsForInsert(paths);
+    const textarea = textareaRef.current;
+    const cur = draftRef.current;
+    const start = textarea?.selectionStart ?? cur.length;
+    const end = textarea?.selectionEnd ?? cur.length;
+    const next = cur.slice(0, start) + formatted + cur.slice(end);
+    onDraftChangeRef.current(next);
+    requestAnimationFrame(() => {
+      if (!textarea) return;
+      textarea.focus();
+      textarea.selectionStart = start + formatted.length;
+      textarea.selectionEnd = start + formatted.length;
+    });
+  }, []);
+
   useEffect(() => {
     return registerFileDropTarget({
       priority: 200,
       rect: () => rootRef.current?.getBoundingClientRect() ?? null,
-      insert: (paths) => {
-        const formatted = formatPathsForInsert(paths);
-        const textarea = textareaRef.current;
-        const cur = draftRef.current;
-        const start = textarea?.selectionStart ?? cur.length;
-        const end = textarea?.selectionEnd ?? cur.length;
-        const next = cur.slice(0, start) + formatted + cur.slice(end);
-        onDraftChangeRef.current(next);
-        requestAnimationFrame(() => {
-          if (!textarea) return;
-          textarea.focus();
-          textarea.selectionStart = start + formatted.length;
-          textarea.selectionEnd = start + formatted.length;
-        });
-      },
+      insert: insertPathsAtCursor,
     });
-  }, []);
+  }, [insertPathsAtCursor]);
 
   // Click a thumbnail → open a full-size preview overlay AND select the
   // matching path text in the textarea (so once the overlay closes, the
@@ -328,6 +338,39 @@ function GambitImpl({
   // linger once the user acts.
   const [sendFailed, setSendFailed] = useState(false);
   const [sendEmpty, setSendEmpty] = useState(false);
+  type ExecutionState = 'idle' | 'running' | 'paused';
+  const [executionState, setExecutionState] = useState<ExecutionState>(
+    agentStatus === 'working' ? 'running' : 'idle',
+  );
+  const [pausePending, setPausePending] = useState(false);
+  const sessionIdRef = useRef(sessionId);
+  const lastAgentStatusRef = useRef(agentStatus);
+
+  // The active Gambit survives tab switches. Reset its control state for the
+  // newly selected PTY, while preserving a paused state until the user
+  // explicitly resumes that same session.
+  useEffect(() => {
+    if (sessionIdRef.current === sessionId) return;
+    sessionIdRef.current = sessionId;
+    lastAgentStatusRef.current = agentStatus;
+    setExecutionState(agentStatus === 'working' ? 'running' : 'idle');
+    setPausePending(false);
+  }, [sessionId, agentStatus]);
+
+  // Native title updates are authoritative for tools that expose them. Ignore
+  // equal values so an optimistic send does not immediately get overwritten by
+  // the stale idle status that was already in the store before the PTY parsed
+  // the new turn. A locally paused process intentionally remains paused even
+  // though no new title frames arrive while its threads are suspended.
+  useEffect(() => {
+    if (lastAgentStatusRef.current === agentStatus) return;
+    lastAgentStatusRef.current = agentStatus;
+    setExecutionState(current => {
+      if (current === 'paused') return current;
+      if (agentStatus === 'working') return 'running';
+      return agentStatus == null ? current : 'idle';
+    });
+  }, [agentStatus]);
   useEffect(() => {
     if (!sendFailed) return;
     const t = setTimeout(() => setSendFailed(false), 2500);
@@ -543,7 +586,20 @@ function GambitImpl({
     return true;
   }, [history, draft, onDraftChange]);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
+    if (executionState !== 'idle') {
+      if (pausePending) return;
+      const shouldPause = executionState === 'running';
+      setPausePending(true);
+      const ok = await onTogglePause(shouldPause);
+      setPausePending(false);
+      if (ok) {
+        setExecutionState(shouldPause ? 'paused' : 'running');
+      } else {
+        setSendFailed(true);
+      }
+      return;
+    }
     // CRITICAL: the draft text is the ONLY thing that gets sent.
     // Thumbnails rendered from pastedImagePaths are a pure derived view
     // with zero data-side responsibility. DO NOT re-append paths or
@@ -568,8 +624,12 @@ function GambitImpl({
     // Sent -> leave history navigation mode so the next recall starts from
     // the newest entry (which is the one we just pushed).
     historyCursorRef.current = null;
+    // The PTY may not publish its first native "working" title until after
+    // the click has returned. Mark the control as running immediately so the
+    // same button becomes Pause without a timing gap.
+    setExecutionState('running');
     onDraftChange('');
-  }, [draft, onSend, onDraftChange]);
+  }, [draft, executionState, onDraftChange, onSend, onTogglePause, pausePending]);
 
   // Scroll the active agent surface in small increments while the Gambit
   // textarea stays focused. The textarea is a controlled editor, so letting
@@ -679,6 +739,33 @@ function GambitImpl({
       ta.selectionStart = caret;
       ta.selectionEnd = caret;
     });
+  };
+
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const handleUploadImages = async () => {
+    if (uploadingImages) return;
+    setUploadingImages(true);
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        filters: [{
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'],
+        }],
+      });
+      const paths = Array.isArray(selected)
+        ? selected
+        : selected
+          ? [selected]
+          : [];
+      insertPathsAtCursor(paths);
+    } catch (error) {
+      console.error('[Gambit] image picker failed', error);
+    } finally {
+      setUploadingImages(false);
+    }
   };
 
   // Suppress onClose usage warning — true close is driven by parent (Explorer
@@ -826,13 +913,53 @@ function GambitImpl({
           </div>
         )}
         <button
-          className={`gambit-send${sendFailed ? ' gambit-send--failed' : ''}${!draft.trim() ? ' gambit-send--empty' : ''}`}
-          onClick={handleSend}
+          type="button"
+          className="gambit-tool-btn gambit-upload"
+          aria-label={t('gambit.upload_image')}
+          title={t('gambit.upload_image')}
+          onClick={() => { void handleUploadImages(); }}
+          disabled={uploadingImages}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 14 V3 M3 8 L8 3 L13 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="m21 15-5-5L5 21" />
+            <path d="M17 3v6M14 6h6" />
           </svg>
         </button>
+        {(() => {
+          const buttonLabel = executionState === 'running'
+            ? t('gambit.pause')
+            : executionState === 'paused'
+              ? t('gambit.resume')
+              : t('gambit.send');
+          const buttonDisabled = pausePending;
+          return (
+            <button
+              type="button"
+              className={`gambit-send${sendFailed ? ' gambit-send--failed' : ''}${executionState === 'paused' ? ' gambit-send--paused' : ''}${!draft.trim() && executionState === 'idle' ? ' gambit-send--empty' : ''}`}
+              aria-label={buttonLabel}
+              title={buttonLabel}
+              onClick={() => { void handleSend(); }}
+              disabled={buttonDisabled}
+            >
+              {executionState === 'running' ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <rect x="3" y="3" width="3.5" height="10" rx="0.8" />
+                  <rect x="9.5" y="3" width="3.5" height="10" rx="0.8" />
+                </svg>
+              ) : executionState === 'paused' ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M4 2.7v10.6L13 8 4 2.7Z" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M8 14 V3 M3 8 L8 3 L13 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              )}
+            </button>
+          );
+        })()}
       </div>
 
       {/* Full-size preview overlay. Renders into document.body to escape

@@ -181,6 +181,8 @@ Apague esta nota quando quiser e comece a sua primeira tarefa.`,
   'gambit.placeholder': 'Planeje sua jogada... ({send} para enviar, {newline} para nova linha, cole imagens, ←→ para o histórico)',
   'gambit.send_failed_hint': 'Abra primeiro uma sessão ativa',
   'gambit.send_empty_hint': 'Digite uma mensagem ou cole uma imagem primeiro (Ctrl+V)',
+  'gambit.upload_image': 'Enviar imagem',
+  'gambit.interrupt': 'Parar tarefa atual',
 
   'conversation.reasoning': 'Processo de raciocínio',
   'conversation.thinking': 'Pensando…',
@@ -197,4 +199,7 @@ Apague esta nota quando quiser e comece a sua primeira tarefa.`,
   'heatmap.tooltip_one': '1 mensagem em {date}',
   'heatmap.tooltip_none': 'Sem atividade em {date}',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

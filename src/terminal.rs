@@ -444,6 +444,9 @@ pub struct TerminalSession {
     /// lock before doing PTY I/O, preventing multi-tab starvation.
     pub writer_lock: Arc<Mutex<Box<dyn Write + Send>>>,
     pub kill_tx: std::sync::mpsc::Sender<()>,
+    /// PID of the PTY's direct child. The pause controller walks its
+    /// descendants so a shell-launched agent is suspended as one unit.
+    pub process_id: Option<u32>,
     /// The tool name (e.g. "claude", "qwen") for this session
     #[allow(dead_code)]
     pub tool_name: Option<String>,
@@ -474,6 +477,124 @@ pub struct TerminalSession {
 }
 
 pub type SharedSession = Arc<Mutex<std::collections::HashMap<String, TerminalSession>>>;
+
+/// Suspend or resume the complete process tree attached to a PTY. This keeps
+/// the CLI's current prompt and conversation state intact, unlike Ctrl+C,
+/// which cancels the active turn and may discard its continuation point.
+#[cfg(target_os = "windows")]
+pub fn set_process_paused(pid: u32, paused: bool) -> Result<(), String> {
+    use std::mem::size_of;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
+        Thread32Next, PROCESSENTRY32W, THREADENTRY32, TH32CS_SNAPPROCESS,
+        TH32CS_SNAPTHREAD,
+    };
+    use windows::Win32::System::Threading::{
+        OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME,
+    };
+
+    let process_snapshot = unsafe {
+        CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            .map_err(|e| format!("Create process snapshot failed: {e}"))?
+    };
+    let mut processes = Vec::new();
+    let mut entry = PROCESSENTRY32W::default();
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    unsafe {
+        if Process32FirstW(process_snapshot, &mut entry).is_ok() {
+            loop {
+                processes.push((entry.th32ProcessID, entry.th32ParentProcessID));
+                if Process32NextW(process_snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(process_snapshot);
+    }
+
+    // Include the direct PTY child and every shell/agent descendant. A single
+    // snapshot is sufficient because a suspended tree cannot spawn children.
+    let mut pids = vec![pid];
+    let mut cursor = 0;
+    while cursor < pids.len() {
+        let parent = pids[cursor];
+        for (child, child_parent) in &processes {
+            if *child_parent == parent && !pids.contains(child) {
+                pids.push(*child);
+            }
+        }
+        cursor += 1;
+    }
+    // Suspend leaves before their parents; resume parents before descendants.
+    if paused {
+        pids.reverse();
+    }
+
+    let thread_snapshot = unsafe {
+        CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+            .map_err(|e| format!("Create thread snapshot failed: {e}"))?
+    };
+    let mut threads = Vec::new();
+    let mut thread = THREADENTRY32::default();
+    thread.dwSize = size_of::<THREADENTRY32>() as u32;
+    unsafe {
+        if Thread32First(thread_snapshot, &mut thread).is_ok() {
+            loop {
+                threads.push((thread.th32ThreadID, thread.th32OwnerProcessID));
+                if Thread32Next(thread_snapshot, &mut thread).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(thread_snapshot);
+    }
+
+    let mut touched_any = false;
+    for process_id in pids {
+        for (thread_id, owner_id) in &threads {
+            if *owner_id != process_id {
+                continue;
+            }
+            let Ok(handle) = (unsafe { OpenThread(THREAD_SUSPEND_RESUME, false, *thread_id) }) else {
+                continue;
+            };
+            let result = unsafe {
+                if paused { SuspendThread(handle) } else { ResumeThread(handle) }
+            };
+            unsafe { let _ = CloseHandle(handle); }
+            if result != u32::MAX {
+                touched_any = true;
+            }
+        }
+    }
+
+    if touched_any {
+        Ok(())
+    } else {
+        Err("PTY process is no longer running".to_string())
+    }
+}
+
+#[cfg(unix)]
+pub fn set_process_paused(pid: u32, paused: bool) -> Result<(), String> {
+    let signal = if paused { libc::SIGSTOP } else { libc::SIGCONT };
+    let process_group = -(pid as libc::pid_t);
+    if unsafe { libc::kill(process_group, signal) } == 0 {
+        return Ok(());
+    }
+    // Some PTY implementations do not make the child a process-group leader.
+    if unsafe { libc::kill(pid as libc::pid_t, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+#[cfg(not(any(target_os = "windows", unix)))]
+pub fn set_process_paused(_pid: u32, _paused: bool) -> Result<(), String> {
+    Err("Process pause is not supported on this platform".to_string())
+}
 
 // ─── Spawn ────────────────────────────────────────────────
 
@@ -751,6 +872,7 @@ pub fn spawn(
     // OS), reader.read() would block forever and the UI had no way to know.
     let child = pair.slave.spawn_command(cmd)?;
     eprintln!("[Tier Terminal] PTY process spawned OK (portable-pty)");
+    let process_id = child.process_id();
 
     // Bind the new child to the kill-on-close Job Object so it can't outlive
     // Coffee CLI's process. Belt-and-suspenders with the ExitRequested
@@ -861,6 +983,7 @@ pub fn spawn(
             TerminalSession {
                 writer_lock: writer_clone,
                 kill_tx,
+                process_id,
                 tool_name: tool_name.clone(),
                 session_token: Mutex::new(None),
                 _master: master_clone,

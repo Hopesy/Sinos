@@ -219,6 +219,8 @@ export const zhCN = {
   'gambit.placeholder': '静心琢磨，再落子... ({send} 发送, {newline} 换行, 可粘贴图片, ←→ 翻历史)',
   'gambit.send_failed_hint': '请先打开活动会话',
   'gambit.send_empty_hint': '先输入内容或粘贴图片 (Ctrl+V)',
+  'gambit.upload_image': '上传图片',
+  'gambit.interrupt': '停止当前任务',
 
 
   // 贡献热力图（桌面 Launchpad 上的 6 张卡片上方）
@@ -269,4 +271,7 @@ export const zhCN = {
   'editor.write_failed': '文件写入失败',
   'editor.flush_failed': '文件无法可靠写入磁盘',
 
+  'gambit.pause': '暂停当前任务',
+  'gambit.resume': '恢复当前任务',
+  'gambit.send': '发送',
 } as const satisfies Record<I18nKey, string>;

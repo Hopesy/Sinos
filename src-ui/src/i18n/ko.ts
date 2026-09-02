@@ -182,6 +182,8 @@ export const ko = {
   'gambit.placeholder': '한 수를 고르는 중... ({send} 전송, {newline} 줄바꿈, 이미지 붙여넣기, ←→ 기록)',
   'gambit.send_failed_hint': '활성 세션을 먼저 여세요',
   'gambit.send_empty_hint': '내용을 입력하거나 이미지를 붙여넣으세요 (Ctrl+V)',
+  'gambit.upload_image': '이미지 업로드',
+  'gambit.interrupt': '현재 작업 중지',
 
 
   'conversation.reasoning': '사고 과정',
@@ -199,4 +201,7 @@ export const ko = {
   'heatmap.tooltip_one': '{date} · 메시지 1개',
   'heatmap.tooltip_none': '{date} · 활동 없음',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

@@ -1635,6 +1635,24 @@ fn tier_terminal_input(
 
 /// Raw write used for system-generated input like auto-skip Enter for the
 /// Claude trust prompt.
+/// Pause or resume the agent process tree while keeping its PTY alive. This
+/// is separate from `tier_terminal_input`: Ctrl+C cancels a turn, while the
+/// Gambit button must resume the same turn on its second click.
+#[tauri::command]
+fn tier_terminal_pause(
+    session_id: String,
+    paused: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let pid = {
+        let map = state.terminal_session.lock().map_err(|e| e.to_string())?;
+        map.get(&session_id)
+            .and_then(|session| session.process_id)
+            .ok_or_else(|| format!("No active process for terminal session: {session_id}"))?
+    };
+    crate::terminal::set_process_paused(pid, paused)
+}
+
 #[tauri::command]
 fn tier_terminal_raw_write(
     session_id: String,
@@ -5365,6 +5383,7 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             set_frosted_backdrop,
             tier_terminal_start,
             tier_terminal_input,
+            tier_terminal_pause,
             tier_terminal_raw_write,
             tier_terminal_kill,
             tier_terminal_resize,

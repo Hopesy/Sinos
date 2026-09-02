@@ -254,6 +254,11 @@ Delete this note whenever you're ready, and start your first task.`,
   'gambit.placeholder': 'Compose your move... ({send} to send, {newline} for newline, paste images, ←→ for history)',
   'gambit.send_failed_hint': 'Open an active session first',
   'gambit.send_empty_hint': 'Type a message or paste an image first (Ctrl+V)',
+  'gambit.upload_image': 'Upload image',
+  'gambit.interrupt': 'Stop current task',
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 
   // Contribution heatmap (above pinned cards on Desktop launchpad).
   'conversation.reasoning': 'Thinking process',

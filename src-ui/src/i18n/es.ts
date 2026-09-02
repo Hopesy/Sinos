@@ -180,6 +180,8 @@ Borra esta nota cuando quieras y empieza tu primera tarea.`,
   'gambit.placeholder': 'Piensa tu jugada... ({send} para enviar, {newline} para una nueva línea, pega imágenes, ←→ para el historial)',
   'gambit.send_failed_hint': 'Abre primero una sesión activa',
   'gambit.send_empty_hint': 'Escribe un mensaje o pega una imagen primero (Ctrl+V)',
+  'gambit.upload_image': 'Subir imagen',
+  'gambit.interrupt': 'Detener tarea actual',
 
   'conversation.reasoning': 'Proceso de razonamiento',
   'conversation.thinking': 'Pensando…',
@@ -196,4 +198,7 @@ Borra esta nota cuando quieras y empieza tu primera tarea.`,
   'heatmap.tooltip_one': '1 mensaje el {date}',
   'heatmap.tooltip_none': 'Sin actividad el {date}',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

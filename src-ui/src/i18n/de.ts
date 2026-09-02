@@ -181,6 +181,8 @@ Lösch diesen Zettel, wann du willst, und starte deine erste Aufgabe.`,
   'gambit.placeholder': 'Plane deinen Zug... ({send} zum Senden, {newline} für eine neue Zeile, Bilder einfügen, ←→ für den Verlauf)',
   'gambit.send_failed_hint': 'Öffne zuerst eine aktive Sitzung',
   'gambit.send_empty_hint': 'Gib zuerst eine Nachricht ein oder füge ein Bild ein (Ctrl+V)',
+  'gambit.upload_image': 'Bild hochladen',
+  'gambit.interrupt': 'Aktuelle Aufgabe stoppen',
 
   'conversation.reasoning': 'Denkprozess',
   'conversation.thinking': 'Denkt nach…',
@@ -197,4 +199,7 @@ Lösch diesen Zettel, wann du willst, und starte deine erste Aufgabe.`,
   'heatmap.tooltip_one': '1 Nachricht am {date}',
   'heatmap.tooltip_none': 'Keine Aktivität am {date}',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

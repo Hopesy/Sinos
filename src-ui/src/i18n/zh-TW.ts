@@ -183,6 +183,8 @@ export const zhTW = {
   'gambit.placeholder': '靜心琢磨，再落子... ({send} 發送, {newline} 換行, 可貼上圖片, ←→ 翻歷史)',
   'gambit.send_failed_hint': '請先開啟活動工作階段',
   'gambit.send_empty_hint': '先輸入內容或貼上圖片 (Ctrl+V)',
+  'gambit.upload_image': '上傳圖片',
+  'gambit.interrupt': '停止目前工作',
 
 
   'conversation.reasoning': '思考過程',
@@ -200,4 +202,7 @@ export const zhTW = {
   'heatmap.tooltip_one': '{date} · 1 則訊息',
   'heatmap.tooltip_none': '{date} · 沒有活動',
 
+  'gambit.pause': '暫停目前工作',
+  'gambit.resume': '恢復目前工作',
+  'gambit.send': '傳送',
 } as const satisfies Record<I18nKey, string>;

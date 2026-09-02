@@ -181,6 +181,8 @@ export const ru = {
   'gambit.placeholder': 'Продумайте ход... ({send} — отправить, {newline} — новая строка, можно вставлять изображения, ←→ — история)',
   'gambit.send_failed_hint': 'Сначала откройте активную сессию',
   'gambit.send_empty_hint': 'Сначала введите сообщение или вставьте изображение (Ctrl+V)',
+  'gambit.upload_image': 'Загрузить изображение',
+  'gambit.interrupt': 'Остановить текущую задачу',
 
   'conversation.reasoning': 'Ход рассуждений',
   'conversation.thinking': 'Размышляет…',
@@ -197,4 +199,7 @@ export const ru = {
   'heatmap.tooltip_one': '{date} · 1 сообщение',
   'heatmap.tooltip_none': '{date} · нет активности',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

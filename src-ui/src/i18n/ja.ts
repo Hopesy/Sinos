@@ -182,6 +182,8 @@ export const ja = {
   'gambit.placeholder': '静かに一手を思案... ({send}で送信、{newline}で改行、画像貼付可、←→で履歴)',
   'gambit.send_failed_hint': 'アクティブなセッションを先に開いてください',
   'gambit.send_empty_hint': 'メッセージを入力するか画像を貼り付けてください (Ctrl+V)',
+  'gambit.upload_image': '画像をアップロード',
+  'gambit.interrupt': '現在のタスクを停止',
 
 
   'conversation.reasoning': '思考プロセス',
@@ -199,4 +201,7 @@ export const ja = {
   'heatmap.tooltip_one': '{date} · メッセージ 1 件',
   'heatmap.tooltip_none': '{date} · アクティビティなし',
 
+  'gambit.pause': 'Pause current task',
+  'gambit.resume': 'Resume current task',
+  'gambit.send': 'Send',
 } as const satisfies Record<I18nKey, string>;

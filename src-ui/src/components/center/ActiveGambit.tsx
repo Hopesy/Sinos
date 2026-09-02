@@ -119,6 +119,19 @@ export function ActiveGambit() {
     return sent;
   }, [activeId, activeSession?.tool, canUseChat, dispatch]);
 
+  const handlePause = useCallback((paused: boolean): Promise<boolean> => {
+    if (!activeId) return Promise.resolve(false);
+    const tool = activeSession?.tool ?? null;
+    let targetId = activeId;
+    if (isSplitTool(tool)) {
+      const paneIdx = getFocusedPane(activeId);
+      if (!paneIdx) return Promise.resolve(false);
+      targetId = paneSessionId(activeId, paneIdx, 'split');
+    }
+    const actions = getTabActions(targetId);
+    return actions?.setPaused(paused) ?? Promise.resolve(false);
+  }, [activeId, activeSession?.tool]);
+
   const handleViewModeChange = useCallback((next: 'terminal' | 'chat') => {
     if (!activeId || (next === 'chat' && !canUseChat)) return;
     dispatch({ type: 'SET_SESSION_VIEW', id: activeId, viewMode: next });
@@ -182,6 +195,8 @@ export function ActiveGambit() {
       onDraftChange={handleDraftChange}
       onClose={handleClose}
       onSend={handleSend}
+      agentStatus={activeSession?.agentStatus}
+      onTogglePause={handlePause}
       leftPanelHidden={state.leftPanelHidden}
       rightPanelHidden={state.rightPanelHidden}
     />
