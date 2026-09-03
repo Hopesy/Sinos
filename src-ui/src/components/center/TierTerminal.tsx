@@ -921,19 +921,6 @@ function TierTerminalImpl({
     };
     term.onData(forwardInput);
 
-    // Keep xterm-focused terminals consistent with the Gambit composer:
-    // bare Up/Down scroll the visible transcript in small, smooth increments
-    // instead of sending cursor keys to the agent. Modifier chords remain
-    // available to the terminal application.
-    const scrollTerminalView = (direction: -1 | 1): boolean => {
-      const viewport = termRef.current?.querySelector<HTMLElement>('.xterm-viewport');
-      if (!viewport) return false;
-      const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, viewport.scrollTop + direction * 48));
-      viewport.scrollTo({ top: nextScrollTop, behavior: 'smooth' });
-      return true;
-    };
-
     // ── macOS IME symbol commit passthrough (issue #107) ────────────────
     // `ime` (declared above, next to the macOS input listener) mirrors
     // xterm's private `_keyDownSeen` (set on keydown, cleared on keyup —
@@ -954,13 +941,6 @@ function TierTerminalImpl({
         }
       }
       if (e.type === 'keydown') {
-        const bareArrow = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
-        if (bareArrow && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
-          if (scrollTerminalView(e.code === 'ArrowUp' ? -1 : 1)) {
-            e.preventDefault();
-            return false;
-          }
-        }
         rig.inputStart();
         // macOS pair-inserting IMEs synthesize a caret-move right after
         // committing （）/“”/‘’ — bounce it back to the textarea (moving the
