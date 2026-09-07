@@ -241,6 +241,10 @@ export interface AppState {
   // in the settings modal. Default 'list' so existing users see no change.
   taskViewMode: 'list' | 'note' | 'prompt';
 
+  // Project folders where Git change tracking is disabled. Stored as
+  // normalized absolute paths so each project can opt out independently.
+  gitTrackingDisabledPaths: string[];
+
   // ── Diff view (修改记录 → click a file) ─────────────────────────────────
   // The right-side Changes tab shows a half-height bottom overlay (DiffPanel)
   // when a file is selected. The user can "expand" that diff — historically a
@@ -293,6 +297,12 @@ export interface EditorTab {
   imageItems?: Array<{ path: string; name: string; size: number }>;
   dirty: boolean;
   externalChanged: boolean;
+}
+
+/** Stable project key used by per-project preferences. */
+export function normalizeProjectPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[A-Za-z]:/.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 function editorPathKey(path: string): string {
@@ -379,6 +389,7 @@ type Action =
   | { type: 'TOGGLE_RIGHT_PANEL' }
   | { type: 'SET_MULTI_AGENT_LAYOUT'; layout: 'grid' | 'columns' }
   | { type: 'SET_TASK_VIEW_MODE'; mode: 'list' | 'note' | 'prompt' }
+  | { type: 'SET_GIT_TRACKING'; path: string; enabled: boolean }
   | { type: 'SET_TAB_TITLE'; id: string; title: string }
   | { type: 'SET_DIFF_SELECTION'; selection: DiffSelection }
   | { type: 'CLEAR_DIFF' }
@@ -515,6 +526,17 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, termFont: action.font };
     case 'SET_DEFAULT_SHELL':
       return { ...state, defaultShell: action.shell };
+    case 'SET_GIT_TRACKING': {
+      const key = normalizeProjectPath(action.path);
+      if (!key) return state;
+      const disabled = state.gitTrackingDisabledPaths.includes(key);
+      if (action.enabled === !disabled) return state;
+      const nextPaths = action.enabled
+        ? state.gitTrackingDisabledPaths.filter(p => p !== key)
+        : [...state.gitTrackingDisabledPaths, key];
+      try { localStorage.setItem('cc-git-tracking-disabled', JSON.stringify(nextPaths)); } catch { /* Best-effort operation; failure is non-fatal. */ }
+      return { ...state, gitTrackingDisabledPaths: nextPaths };
+    }
     case 'TOGGLE_GAMBIT':
       return { ...state, gambitOpen: !state.gambitOpen };
     case 'TOGGLE_SETTINGS':
@@ -783,6 +805,7 @@ function getInitialState(): AppState {
   let iconTheme: IconTheme = 'devicon';
   let lang = 'zh-CN';
   let folderPath: string | null = null;
+  let gitTrackingDisabledPaths: string[] = [];
 
   try {
     const savedTheme = localStorage.getItem('cc-theme') as ThemeColor | null;
@@ -811,6 +834,15 @@ function getInitialState(): AppState {
   } catch { /* Best-effort operation; failure is non-fatal. */ }
 
   try { folderPath = localStorage.getItem('cc-folder'); } catch { /* Best-effort operation; failure is non-fatal. */ }
+  try {
+    const rawDisabled = localStorage.getItem('cc-git-tracking-disabled');
+    const parsed = rawDisabled ? JSON.parse(rawDisabled) : [];
+    if (Array.isArray(parsed)) {
+      gitTrackingDisabledPaths = Array.from(new Set(
+        parsed.filter((p): p is string => typeof p === 'string').map(normalizeProjectPath).filter(Boolean),
+      ));
+    }
+  } catch { /* Best-effort operation; failure is non-fatal. */ }
 
   try {
     const savedLang = localStorage.getItem('cc-lang');
@@ -943,6 +975,7 @@ function getInitialState(): AppState {
     rightPanelHidden,
     multiAgentLayout,
     taskViewMode,
+    gitTrackingDisabledPaths,
     diffSelection: null,
     diffMode,
     diffTabActive: false,

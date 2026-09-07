@@ -202,4 +202,8 @@ Apague esta nota quando quiser e comece a sua primeira tarefa.`,
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Rastreamento',
+  'changes.tracking_disable': 'Desativar o rastreamento de alterações do Git para este projeto',
+  'changes.tracking_enable': 'Ativar o rastreamento de alterações',
+  'changes.tracking_disabled': 'O rastreamento de alterações do Git está desativado para este projeto.',
 } as const satisfies Record<I18nKey, string>;

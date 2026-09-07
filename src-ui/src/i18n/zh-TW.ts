@@ -205,4 +205,8 @@ export const zhTW = {
   'gambit.pause': '暫停目前工作',
   'gambit.resume': '恢復目前工作',
   'gambit.send': '傳送',
+  'changes.tracking': '追蹤中',
+  'changes.tracking_disable': '關閉此專案的 Git 變更追蹤',
+  'changes.tracking_enable': '開啟變更追蹤',
+  'changes.tracking_disabled': '此專案已關閉 Git 變更追蹤。',
 } as const satisfies Record<I18nKey, string>;

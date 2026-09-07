@@ -15,11 +15,11 @@
 // read-only file-actions menu.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAppState, resolveDiffContext, type DiffSelection } from '../../store/app-state';
+import { useAppState, normalizeProjectPath, resolveDiffContext, type DiffSelection } from '../../store/app-state';
 import { useGitStatus, useGitPollingGate } from '../../lib/git-status';
 import { commands, type GitFileEntry } from '../../tauri';
 import { useT } from '../../i18n/useT';
-import { ScrollPanel } from '../common/ScrollPanel';
+import { VirtualList } from '../common/VirtualList';
 import { ContextMenu } from '../left/Explorer';
 import type { CtxMenuState } from '../left/Explorer';
 import { beginExplorerDrag } from '../../lib/explorer-drag';
@@ -95,6 +95,7 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
   const { state, dispatch } = useAppState();
   const activeSession = state.terminals.find(s => s.id === state.activeTerminalId);
   const activeFolderPath = resolveDiffContext(activeSession)?.folderPath ?? null;
+  const gitTrackingDisabled = !!activeFolderPath && state.gitTrackingDisabledPaths.includes(normalizeProjectPath(activeFolderPath));
   const changes = useGitStatus();
   // Drive git polling only while this panel is on screen — ChangesBoard
   // unmounts when its tab is inactive, so this gates the expensive git query.
@@ -207,25 +208,6 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
     return out;
   }, [changes, t, expandedCommits, commitFiles]);
 
-  // Progressive load over the flattened list — caps DOM nodes when a fresh
-  // repo lists thousands of untracked files.
-  const PAGE_SIZE = 80;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  /* eslint-disable-next-line react-hooks/set-state-in-effect -- A changed flattened list starts a new pagination window. */
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [items.length]);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) setVisibleCount(c => Math.min(items.length, c + PAGE_SIZE)); },
-      { rootMargin: '300px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [items.length]);
-  const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
-
   // Resolve the selected row back to its entry + group (or drop it if it
   // vanished from the list — staged, reverted, tab switched).
   const selectedFile = useMemo(() => {
@@ -263,7 +245,38 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
     setInitializing(false);
   };
 
+  const setGitTracking = (enabled: boolean) => {
+    if (activeFolderPath) {
+      dispatch({ type: 'SET_GIT_TRACKING', path: activeFolderPath, enabled });
+      if (!enabled) dispatch({ type: 'CLEAR_DIFF' });
+    }
+  };
+
+  const { totalAdded, totalDeleted } = useMemo(() => {
+    let totalAdded = 0;
+    let totalDeleted = 0;
+    if (changes?.state === 'ok') {
+      for (const entries of [changes.uncommitted, changes.untracked]) {
+        for (const e of entries) { totalAdded += e.added; totalDeleted += e.deleted; }
+      }
+    }
+    return { totalAdded, totalDeleted };
+  }, [changes]);
+
   // ── Prompt / empty states ────────────────────────────────────────────────
+  if (gitTrackingDisabled) {
+    return (
+      <div className="task-empty changes-tracking-disabled">
+        <div className="task-empty-text">{t('changes.tracking_disabled')}</div>
+        {activeFolderPath && (
+          <button className="changes-tracking-toggle" role="switch" aria-checked={false} onClick={() => setGitTracking(true)}>
+            <span className="changes-tracking-switch" aria-hidden="true" />
+            <span>{t('changes.tracking_enable')}</span>
+          </button>
+        )}
+      </div>
+    );
+  }
   if (!changes) {
     return <div className="task-empty"><div className="task-empty-text">{t('diff.loading') || 'Loading…'}</div></div>;
   }
@@ -297,11 +310,6 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
   // file list below. Committed files (the 已提交 group, shown only when clean)
   // don't count toward pending totals. Untracked entries carry 0/0 so they
   // don't inflate it.
-  let totalAdded = 0;
-  let totalDeleted = 0;
-  for (const e of changes.uncommitted) { totalAdded += e.added; totalDeleted += e.deleted; }
-  for (const e of changes.untracked) { totalAdded += e.added; totalDeleted += e.deleted; }
-
   // The resize handle sits at the overlay's top edge. In tab mode the overlay
   // isn't rendered here (the diff lives in the center tab), so hide the handle.
   const handleStyle = diffMode === 'tab' ? { display: 'none' as const } : { bottom: `${diffHeight}%` };
@@ -315,20 +323,24 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
           </svg>
           <span className="changes-branch-name">{changes.branch}</span>
         </span>
-        {(totalAdded > 0 || totalDeleted > 0) && (
-          <span className="changes-branch-stats">
-            <span className="diff-add">+{totalAdded}</span>
-            <span className="diff-del">-{totalDeleted}</span>
-          </span>
-        )}
+        <span className="changes-branch-actions">
+          {(totalAdded > 0 || totalDeleted > 0) && (
+            <span className="changes-branch-stats">
+              <span className="diff-add">+{totalAdded}</span>
+              <span className="diff-del">-{totalDeleted}</span>
+            </span>
+          )}
+          <button className="changes-tracking-toggle" role="switch" aria-checked={true} onClick={() => setGitTracking(false)} title={t('changes.tracking_disable')}>
+            <span className="changes-tracking-switch is-on" aria-hidden="true" />
+            <span className="changes-tracking-label">{t('changes.tracking')}</span>
+          </button>
+        </span>
       </div>
       {items.length === 0 ? (
         <div className="task-empty"><div className="task-empty-text">{t('changes.clean') || 'No changes — working tree clean.'}</div></div>
       ) : (
        <>
-      <ScrollPanel>
-        <div className="changes-list">
-          {visibleItems.map(it => {
+      <VirtualList key={activeFolderPath} items={items} renderItem={it => {
             if (it.type === 'header') {
               return (
                 <div key={it.key} className="changes-group-header">
@@ -410,10 +422,7 @@ export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
                 </span>
               </div>
             );
-          })}
-          {visibleCount < items.length && <div ref={sentinelRef} className="changes-sentinel" aria-hidden="true" />}
-        </div>
-      </ScrollPanel>
+          }} />
       {diffMode === 'overlay' && state.diffSelection && (
         <>
           <div className="diff-resize-handle" style={handleStyle} onPointerDown={startResize} aria-label="Resize diff" />

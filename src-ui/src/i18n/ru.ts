@@ -202,4 +202,8 @@ export const ru = {
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Отслеживание',
+  'changes.tracking_disable': 'Отключить отслеживание изменений Git для этого проекта',
+  'changes.tracking_enable': 'Включить отслеживание изменений',
+  'changes.tracking_disabled': 'Отслеживание изменений Git отключено для этого проекта.',
 } as const satisfies Record<I18nKey, string>;

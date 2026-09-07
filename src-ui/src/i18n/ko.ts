@@ -204,4 +204,8 @@ export const ko = {
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': '추적 중',
+  'changes.tracking_disable': '이 프로젝트의 Git 변경 추적 끄기',
+  'changes.tracking_enable': '변경 추적 켜기',
+  'changes.tracking_disabled': '이 프로젝트에서는 Git 변경 추적이 꺼져 있습니다.',
 } as const satisfies Record<I18nKey, string>;

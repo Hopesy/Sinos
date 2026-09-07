@@ -202,4 +202,8 @@ Lösch diesen Zettel, wann du willst, und starte deine erste Aufgabe.`,
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Tracking',
+  'changes.tracking_disable': 'Git-Änderungsverfolgung für dieses Projekt deaktivieren',
+  'changes.tracking_enable': 'Änderungsverfolgung aktivieren',
+  'changes.tracking_disabled': 'Die Git-Änderungsverfolgung ist für dieses Projekt deaktiviert.',
 } as const satisfies Record<I18nKey, string>;

@@ -156,9 +156,63 @@ fn parse_numstat(out: String) -> HashMap<String, (u32, u32)> {
 /// delta the "未提交" group displays. Untracked files aren't tracked by git
 /// and never appear here — they're handled separately via porcelain.
 fn numstat_worktree_vs_head(repo_root: &str) -> HashMap<String, (u32, u32)> {
-    let out = git_output(repo_root, &["diff", "--numstat", "-z", "HEAD"])
+    // Avoid quadratic rename matching and user-defined diff subprocesses on
+    // every poll. Status uses the same policy, so rename rows/counts agree.
+    let out = git_output(repo_root, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "HEAD"])
         .unwrap_or_default();
     parse_numstat(out)
+}
+
+#[cfg(test)]
+mod polling_tests {
+    use super::*;
+
+    struct Repo(std::path::PathBuf);
+    impl Repo {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("sinos-git-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            let repo = Self(path);
+            repo.git(&["init"]);
+            repo.git(&["config", "user.name", "Sinos Test"]);
+            repo.git(&["config", "user.email", "sinos-test@example.invalid"]);
+            repo
+        }
+        fn git(&self, args: &[&str]) { git_output(self.0.to_str().unwrap(), args).unwrap(); }
+    }
+    impl Drop for Repo {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn poll_counts_agree_for_staged_renames_without_running_external_diff() {
+        let repo = Repo::new();
+        std::fs::write(repo.0.join("old.txt"), "one\ntwo\n").unwrap();
+        repo.git(&["add", "."]);
+        repo.git(&["-c", "commit.gpgsign=false", "commit", "-m", "baseline"]);
+        repo.git(&["mv", "old.txt", "new.txt"]);
+        repo.git(&["config", "diff.external", "sinos-nonexistent-diff-command"]);
+        let GitChanges::Ok { uncommitted, .. } = git_changes_blocking(repo.0.to_string_lossy().into_owned()) else {
+            panic!("expected Git working tree");
+        };
+        let old = uncommitted.iter().find(|e| e.rel == "old.txt").unwrap();
+        let new = uncommitted.iter().find(|e| e.rel == "new.txt").unwrap();
+        assert_eq!((&old.status[..], old.added, old.deleted), ("D", 0, 2));
+        assert_eq!((&new.status[..], new.added, new.deleted), ("A", 2, 0));
+    }
+
+    #[test]
+    fn large_untracked_poll_preserves_every_path() {
+        let repo = Repo::new();
+        for i in 0..2000 {
+            std::fs::write(repo.0.join(format!("file-{i}.txt")), "content\n").unwrap();
+        }
+        let GitChanges::Ok { untracked, .. } = git_changes_blocking(repo.0.to_string_lossy().into_owned()) else {
+            panic!("expected Git working tree");
+        };
+        assert_eq!(untracked.len(), 2000);
+        assert!(untracked.iter().any(|e| e.rel == "file-1999.txt"));
+    }
 }
 
 /// Most-recent-commit summary (HEAD) for the "已提交" group. `None` on a repo
@@ -331,7 +385,7 @@ fn git_changes_blocking(folder: String) -> GitChanges {
     // isn't mis-parsed as its own entry.
     let porcelain = git_output(
         &repo_root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"],
     )
     .unwrap_or_default();
     let fields: Vec<&str> = porcelain.split('\0').collect();
@@ -455,7 +509,11 @@ pub fn git_init(folder: String) -> Result<(), String> {
 /// Called at app launch + on tab switch (NOT poll-gated — one rev-parse).
 /// Scopes the "修改记录" session-commits list to commits made this window.
 #[tauri::command]
-pub fn git_capture_baseline(folder: String) {
+pub async fn git_capture_baseline(folder: String) {
+    let _ = tauri::async_runtime::spawn_blocking(move || capture_baseline_blocking(folder)).await;
+}
+
+fn capture_baseline_blocking(folder: String) {
     let repo_root = match git_output(&folder, &["rev-parse", "--show-toplevel"]) {
         Ok(s) => s.trim().to_string(),
         Err(_) => return, // not a repo — nothing to baseline

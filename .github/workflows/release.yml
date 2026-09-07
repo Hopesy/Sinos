@@ -49,6 +49,9 @@ jobs:
           cd src-ui
           npm run build
 
+      - name: Frontend regression tests
+        run: npm test --prefix src-ui
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 

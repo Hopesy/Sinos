@@ -201,4 +201,8 @@ Borra esta nota cuando quieras y empieza tu primera tarea.`,
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Seguimiento',
+  'changes.tracking_disable': 'Desactivar el seguimiento de cambios de Git para este proyecto',
+  'changes.tracking_enable': 'Activar el seguimiento de cambios',
+  'changes.tracking_disabled': 'El seguimiento de cambios de Git está desactivado para este proyecto.',
 } as const satisfies Record<I18nKey, string>;

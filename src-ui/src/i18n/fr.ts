@@ -201,4 +201,8 @@ Supprimez cette note quand vous voulez et commencez votre première tâche.`,
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Suivi',
+  'changes.tracking_disable': 'Désactiver le suivi des changements Git pour ce projet',
+  'changes.tracking_enable': 'Activer le suivi des changements',
+  'changes.tracking_disabled': 'Le suivi des changements Git est désactivé pour ce projet.',
 } as const satisfies Record<I18nKey, string>;

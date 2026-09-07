@@ -839,7 +839,13 @@ struct DirEntry {
 /// List the immediate children of a directory.
 /// Returns files and subdirectories sorted: directories first, then files, both alphabetical.
 #[tauri::command]
-fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_directory_blocking(path))
+        .await
+        .map_err(|e| format!("FS_DIRECTORY_UNAVAILABLE: {}", e))?
+}
+
+fn list_directory_blocking(path: String) -> Result<Vec<DirEntry>, String> {
     let dir = std::path::Path::new(&path);
     if !dir.is_dir() {
         return Err(format!("FS_DIRECTORY_UNAVAILABLE: not a directory: {}", path));
@@ -854,8 +860,13 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
         let entry = entry.map_err(|e| format!("FS_ENTRY_UNAVAILABLE: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
-        let metadata = std::fs::symlink_metadata(entry.path())
-            .map_err(|e| format!("FS_ENTRY_UNAVAILABLE: {}", e))?;
+        let metadata = match std::fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            // Editors/build tools can remove an entry between read_dir and stat.
+            // This must not fail the entire directory and erase the tree.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("FS_ENTRY_UNAVAILABLE: {}", error)),
+        };
 
         entries.push(DirEntry {
             name,

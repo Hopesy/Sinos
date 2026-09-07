@@ -206,4 +206,8 @@ Xóa tờ ghi chú này khi bạn sẵn sàng và bắt đầu tác vụ đầu 
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': 'Đang theo dõi',
+  'changes.tracking_disable': 'Tắt theo dõi thay đổi Git cho dự án này',
+  'changes.tracking_enable': 'Bật theo dõi thay đổi',
+  'changes.tracking_disabled': 'Theo dõi thay đổi Git đã tắt cho dự án này.',
 } as const satisfies Record<I18nKey, string>;

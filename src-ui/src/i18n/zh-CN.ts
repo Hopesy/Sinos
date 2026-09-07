@@ -274,4 +274,8 @@ export const zhCN = {
   'gambit.pause': '暂停当前任务',
   'gambit.resume': '恢复当前任务',
   'gambit.send': '发送',
+  'changes.tracking': '跟踪中',
+  'changes.tracking_disable': '关闭此项目的 Git 修改记录跟踪',
+  'changes.tracking_enable': '开启修改记录跟踪',
+  'changes.tracking_disabled': '此项目已关闭 Git 修改记录跟踪。',
 } as const satisfies Record<I18nKey, string>;

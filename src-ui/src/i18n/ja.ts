@@ -204,4 +204,8 @@ export const ja = {
   'gambit.pause': 'Pause current task',
   'gambit.resume': 'Resume current task',
   'gambit.send': 'Send',
+  'changes.tracking': '追跡中',
+  'changes.tracking_disable': 'このプロジェクトの Git 変更追跡を無効にする',
+  'changes.tracking_enable': '変更追跡を有効にする',
+  'changes.tracking_disabled': 'このプロジェクトでは Git 変更追跡が無効です。',
 } as const satisfies Record<I18nKey, string>;

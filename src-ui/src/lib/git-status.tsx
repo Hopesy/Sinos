@@ -16,7 +16,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useAppState, resolveDiffContext } from '../store/app-state';
+import { useAppState, normalizeProjectPath, resolveDiffContext } from '../store/app-state';
 import type { ToolType } from '../store/app-state';
 import { commands, type GitChanges, type GitFileEntry } from '../tauri';
 
@@ -52,6 +52,10 @@ const CWD_AGNOSTIC_TOOLS: ReadonlySet<ToolType> = new Set<ToolType>([
 
 // 800ms (was 300): coalesces an agent's file-edit burst into one git query.
 const REFRESH_DEBOUNCE_MS = 800;
+const MIN_POLL_REST_MS = 3_000;
+// Survives effect teardown/tab switches: an obsolete slow scan must finish
+// before another starts. Cancelled queued requests do not spawn Git at all.
+let gitQueue: Promise<unknown> = Promise.resolve();
 
 function deriveFileStatsMap(changes: GitChanges | null): FileStatsMap {
   const m: FileStatsMap = new Map();
@@ -89,7 +93,7 @@ function changesSignature(c: GitChanges | null): string {
   if (!c || c.state !== 'ok') return c?.state ?? 'null';
   const f = (e: GitFileEntry) => `${e.rel}\x01${e.status}\x01${e.added}\x01${e.deleted}`;
   const g = (m: { hash: string }) => m.hash;
-  return [c.branch, c.uncommitted.map(f).join(','), c.untracked.map(f).join(','), c.session_commits.map(g).join(',')].join('\x02');
+  return [c.repo_root, c.branch, c.uncommitted.map(f).join(','), c.untracked.map(f).join(','), c.session_commits.map(g).join(',')].join('\x02');
 }
 
 export function GitStatusProvider({ children }: { children: ReactNode }) {
@@ -100,6 +104,7 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
   const activeSessionId = diffCtx?.sessionId ?? null;
   const activeTool = diffCtx?.tool ?? null;
   const cwdAgnostic = !!(activeTool && CWD_AGNOSTIC_TOOLS.has(activeTool));
+  const gitTrackingEnabled = !!activeFolderPath && !state.gitTrackingDisabledPaths.includes(normalizeProjectPath(activeFolderPath));
 
   const [tabChanges, setTabChanges] = useState<Map<string, GitChanges>>(new Map());
 
@@ -116,14 +121,13 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
   // switch regardless of whether the 修改记录 tab is open. Scopes the
   // session-commits list to commits made this window (reset on app close).
   useEffect(() => {
-    if (!activeFolderPath) return;
+    if (!activeFolderPath || !gitTrackingEnabled) return;
     commands.gitCaptureBaseline(activeFolderPath).catch(() => {});
-  }, [activeFolderPath]);
+  }, [activeFolderPath, gitTrackingEnabled]);
 
-  const debounceRef = useRef<number | null>(null);
   const lastSigRef = useRef<string>('');
   useEffect(() => {
-    if (!pollEnabled || !activeFolderPath || !activeSessionId || !activeTool || cwdAgnostic) return;
+    if (!pollEnabled || !gitTrackingEnabled || !activeFolderPath || !activeSessionId || !activeTool || cwdAgnostic) return;
     const folder = activeFolderPath;
     const sid = activeSessionId;
 
@@ -136,11 +140,23 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
     // fires when it returns (coalesce).
     let inFlight = false;
     let pending = false;
+    let cancelled = false;
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    let nextAllowed = 0;
+    let watchedRoot = normalizeProjectPath(folder);
     const fetchChanges = () => {
+      if (cancelled) return;
       if (inFlight) { pending = true; return; }
       inFlight = true;
-      commands.gitChanges(folder).then(changes => {
-        if (cancelled) return;
+      let started = Date.now();
+      const request = gitQueue.then(() => {
+        started = Date.now();
+        return cancelled ? null : commands.gitChanges(folder);
+      });
+      gitQueue = request.catch(() => {});
+      request.then(changes => {
+        if (cancelled || !changes) return;
+        if (changes.state === 'ok') watchedRoot = normalizeProjectPath(changes.repo_root);
         const sig = sid + '\x00' + changesSignature(changes);
         if (sig === lastSigRef.current) return; // unchanged → skip the re-render
         lastSigRef.current = sig;
@@ -151,12 +167,18 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
         });
       }).catch(() => {}).finally(() => {
         inFlight = false;
+        nextAllowed = Date.now() + Math.max(MIN_POLL_REST_MS, Math.min(30_000, (Date.now() - started) * 2));
         if (pending && !cancelled) { pending = false; schedule(); }
       });
     };
     const schedule = () => {
-      if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
-      debounceRef.current = window.setTimeout(fetchChanges, REFRESH_DEBOUNCE_MS);
+      if (cancelled) return;
+      if (inFlight) { pending = true; return; }
+      if (debounce !== undefined) return; // throttle, never starve under continuous writes
+      debounce = setTimeout(() => {
+        debounce = undefined;
+        fetchChanges();
+      }, Math.max(REFRESH_DEBOUNCE_MS, nextAllowed - Date.now()));
     };
 
     fetchChanges(); // immediate fetch when the panel opens (no debounce lag)
@@ -171,27 +193,27 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
     const pollInterval = window.setInterval(schedule, 8_000);
 
     let unlistenTauri: (() => void) | null = null;
-    let cancelled = false;
+    const onRefresh = (dir?: string) => {
+      const path = dir && normalizeProjectPath(dir);
+      if (!path || path === watchedRoot || path.startsWith(watchedRoot + '/')) schedule();
+    };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const fn = await listen('fs-refresh', schedule);
+      const fn = await listen<{ dirPath?: string }>('fs-refresh', e => onRefresh(e.payload.dirPath));
       if (cancelled) fn();
       else unlistenTauri = fn;
     })().catch(() => {});
 
-    const onWindowRefresh = () => schedule();
+    const onWindowRefresh = (e: Event) => onRefresh((e as CustomEvent<{ dirPath?: string }>).detail?.dirPath);
     window.addEventListener('fs-refresh', onWindowRefresh);
     return () => {
       cancelled = true;
       window.clearInterval(pollInterval);
       window.removeEventListener('fs-refresh', onWindowRefresh);
       unlistenTauri?.();
-      if (debounceRef.current != null) {
-        window.clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
+      clearTimeout(debounce);
     };
-  }, [pollEnabled, activeFolderPath, activeSessionId, activeTool, cwdAgnostic]);
+  }, [pollEnabled, gitTrackingEnabled, activeFolderPath, activeSessionId, activeTool, cwdAgnostic]);
 
   // Drop entries for sessions no longer alive so the Map can't grow unbounded.
   useEffect(() => {
@@ -210,7 +232,7 @@ export function GitStatusProvider({ children }: { children: ReactNode }) {
     });
   }, [state.terminals]);
 
-  const activeChanges: GitChanges | null = activeSessionId
+  const activeChanges: GitChanges | null = gitTrackingEnabled && activeSessionId
     ? tabChanges.get(activeSessionId) ?? null
     : null;
   const fileStats = useMemo(() => deriveFileStatsMap(activeChanges), [activeChanges]);

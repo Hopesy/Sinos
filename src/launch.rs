@@ -118,13 +118,14 @@ mod tests {
     #[test]
     fn parses_equals_form_and_validates_cwd() {
         let id = first_tool_id();
+        let temp = std::env::temp_dir().to_string_lossy().into_owned();
         let ok = parse_launch_args(&argv(&[
             "sinos-cli",
             "launch",
             &format!("--tool={}", id),
-            "--cwd=/tmp",
+            &format!("--cwd={}", temp),
         ]));
-        assert_eq!(ok.as_ref().and_then(|r| r.cwd.as_deref()), Some("/tmp"));
+        assert_eq!(ok.as_ref().and_then(|r| r.cwd.as_deref()), Some(temp.as_str()));
 
         let bad = parse_launch_args(&argv(&[
             "sinos-cli",

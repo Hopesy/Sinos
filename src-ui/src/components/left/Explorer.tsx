@@ -1,3 +1,4 @@
+import { useDirectory } from '../../lib/use-directory';
 // Explorer.tsx — Left panel: file tree synced from terminal CWD
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -381,9 +382,7 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu, onError
   const { state: { iconTheme } } = useAppState();
   const t = useT();
   const [open, setOpen] = useState(false);
-  const [children, setChildren] = useState<DirEntryInfo[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  const { entries: children, error: loadError, reload: loadChildren } = useDirectory(dirPath, open, onError);
 
   // True when any descendant file has uncommitted changes. Used to tint the
   // folder name as a "trail" leading to the change — folded folders still
@@ -398,53 +397,12 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu, onError
     [dirtyDirs, dirPath],
   );
 
-  const loadChildren = useCallback(async () => {
-    setLoading(true);
-    setLoadError(false);
-    try {
-      const entries = await commands.listDirectory(dirPath);
-      setChildren(entries);
-    } catch (e) {
-      console.warn('[Explorer] list_directory failed:', e);
-      setChildren([]);
-      setLoadError(true);
-      onError(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [dirPath, onError]);
-
-  const toggle = () => {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (children === null && !loading) void loadChildren();
-  };
+  const toggle = () => setOpen(value => !value);
 
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState(name);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const cancelRenameRef = useRef(false);
-
-  // Listen for fs-refresh events targeting our own directory
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<{ dirPath: string }>;
-      const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
-      if (norm(ev.detail.dirPath) === norm(dirPath)) {
-        if (open) {
-          void loadChildren();
-        } else {
-          setChildren(null);
-          setLoadError(false);
-        }
-      }
-    };
-    window.addEventListener('fs-refresh', handler);
-    return () => window.removeEventListener('fs-refresh', handler);
-  }, [dirPath, loadChildren, open]);
 
   useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
 
@@ -531,9 +489,9 @@ function BrowserDirNode({ name, dirPath, workspaceRoot, icon, onCtxMenu, onError
       </div>
       {open && (
         <div className="tree-children">
-          {loading ? (
+          {children === null && !loadError ? (
             <div className="tree-state" role="status">{t('explorer.loading')}</div>
-          ) : loadError ? (
+          ) : loadError && children === null ? (
             <div className="tree-state tree-state-error">
               <span>{t('explorer.directory_error')}</span>
               <button type="button" onClick={(event) => { event.stopPropagation(); void loadChildren(); setOpen(true); }}>
@@ -709,59 +667,7 @@ export function Explorer() {
   // Workspace tree: read one directory level at a time from the OS — same
   // semantics as Windows Explorer / Finder / GNOME Files. No filtering,
   // no recursion, no MAX_FILES cap. Subdirs lazy-load via BrowserDirNode.
-  const [rootEntries, setRootEntries] = useState<DirEntryInfo[] | null>(null);
-  const [rootLoading, setRootLoading] = useState(false);
-  const [rootError, setRootError] = useState(false);
-  const rootLoadGenerationRef = useRef(0);
-  const reloadRoot = useCallback(async () => {
-    if (!folderPath) return;
-    const generation = ++rootLoadGenerationRef.current;
-    setRootLoading(true);
-    setRootError(false);
-    try {
-      const entries = await commands.listDirectory(folderPath);
-      if (generation === rootLoadGenerationRef.current) setRootEntries(entries);
-    } catch (error) {
-      if (generation === rootLoadGenerationRef.current) {
-        setRootEntries([]);
-        setRootError(true);
-        reportError(error);
-      }
-    } finally {
-      if (generation === rootLoadGenerationRef.current) setRootLoading(false);
-    }
-  }, [folderPath, reportError]);
-
-  useEffect(() => {
-    if (!folderPath) {
-      rootLoadGenerationRef.current += 1;
-      setRootEntries(null);
-      setRootError(false);
-      setRootLoading(false);
-      return;
-    }
-    void reloadRoot();
-  }, [folderPath, reloadRoot]);
-
-  // Snapshot lifecycle and the +N/-M map are owned by FileStatsProvider at
-  // App level (lib/file-stats.tsx) so the right-side ChangesBoard can read
-  // the same data when Explorer is unmounted. Reload root level when
-  // fs-refresh targets the workspace root itself; subdirectory refreshes
-  // are handled inside each BrowserDirNode.
-  useEffect(() => {
-    if (!folderPath) return;
-    const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
-    const target = norm(folderPath);
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<{ dirPath: string }>;
-      const dir = norm(ev.detail.dirPath);
-      if (dir === target) {
-        void reloadRoot();
-      }
-    };
-    window.addEventListener('fs-refresh', handler);
-    return () => window.removeEventListener('fs-refresh', handler);
-  }, [folderPath, reloadRoot]);
+  const { entries: rootEntries, error: rootError, reload: reloadRoot } = useDirectory(folderPath, true, reportError);
 
   // Update check
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -1026,7 +932,7 @@ export function Explorer() {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
-        ) : rootEntries === null || rootLoading ? (
+        ) : rootEntries === null && !rootError ? (
           <ScrollPanel>
             <div className="file-tree-container" style={{ pointerEvents: 'none' }} role="status" aria-label={t('explorer.loading')}>
               {Array.from({ length: 12 }).map((_, i) => (
@@ -1037,7 +943,7 @@ export function Explorer() {
               ))}
             </div>
           </ScrollPanel>
-        ) : rootError ? (
+        ) : rootError && rootEntries === null ? (
           <div className="explorer-state explorer-state-error" role="alert">
             <div>{t('explorer.root_error')}</div>
             <button type="button" onClick={() => void reloadRoot()}>{t('editor.retry')}</button>

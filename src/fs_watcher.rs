@@ -214,6 +214,11 @@ impl FsWatcher {
                     // emit once per dir even if 50 files changed inside.
                     let mut dirs: HashSet<String> = HashSet::new();
                     for event in events {
+                        // Reads performed by our own directory/Git scans must
+                        // never trigger another scan (notably on Linux).
+                        if matches!(event.event.kind, notify_debouncer_full::notify::EventKind::Access(_)) {
+                            continue;
+                        }
                         for path in &event.event.paths {
                             match classify_git_event(path) {
                                 // git's own internal churn (index.lock, logs,
