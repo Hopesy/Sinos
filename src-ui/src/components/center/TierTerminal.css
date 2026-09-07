@@ -348,3 +348,9 @@
 }
 
 
+
+/* Override the global cursor reset only while xterm is hovering a link. */
+.tier-terminal .xterm.xterm-cursor-pointer,
+.tier-terminal .xterm.xterm-cursor-pointer * {
+    cursor: pointer !important;
+}

@@ -9,7 +9,7 @@
 // etc.) don't cascade into this component.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
-import { Terminal, type ILink } from '@xterm/xterm';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
@@ -19,6 +19,7 @@ import { subscribeTerminalEvents } from '../../lib/pty-event-bus';
 import { rig } from '../../lib/latency-rig';
 import * as outputScheduler from '../../lib/terminal-output-scheduler';
 import { registerTerminalFocus } from '../../lib/focus-registry';
+import { installTerminalLinks } from '../../lib/terminal-links';
 import { registerTabActions, getTabActions } from '../../lib/tab-actions';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
 import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
@@ -1057,62 +1058,7 @@ function TierTerminalImpl({
       }
     });
 
-    // Clickable links: URLs only (http/https/file). Bare file/dir paths are
-    // intentionally NOT matched — unquoted paths with spaces (e.g. Windows
-    // "Coffee CLI_3.0.3...exe") can't be reliably bounded by a regex (would
-    // truncate → open a missing path → OS error dialog, or over-match → open
-    // the wrong file). Users select+copy paths instead. URLs are unambiguous
-    // — clear scheme prefix, no spaces.
-    // Underlines matched tokens on hover; click opens via Tauri's open_url
-    // command (OS default browser).
-    // URLs are ASCII per RFC 3986; the -￿ guard stops the match at
-    // any non-ASCII char so trailing CJK punctuation/text (e.g. "https://x，看到…")
-    // doesn't get swallowed into the link.
-    const LINK_RE = /(https?:\/\/[^\s<>()"'-￿]+|file:\/\/\/[^\s<>()"'-￿]+)/g;
-    term.registerLinkProvider({
-      provideLinks(bufferLineNumber, callback) {
-        const line = term.buffer.active.getLine(bufferLineNumber - 1);
-        if (!line) { callback([]); return; }
-        // Build the line text alongside a JS-index → terminal-column map.
-        // xterm's range.x is in terminal columns, but a CJK / emoji char is
-        // one JS code-unit-ish but two columns wide. Using m.index directly
-        // makes the hover underline drift left by one column per wide char
-        // sitting before the URL on the same line. Cell iteration keeps the
-        // mapping accurate regardless of wide-char prefix.
-        let text = '';
-        const colByStrIdx: number[] = [];
-        const cellCount = line.length;
-        for (let col = 0; col < cellCount; col++) {
-          const cell = line.getCell(col);
-          if (!cell) continue;
-          const chars = cell.getChars();
-          if (!chars) continue; // empty cell or the right half of a wide char
-          for (let i = 0; i < chars.length; i++) colByStrIdx.push(col);
-          text += chars;
-        }
-        const links: ILink[] = [];
-        let m;
-        LINK_RE.lastIndex = 0;
-        while ((m = LINK_RE.exec(text)) !== null) {
-          const raw = m[0].replace(/[),.]+$/, '');
-          const firstCol = colByStrIdx[m.index] ?? m.index;
-          // URL bodies are ASCII (width-1), so end column = first + length.
-          const startCol = firstCol + 1;
-          const endCol = firstCol + raw.length;
-          links.push({
-            range: {
-              start: { x: startCol, y: bufferLineNumber },
-              end: { x: endCol, y: bufferLineNumber },
-            },
-            text: raw,
-            activate: () => {
-              commands.openUrl(raw).catch(() => {});
-            },
-          });
-        }
-        callback(links);
-      },
-    });
+    installTerminalLinks(term, commands.openUrl);
 
     xtermRef.current = term;
     fitRef.current   = fit;
