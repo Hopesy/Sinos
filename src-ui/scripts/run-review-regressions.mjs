@@ -25,6 +25,90 @@ const evaluate = (code, context = {}) => vm.runInNewContext(ts.transpileModule(c
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText, context);
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+// A mode switch must hide the conversation, not remove its React subtree.
+// Otherwise both the reading position and measured virtual row heights reset.
+{
+  const tree = source('components/center/CenterPanel.tsx');
+  let surface;
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attribute =>
+      ts.isJsxAttribute(attribute) && attribute.name.getText(tree) === 'className'
+      && attribute.initializer?.getText(tree) === '"conversation-mode-surface"')) {
+      surface = node;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(tree);
+  assert.ok(surface);
+  let branch = surface.parent;
+  while (ts.isParenthesizedExpression(branch)) branch = branch.parent;
+  assert.ok(ts.isBinaryExpression(branch));
+  const condition = branch.left.getText(tree);
+  const tab = { tool: 'codex', viewMode: 'chat', chatPending: null };
+  const mounted = () => evaluate(condition, { t: tab, supportsConversationTool: () => true });
+  assert.ok(mounted());
+  tab.viewMode = 'terminal';
+  assert.ok(mounted(), 'switching to an idle terminal must retain the conversation subtree');
+
+  let opened;
+  const render = vm.runInNewContext(ts.transpileModule(
+    `${declaration('components/center/ConversationView.tsx', 'ConversationViewImpl')}; ConversationViewImpl`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } },
+  ).outputText, {
+    useState(initial) {
+      opened ??= initial;
+      return [opened, value => { opened = value; }];
+    },
+    React: { createElement: (type, props) => ({ type, props }) },
+    ConversationContent: 'content',
+  });
+  assert.equal(render({ isVisible: false }), null, 'unused terminal tabs do not mount chat content');
+  const content = render({ isVisible: true });
+  assert.ok(content);
+  for (let i = 0; i < 3; i++) {
+    assert.equal(render({ isVisible: false }).type, content.type, 'keep the same child type while hidden');
+    assert.equal(render({ isVisible: true }).type, content.type);
+  }
+  opened = undefined;
+  assert.equal(render({ isVisible: false }), null, 'a fresh session starts unmounted');
+  assert.ok(render({ isVisible: false, pending: { text: 'test' } }), 'pending chat still mounts in terminal mode');
+
+  let activity;
+  function findActivity(node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(tree) === 'isActive') activity = node.initializer.expression;
+    ts.forEachChild(node, findActivity);
+  }
+  findActivity(surface);
+  tab.id = 'test';
+  const active = () => evaluate(activity.getText(tree), { t: tab, activeTerminalId: 'test', diffTabActive: false });
+  assert.equal(active(), false, 'hidden idle chat does not poll');
+  tab.chatPending = { text: 'test' };
+  assert.equal(active(), true, 'pending chat can still resolve while hidden');
+  tab.chatPending = null;
+  tab.viewMode = 'chat';
+  assert.equal(active(), true);
+  console.log('OK: conversation mode retention, lazy mount, session reset, and hidden polling');
+
+  const fillViewport = effect('components/center/ConversationView.tsx', 'element.scrollHeight <= element.clientHeight + 80');
+  let loads = 0;
+  const scroll = { clientHeight: 0, scrollHeight: 0 };
+  const checkViewport = () => evaluate(`(${fillViewport})()`, {
+    source: {}, hasOlderRef: { current: true }, scrollRef: { current: scroll },
+    loadOlderRef: { current: () => { loads++; } },
+    window: { requestAnimationFrame(callback) { callback(); return 1; }, cancelAnimationFrame() {} },
+  });
+  checkViewport();
+  assert.equal(loads, 0, 'a hidden conversation must not drain older history');
+  scroll.clientHeight = 600;
+  scroll.scrollHeight = 400;
+  checkViewport();
+  assert.equal(loads, 1, 'a revealed short conversation still fills its viewport');
+  scroll.scrollHeight = 1000;
+  checkViewport();
+  assert.equal(loads, 1, 'a full viewport needs no additional history');
+}
+
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });

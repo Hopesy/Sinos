@@ -1505,7 +1505,7 @@ export function CenterPanel() {
                     />
                   </ErrorBoundary>
                 </div>
-                {supportsConversationTool(t.tool) && (t.viewMode === 'chat' || t.chatPending) && (
+                {supportsConversationTool(t.tool) && (
                   <div
                     className="conversation-mode-surface"
                     style={{ display: t.viewMode === 'chat' ? 'flex' : 'none' }}
@@ -1520,7 +1520,7 @@ export function CenterPanel() {
                         startedAt={t.startedAt}
                         pending={t.chatPending}
                         agentStatus={t.agentStatus}
-                        isActive={t.id === activeTerminalId && !diffTabActive}
+                        isActive={t.id === activeTerminalId && !diffTabActive && (t.viewMode === 'chat' || Boolean(t.chatPending))}
                         isVisible={t.viewMode === 'chat'}
                         onPendingResolved={() => dispatch({ type: 'SET_CHAT_PENDING', id: t.id })}
                         onPasteToDraft={(text) => dispatch({ type: 'APPEND_GAMBIT_DRAFT', id: t.id, text })}

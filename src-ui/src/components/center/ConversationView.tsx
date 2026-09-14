@@ -609,7 +609,16 @@ const ConversationNavigation = memo(function ConversationNavigation({
   );
 });
 
-function ConversationViewImpl({
+function ConversationViewImpl(props: ConversationViewProps) {
+  const requested = props.isVisible || Boolean(props.pending);
+  const [opened, setOpened] = useState(requested);
+  if (requested && !opened) setOpened(true);
+  // Mount on first use, then retain the scroll owner and virtual row measurements
+  // when switching to terminal mode. The session key still resets both on restart.
+  return requested || opened ? <ConversationContent {...props} /> : null;
+}
+
+function ConversationContent({
   sessionId, tool, folderPath, resumeToken, startedAt, pending, agentStatus, isActive, isVisible,
   onPendingResolved, onPasteToDraft, hasBg, bgUrl, bgType, competingBindings = [],
 }: ConversationViewProps) {
@@ -1026,6 +1035,7 @@ function ConversationViewImpl({
     const element = scrollRef.current;
     if (!element) return;
     const onScroll = (event: Event) => {
+      if (element.clientHeight === 0) return;
       pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
       if (event.isTrusted && element.scrollTop < 520) loadOlderRef.current();
     };
@@ -1040,13 +1050,13 @@ function ConversationViewImpl({
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const element = scrollRef.current;
-      if (source && hasOlderRef.current && element &&
+      if (source && hasOlderRef.current && element && element.clientHeight > 0 &&
           element.scrollHeight <= element.clientHeight + 80) {
         loadOlderRef.current();
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, source]);
+  }, [messages.length, source, isActive, isVisible]);
 
   useEffect(() => {
     const element = scrollRef.current;
