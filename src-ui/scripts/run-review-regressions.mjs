@@ -189,7 +189,7 @@ const diffCallbacks = new Map();
 const diffEffect = effect('components/right/DiffPanel.tsx', 'const load = async');
 const cleanupDiff = evaluate(`(${diffEffect})()`, {
   path: '/repo/a.txt', repoRoot: '/repo', rel: 'a.txt', kind: 'untracked', commitHash: undefined,
-  dataTheme: 'dark', badgeRef: { current: { added: 1, deleted: 0 } },
+  dataMode: 'dark', badgeRef: { current: { added: 1, deleted: 0 } },
   DIFF_MAX_CHANGED_LINES: 5000, DIFF_MAX_BYTES: 1_000_000,
   setResult: value => { output = value; },
   commands: { readTextFile: async () => {
