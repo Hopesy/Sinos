@@ -32,12 +32,12 @@ export const THEME_COLORS: {
   { code: 'glacier',    labelKey: 'theme.color.glacier',    swatch: '#20252d', ring: '#adc3dd', daySwatch: '#f0f2f5', dayRing: '#34567f' },
   { code: 'lavender',   labelKey: 'theme.color.lavender',   swatch: '#25212b', ring: '#c7b3d4', daySwatch: '#f3f1f4', dayRing: '#5f3d75' },
 
-  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#858585', daySwatch: '#dde0e3', dayRing: '#4c5561' },
-  { code: 'slate',      labelKey: 'theme.color.slate',      swatch: '#130f11', ring: '#ad7480', daySwatch: '#e9e2e4', dayRing: '#6b3843' },
-  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#15110e', ring: '#a97d5c', daySwatch: '#eae5e1', dayRing: '#724d31' },
-  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#101812', ring: '#6d9d82', daySwatch: '#e3e8e5', dayRing: '#3d664f' },
-  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#101620', ring: '#6789b6', daySwatch: '#e1e5ea', dayRing: '#2f4d74' },
-  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#15101b', ring: '#9a78ae', daySwatch: '#e6e2e9', dayRing: '#583a6a' },
+  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#858585', daySwatch: '#d9dde2', dayRing: '#3c4a5d' },
+  { code: 'slate',      labelKey: 'theme.color.slate',      swatch: '#130f11', ring: '#ad7480', daySwatch: '#e5d7da', dayRing: '#65343f' },
+  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#15110e', ring: '#a97d5c', daySwatch: '#e6ddd5', dayRing: '#6b482e' },
+  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#101812', ring: '#6d9d82', daySwatch: '#d8e3dd', dayRing: '#39604a' },
+  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#101620', ring: '#6789b6', daySwatch: '#d5dde7', dayRing: '#2c486d' },
+  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#15101b', ring: '#9a78ae', daySwatch: '#e0d8e4', dayRing: '#523663' },
 ];
 
 // ─── Theme mode (light / night / follow the OS) ──────────────────────────────

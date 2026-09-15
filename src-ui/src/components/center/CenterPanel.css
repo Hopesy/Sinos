@@ -1372,7 +1372,11 @@
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  background: var(--border, #3a3a3a);
+  /* Track fill, not a hairline. In the shapes that draw chrome from --border
+     (Panel), a theme-accent border colour would fill this pill too and make the
+     OFF state read as ON, so the deep-row light themes hand it a neutral track
+     via --switch-track; every other theme keeps the --border fill. */
+  background: var(--switch-track, var(--border, #3a3a3a));
   position: relative;
   transition: background-color 0.18s ease;
   margin-left: 8px;

@@ -918,158 +918,160 @@ textarea,
    Cool porcelain, a clear step below 明亮's warm cream — as the two neutrals
    of this column they were reading as two whites. */
 [data-mode="light"][data-theme="obsidian"] {
-    --bg-app: #dde0e3;
-    --bg-panel: #e9eaec;
-    --bg-card: #f3f3f4;
-    --bg-input: #d1d6db;
-    --bg-input-focus: #c8ced5;
-    --bg-hover: rgba(76, 85, 97, 0.07);
-    --bg-active: rgba(76, 85, 97, 0.11);
+    --bg-app: #d9dde2;
+    --bg-panel: #eaecee;
+    --bg-card: #f4f5f6;
+    --bg-input: #ccd1d9;
+    --bg-input-focus: #c2cad3;
+    --bg-hover: rgba(60, 74, 93, 0.07);
+    --bg-active: rgba(60, 74, 93, 0.11);
 
-    --border: rgba(47, 53, 60, 0.14);
-    --border-input: rgba(47, 53, 60, 0.2);
-    --border-focus: rgba(76, 85, 97, 0.6);
+    --border: rgba(43, 46, 49, 0.14);
+    --border-input: rgba(43, 46, 49, 0.2);
+    --border-focus: rgba(60, 74, 93, 0.6);
 
-    --text-1: #2f353c;
-    --text-2: #464e58;
-    --text-3: #57606b;
+    --text-1: #2b2e31;
+    --text-2: #44474b;
+    --text-3: #56595d;
 
-    --accent: #4c5561;
-    --accent-hover: #414953;
-    --accent-active: #383f47;
-    --accent-bg: rgba(76, 85, 97, 0.12);
+    --accent: #3c4a5d;
+    --accent-hover: #323e4d;
+    --accent-active: #2a3441;
+    --accent-bg: rgba(60, 74, 93, 0.12);
 
-    --bg-terminal: #dde0e3; /* Match bg-app */
+    --bg-terminal: #d9dde2; /* Match bg-app */
 }
 
-/* ─── 玫瑰 — day ──── */
+/* ─── 玫瑰 — day, deep ────
+   Every deep row keeps its hue but sits a real step below the soft row: in the
+   swatch grid the two rows were reading as the same colour, one hair lighter. */
 [data-mode="light"][data-theme="slate"] {
-    --bg-app: #e9e2e4;
-    --bg-panel: #f3eff0;
-    --bg-card: #f8f7f7;
-    --bg-input: #e1d5d8;
-    --bg-input-focus: #dccdd1;
-    --bg-hover: rgba(107, 56, 67, 0.07);
-    --bg-active: rgba(107, 56, 67, 0.11);
+    --bg-app: #e5d7da;
+    --bg-panel: #efe9ea;
+    --bg-card: #f6f3f4;
+    --bg-input: #dcc8cd;
+    --bg-input-focus: #d7bec4;
+    --bg-hover: rgba(101, 52, 63, 0.07);
+    --bg-active: rgba(101, 52, 63, 0.11);
 
-    --border: rgba(55, 47, 49, 0.14);
-    --border-input: rgba(55, 47, 49, 0.2);
-    --border-focus: rgba(107, 56, 67, 0.6);
+    --border: rgba(50, 42, 44, 0.14);
+    --border-input: rgba(50, 42, 44, 0.2);
+    --border-focus: rgba(101, 52, 63, 0.6);
 
-    --text-1: #372f31;
-    --text-2: #52474a;
-    --text-3: #64595b;
+    --text-1: #322a2c;
+    --text-2: #4c4345;
+    --text-3: #5f5456;
 
-    --accent: #6b3843;
-    --accent-hover: #5b2f39;
-    --accent-active: #4d2830;
-    --accent-bg: rgba(107, 56, 67, 0.12);
+    --accent: #65343f;
+    --accent-hover: #542c34;
+    --accent-active: #46252c;
+    --accent-bg: rgba(101, 52, 63, 0.12);
 
-    --bg-terminal: #e9e2e4; /* Match bg-app */
+    --bg-terminal: #e5d7da; /* Match bg-app */
 }
 
-/* ─── 拿铁 — day ──── */
+/* ─── 拿铁 — day, deep ──── */
 [data-mode="light"][data-theme="dark"] {
-    --bg-app: #eae5e1;
-    --bg-panel: #f3f1ef;
-    --bg-card: #f8f7f6;
-    --bg-input: #e3dad4;
-    --bg-input-focus: #dfd4cb;
-    --bg-hover: rgba(114, 77, 49, 0.07);
-    --bg-active: rgba(114, 77, 49, 0.11);
+    --bg-app: #e6ddd5;
+    --bg-panel: #f0ebe8;
+    --bg-card: #f7f5f3;
+    --bg-input: #dfd1c6;
+    --bg-input-focus: #dbc9bb;
+    --bg-hover: rgba(107, 72, 46, 0.07);
+    --bg-active: rgba(107, 72, 46, 0.11);
 
-    --border: rgba(56, 50, 46, 0.14);
-    --border-input: rgba(56, 50, 46, 0.2);
-    --border-focus: rgba(114, 77, 49, 0.6);
+    --border: rgba(51, 45, 41, 0.14);
+    --border-input: rgba(51, 45, 41, 0.2);
+    --border-focus: rgba(107, 72, 46, 0.6);
 
-    --text-1: #38322e;
-    --text-2: #534c46;
-    --text-3: #665d57;
+    --text-1: #332d29;
+    --text-2: #4e4741;
+    --text-3: #605852;
 
-    --accent: #724d31;
-    --accent-hover: #604129;
-    --accent-active: #523823;
-    --accent-bg: rgba(114, 77, 49, 0.12);
+    --accent: #6b482e;
+    --accent-hover: #593c26;
+    --accent-active: #4b3320;
+    --accent-bg: rgba(107, 72, 46, 0.12);
 
-    --bg-terminal: #eae5e1; /* Match bg-app */
+    --bg-terminal: #e6ddd5; /* Match bg-app */
 }
 
-/* ─── 苔藓 — day ──── */
+/* ─── 苔藓 — day, deep ──── */
 [data-mode="light"][data-theme="moss"] {
-    --bg-app: #e3e8e5;
-    --bg-panel: #f0f2f1;
-    --bg-card: #f7f8f7;
-    --bg-input: #d7e0db;
-    --bg-input-focus: #cfdbd4;
-    --bg-hover: rgba(61, 102, 79, 0.07);
-    --bg-active: rgba(61, 102, 79, 0.11);
+    --bg-app: #d8e3dd;
+    --bg-panel: #e9eeec;
+    --bg-card: #f4f6f5;
+    --bg-input: #cadad1;
+    --bg-input-focus: #c1d5c9;
+    --bg-hover: rgba(57, 96, 74, 0.07);
+    --bg-active: rgba(57, 96, 74, 0.11);
 
-    --border: rgba(48, 54, 51, 0.14);
-    --border-input: rgba(48, 54, 51, 0.2);
-    --border-focus: rgba(61, 102, 79, 0.6);
+    --border: rgba(43, 49, 45, 0.14);
+    --border-input: rgba(43, 49, 45, 0.2);
+    --border-focus: rgba(57, 96, 74, 0.6);
 
-    --text-1: #303633;
-    --text-2: #48514c;
-    --text-3: #5a635e;
+    --text-1: #2b312d;
+    --text-2: #444b47;
+    --text-3: #555e59;
 
-    --accent: #3d664f;
-    --accent-hover: #335643;
-    --accent-active: #2c4939;
-    --accent-bg: rgba(61, 102, 79, 0.12);
+    --accent: #39604a;
+    --accent-hover: #30503e;
+    --accent-active: #284334;
+    --accent-bg: rgba(57, 96, 74, 0.12);
 
-    --bg-terminal: #e3e8e5; /* Match bg-app */
+    --bg-terminal: #d8e3dd; /* Match bg-app */
 }
 
-/* ─── 靛蓝 — day ──── */
+/* ─── 靛蓝 — day, deep ──── */
 [data-mode="light"][data-theme="indigo"] {
-    --bg-app: #e1e5ea;
-    --bg-panel: #eff1f3;
-    --bg-card: #f6f7f8;
-    --bg-input: #d3dae3;
-    --bg-input-focus: #cbd4df;
-    --bg-hover: rgba(47, 77, 116, 0.07);
-    --bg-active: rgba(47, 77, 116, 0.11);
+    --bg-app: #d5dde7;
+    --bg-panel: #e8ebf0;
+    --bg-card: #f3f5f7;
+    --bg-input: #c5d1e0;
+    --bg-input-focus: #bac8db;
+    --bg-hover: rgba(44, 72, 109, 0.07);
+    --bg-active: rgba(44, 72, 109, 0.11);
 
-    --border: rgba(45, 50, 57, 0.14);
-    --border-input: rgba(45, 50, 57, 0.2);
-    --border-focus: rgba(47, 77, 116, 0.6);
+    --border: rgba(40, 45, 51, 0.14);
+    --border-input: rgba(40, 45, 51, 0.2);
+    --border-focus: rgba(44, 72, 109, 0.6);
 
-    --text-1: #2d3239;
-    --text-2: #464c53;
-    --text-3: #575d66;
+    --text-1: #282d33;
+    --text-2: #41474e;
+    --text-3: #525860;
 
-    --accent: #2f4d74;
-    --accent-hover: #284162;
-    --accent-active: #223753;
-    --accent-bg: rgba(47, 77, 116, 0.12);
+    --accent: #2c486d;
+    --accent-hover: #253c5b;
+    --accent-active: #1f334c;
+    --accent-bg: rgba(44, 72, 109, 0.12);
 
-    --bg-terminal: #e1e5ea; /* Match bg-app */
+    --bg-terminal: #d5dde7; /* Match bg-app */
 }
 
-/* ─── 葡萄紫 — day ──── */
+/* ─── 葡萄紫 — day, deep ──── */
 [data-mode="light"][data-theme="teal"] {
-    --bg-app: #e6e2e9;
-    --bg-panel: #f1f0f2;
-    --bg-card: #f8f7f8;
-    --bg-input: #ddd6e1;
-    --bg-input-focus: #d7cedc;
-    --bg-hover: rgba(88, 58, 106, 0.07);
-    --bg-active: rgba(88, 58, 106, 0.11);
+    --bg-app: #e0d8e4;
+    --bg-panel: #ede9ef;
+    --bg-card: #f5f4f6;
+    --bg-input: #d5c9dc;
+    --bg-input-focus: #cebfd6;
+    --bg-hover: rgba(82, 54, 99, 0.07);
+    --bg-active: rgba(82, 54, 99, 0.11);
 
-    --border: rgba(52, 47, 55, 0.14);
-    --border-input: rgba(52, 47, 55, 0.2);
-    --border-focus: rgba(88, 58, 106, 0.6);
+    --border: rgba(47, 42, 50, 0.14);
+    --border-input: rgba(47, 42, 50, 0.2);
+    --border-focus: rgba(82, 54, 99, 0.6);
 
-    --text-1: #342f37;
-    --text-2: #4e4851;
-    --text-3: #605964;
+    --text-1: #2f2a32;
+    --text-2: #49434c;
+    --text-3: #5b545e;
 
-    --accent: #583a6a;
-    --accent-hover: #4a3159;
-    --accent-active: #3f294c;
-    --accent-bg: rgba(88, 58, 106, 0.12);
+    --accent: #523663;
+    --accent-hover: #452d52;
+    --accent-active: #3a2645;
+    --accent-bg: rgba(82, 54, 99, 0.12);
 
-    --bg-terminal: #e6e2e9; /* Match bg-app */
+    --bg-terminal: #e0d8e4; /* Match bg-app */
 }
 
 /* ─── 石墨 — neutral, soft · night ──── */
@@ -2302,6 +2304,23 @@ html.is-windows[data-frost="frost"] #root {
 [data-shape="panel"][data-theme="obsidian"] {
     --border: #1f1f1f;
     --border-input: #282828;
+}
+
+/* Panel shape, light mode: the deep half of every pair draws its chrome — card
+   outlines, dividers, input borders — in that palette's own accent, while the
+   soft half keeps Panel's 14%-black line. On a tinted near-white surface that
+   translucent line all but vanishes, so without this both cards of a pair read
+   as the same theme. The accent (not the palette's ink) is what makes the edge
+   read as *this* hue: 玫瑰 #65343f, 靛蓝 #2c486d, 苔藓 #39604a … */
+[data-shape="panel"][data-mode="light"]:is(
+    [data-theme="obsidian"], [data-theme="slate"], [data-theme="dark"],
+    [data-theme="moss"], [data-theme="indigo"], [data-theme="teal"]
+) {
+    --border: var(--accent);
+    --border-input: var(--accent);
+    /* --border doubles as the pin switch's track fill: keep that one neutral
+       so the OFF state doesn't come out looking like the ON state. */
+    --switch-track: rgba(0, 0, 0, 0.16);
 }
 
 /* Glass blur on left panel would tint it differently from center/right.
