@@ -423,6 +423,23 @@ pub const AGENT_PRESETS: &[AgentPreset] = &[
         session_id_pattern: None,
         token_format: Some(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$"),
     },
+    // CodeBuddy Code (Tencent `codebuddy` binary). Resume via
+    // `codebuddy --resume <session-id>` (canonical `-r, --resume <session-id>`,
+    // per the CLI reference). Token is the transcript file stem, a UUID
+    // verified against the bundle's own session-id guard
+    // (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`,
+    // which is how it decides a file in `~/.codebuddy/projects/<key>/` is a
+    // main session rather than a sub-agent). Sourced by
+    // `parse_codebuddy_session_jsonl`; CodeBuddy doesn't echo the id to stdout,
+    // so session_id_pattern is None.
+    AgentPreset {
+        tool_name: "codebuddy",
+        resume_program: Some("codebuddy"),
+        resume_args_before: &["--resume"],
+        resume_args_after: &[],
+        session_id_pattern: None,
+        token_format: Some(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
+    },
     // Kimi Code (Moonshot `kimi` binary). Resume via `kimi --session <id>`
     // (canonical `-S, --session`, verified against `kimi --help`). Token is
     // `session_<uuid>` from session_index.jsonl, sourced by find_kimi_sessions
@@ -1277,6 +1294,7 @@ mod tests {
     fn omp_resume_native_ids_without_accepting_flags() {
         for (tool, flag, token) in [
             ("omp", "--resume", "01900000-0000-7000-8000-000000000000"),
+            ("codebuddy", "--resume", "0f0f0f0f-1111-2222-3333-444444444444"),
         ] {
             let preset = find_preset(tool).unwrap();
             assert_eq!(preset.resume_program, Some(tool));

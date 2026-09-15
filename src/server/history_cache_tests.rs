@@ -37,6 +37,58 @@ fn omp_metadata_only_session_has_no_history_or_activity() {
 }
 
 #[test]
+fn codebuddy_parser_reads_envelopes_and_prefers_native_titles() {
+    let path = temp_jsonl("codebuddy");
+    write_jsonl(&path, &[
+        // session-meta is the one row shape that is NOT enveloped.
+        r#"{"type":"session-meta","id":"meta-1","sessionId":"0f0f0f0f-1111-2222-3333-444444444444","timestamp":1787100000000,"meta":{"multitaskMode":false}}"#,
+        r#"{"type":"message","uuid":"u1","timestamp":"2026-09-08T00:00:00.000Z","payload":{"id":"u1","type":"message","role":"user","content":[{"type":"input_text","text":"add retry backoff"}],"cwd":"D:\\codebuddy-proj","timestamp":1787100000001}}"#,
+        // Tool rows are history items too — they must not become titles or
+        // message rows.
+        r#"{"type":"function_call","uuid":"c1","timestamp":"2026-09-08T00:00:01.000Z","payload":{"id":"c1","type":"function_call","callId":"c1","name":"Bash","arguments":"{\"command\":\"ls\"}","cwd":"D:\\codebuddy-proj","timestamp":1787100000002}}"#,
+        r#"{"type":"function_call_result","uuid":"r1","timestamp":"2026-09-08T00:00:02.000Z","payload":{"id":"r1","type":"function_call_result","callId":"c1","status":"completed","output":{"type":"text","text":"role: user"},"cwd":"D:\\codebuddy-proj","timestamp":1787100000003}}"#,
+        r#"{"type":"message","uuid":"a1","timestamp":"2026-09-08T00:00:03.000Z","payload":{"id":"a1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}],"cwd":"D:\\codebuddy-proj","timestamp":1787100000004}}"#,
+        r#"{"type":"ai-title","uuid":"t1","timestamp":"2026-09-08T00:00:04.000Z","payload":{"id":"t1","type":"ai-title","aiTitle":"Backoff retry work","cwd":"D:\\codebuddy-proj"}}"#,
+    ]);
+    let session = cold_parse(&path, "codebuddy").expect("session should parse");
+    assert_eq!(session.tool, "codebuddy");
+    assert!(session.id.starts_with("codebuddy_native_"));
+    assert_eq!(session.name, "Backoff retry work", "generated title beats the first prompt");
+    assert_eq!(session.cwd, "D:\\codebuddy-proj");
+    // The session-meta row is written first and carries the creation stamp.
+    assert_eq!(session.created_at.as_deref(), Some("1787100000000"));
+    // The resume token is the file stem — the name CodeBuddy itself resolves.
+    assert_eq!(
+        session.session_token.as_deref(),
+        path.file_stem().unwrap().to_str(),
+        "resume token must be the transcript file stem"
+    );
+    // 1 user + 1 assistant = 2 counted rows -> (2+1)/2 = 1.
+    assert_eq!(session.turn_count, Some(1));
+
+    // A user rename outranks the generated title.
+    append_lines(&path, &[
+        r#"{"type":"custom-title","uuid":"t2","timestamp":"2026-09-08T00:00:05.000Z","payload":{"id":"t2","type":"custom-title","customTitle":"Renamed by user","sessionId":"0f0f0f0f-1111-2222-3333-444444444444"}}"#,
+    ]);
+    assert_eq!(cold_parse(&path, "codebuddy").unwrap().name, "Renamed by user");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn codebuddy_metadata_only_session_has_no_history() {
+    let path = temp_jsonl("codebuddy-empty");
+    write_jsonl(&path, &[
+        r#"{"type":"session-meta","id":"meta-1","sessionId":"0f0f0f0f-1111-2222-3333-444444444444","timestamp":1787100000000,"meta":{}}"#,
+        r#"{"type":"function_call","uuid":"c1","payload":{"id":"c1","type":"function_call","callId":"c1","name":"Bash","cwd":"/project"}}"#,
+        // A skill preload is stored as a plain role:"user" row, but the user
+        // never typed it — it must not become a title or a history card.
+        r#"{"type":"message","uuid":"u0","payload":{"id":"u0","type":"message","role":"user","content":[{"type":"input_text","text":"Preload the pdf skill"}],"providerData":{"isMeta":true,"skipRun":true},"cwd":"/project"}}"#,
+    ]);
+    assert!(cold_parse(&path, "codebuddy").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 #[ignore = "reads the current user's installed Oh-My-Pi history"]
 fn omp_local_history_smoke() {
     let home = dirs::home_dir().unwrap();

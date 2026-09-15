@@ -38,6 +38,9 @@ import GROK_SVG from '../../icons-inline/grok.svg?raw';
 // disk. The markup carries its own fills, so it does NOT go through the
 // currentColor branch above.
 import OPENCLAW_SVG from '../../icons-inline/openclaw.svg?raw';
+// CodeBuddy — same full-color inline treatment as OpenClaw (gradient squircle
+// with its own fills, no currentColor).
+import CODEBUDDY_SVG from '../../icons-inline/codebuddy.svg?raw';
 import './HistoryBoard.css';
 
 // Tool icons — claude/codex/qwen/antigravity load via <img src=public/...>
@@ -79,16 +82,17 @@ const getToolIcon = (tool: string) => {
       />
     );
   }
-  // OpenClaw is a full-color brand mark (red gradient lobster, teal eyes) —
-  // inline SVG with its own fills, NOT currentColor. Renders as an inline
-  // span so the markup's hardcoded colors show verbatim (an <img> would also
-  // work, but we reuse the same SVG bytes CenterPanel imports).
-  if (tool === 'openclaw') {
+  // OpenClaw / CodeBuddy are full-color brand marks (lobster gradient; teal →
+  // violet squircle) — inline SVG with their own fills, NOT currentColor.
+  // Renders as an inline span so the markup's hardcoded colors show verbatim
+  // (an <img> would also work, but we reuse the same SVG bytes CenterPanel
+  // imports).
+  if (tool === 'openclaw' || tool === 'codebuddy') {
     return (
       <span
         aria-hidden
         style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '1em', height: '1em', flexShrink: 0 }}
-        dangerouslySetInnerHTML={{ __html: OPENCLAW_SVG }}
+        dangerouslySetInnerHTML={{ __html: tool === 'codebuddy' ? CODEBUDDY_SVG : OPENCLAW_SVG }}
       />
     );
   }

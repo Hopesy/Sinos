@@ -571,6 +571,7 @@ export function main(): void {
   const terminalOnlyTools = [
     'grok', 'pi', 'omp', 'qwen', 'antigravity', 'opencode', 'mimocode', 'kilo',
     'hermes', 'openclaw', 'crush', 'aider', 'goose', 'copilot', 'cursor', 'cline',
+    'codebuddy',
     'terminal', 'remote',
   ] as const;
   equal(supportsAgentStatus('omp'), true, 'OMP Dynamic Island enabled');

@@ -204,6 +204,7 @@ pub struct ToolDescriptor {
 mod antigravity;
 mod claude;
 mod codex;
+mod codebuddy;
 mod grok;
 pub mod hermes;
 mod kilo;
@@ -259,6 +260,11 @@ pub static TOOLS: &[&ToolDescriptor] = &[
     &cursor::DESCRIPTOR,
     &cline::DESCRIPTOR,
     &omp::DESCRIPTOR,
+    // CodeBuddy (Tencent, `codebuddy` binary) — fully wired T2 like Kilo Code:
+    // history/heatmap scan via the registry (`GenericJsonl`), dedicated
+    // transcript parser in server.rs, resume preset in terminal.rs,
+    // launchpad tile in CenterPanel's catalog.
+    &codebuddy::DESCRIPTOR,
 ];
 
 /// Lookup by id. `None` if the id isn't registered. Used by legacy cleanup

@@ -1527,6 +1527,170 @@ fn parse_agent_jsonl(
     })
 }
 
+/// CodeBuddy Code sessions live at
+/// `~/.codebuddy/projects/<compressed-cwd>/<uuid>.jsonl`. Two row shapes
+/// coexist on disk: the current kernel store writes envelope rows
+/// (`{type, uuid, timestamp, payload:{…history item…}}`), while `session-meta`
+/// rows (and anything written before envelopes landed) are the bare item.
+/// The item itself carries `cwd`, a millisecond `timestamp`, and — for
+/// conversation rows — `type:"message"` + `role` + content blocks.
+fn parse_codebuddy_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(file_path).ok()?;
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
+
+    // The file name IS the resume token: `codebuddy --resume <token>` resolves
+    // `<project-dir-for-cwd>/<token>.jsonl` (SessionStore.get in the shipped
+    // bundle), so the stem is what we must hand back — not the `sessionId`
+    // embedded in the rows, which can differ for copied/forked transcripts.
+    let session_id = file_path.file_stem()?.to_string_lossy().to_string();
+    let mut cwd = String::new();
+    let mut created_at = None;
+    // Title precedence mirrors the CLI's own getEffectiveSessionTitle(): a
+    // user rename wins over a generated title, and both win over the first
+    // prompt text.
+    let mut custom_title = String::new();
+    let mut ai_title = String::new();
+    let mut topic = String::new();
+    let mut first_prompt = String::new();
+    let mut total_messages = 0u32;
+    let mut real_user_messages = 0u32;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(root) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        // Current transcripts wrap every history item in an envelope
+        // (`{type, uuid, timestamp, payload}`); `session-meta` rows and any
+        // pre-envelope transcript are the bare item itself.
+        let item = root.get("payload").filter(|value| value.is_object()).unwrap_or(&root);
+
+        if created_at.is_none() {
+            created_at = item.get("timestamp").and_then(json_timestamp_string);
+        }
+        if cwd.is_empty() {
+            if let Some(value) = item.get("cwd").and_then(|value| value.as_str()) {
+                if !value.is_empty() {
+                    cwd = value.to_string();
+                }
+            }
+        }
+
+        let item_title = |key: &str| -> Option<String> {
+            item.get(key)
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        match item.get("type").and_then(|value| value.as_str()).unwrap_or("") {
+            "custom-title" => {
+                if let Some(value) = item_title("customTitle") { custom_title = value; }
+            }
+            "ai-title" => {
+                if let Some(value) = item_title("aiTitle") { ai_title = value; }
+            }
+            "topic" => {
+                if let Some(value) = item_title("topic") { topic = value; }
+            }
+            "message" => {
+                let role = item.get("role").and_then(|value| value.as_str()).unwrap_or("");
+                if role != "user" && role != "assistant" { continue; }
+                total_messages += 1;
+                if role != "user" { continue; }
+                let text = codebuddy_content_text(item.get("content"));
+                if text.is_empty() || is_system_injected(&text) { continue; }
+                if !codebuddy_is_real_user_prompt(item) { continue; }
+                real_user_messages += 1;
+                if first_prompt.is_empty() {
+                    let safe = text.replace('\n', " ");
+                    let mut chars = safe.chars();
+                    let chunk: String = chars.by_ref().take(40).collect();
+                    first_prompt = if chars.next().is_some() { format!("{}...", chunk) } else { chunk };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // No real user prompt anywhere → a sub-agent / meta-only shell rather than
+    // a conversation the user had. Same filter as the Claude parser, so these
+    // never surface as phantom history cards.
+    if real_user_messages == 0 {
+        return None;
+    }
+    let mut title = if !custom_title.is_empty() { custom_title }
+        else if !ai_title.is_empty() { ai_title }
+        else if !topic.is_empty() { topic }
+        else { first_prompt };
+    if title.is_empty() {
+        title = "CodeBuddy Session".to_string();
+    }
+    let turn_count = if total_messages > 0 { std::cmp::max(1, (total_messages + 1) / 2) } else { 0 };
+
+    // Fallback date from file metadata (matches the other JSONL parsers: file
+    // mtime is the last activity, which is what the history list sorts on).
+    let mut updated_at = String::new();
+    if let Ok(meta) = std::fs::metadata(file_path) {
+        if let Ok(mod_time) = meta.modified() {
+            if let Ok(dur) = mod_time.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+                updated_at = dur.as_millis().to_string();
+            }
+        }
+    }
+
+    Some(SavedSession {
+        id: format!("codebuddy_native_{}", session_id),
+        name: title,
+        tool: "codebuddy".to_string(),
+        cwd,
+        session_token: Some(session_id),
+        saved_at: updated_at,
+        created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
+        file_path: Some(file_path.to_string_lossy().into_owned()),
+        turn_count: Some(turn_count),
+    })
+}
+
+/// Flatten a CodeBuddy history item's `content` (a string, or an array of
+/// `{type:"input_text"|"output_text"|"text", text}` blocks) to plain text.
+fn codebuddy_content_text(content: Option<&serde_json::Value>) -> String {
+    let Some(content) = content else { return String::new() };
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    let Some(blocks) = content.as_array() else { return String::new() };
+    blocks
+        .iter()
+        .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Does this user row come from the human, or from the agent runtime?
+/// Mirrors CodeBuddy's own `isRealUserMessageForTitle`: skill preloads
+/// (`providerData.skipRun`), compaction bookkeeping
+/// (`providerData.isCompactInternal`, `providerData.agent === "compact"`) and
+/// incoming teammate mail (`providerData.teammateMessage.from`) are all stored
+/// as ordinary `role:"user"` rows. Without this they'd win the title and — for
+/// a session that holds nothing else — surface a phantom history card.
+fn codebuddy_is_real_user_prompt(item: &serde_json::Value) -> bool {
+    let Some(provider) = item.get("providerData") else { return true };
+    let flag = |key: &str| provider.get(key).and_then(|value| value.as_bool()).unwrap_or(false);
+    if flag("skipRun") || flag("isCompactInternal") {
+        return false;
+    }
+    if provider
+        .get("agent")
+        .and_then(|value| value.as_str())
+        .is_some_and(|agent| agent.eq_ignore_ascii_case("compact"))
+    {
+        return false;
+    }
+    !provider
+        .get("teammateMessage")
+        .and_then(|value| value.get("from"))
+        .is_some_and(|from| !from.is_null())
+}
+
 /// Pi CLI sessions live at
 /// `~/.pi/agent/sessions/--<encoded-cwd>--/<ISO-ts>_<uuid>.jsonl` — same
 /// depth-2 layout as Claude Code, so the generic file-walker finds them.
@@ -4022,6 +4186,7 @@ fn parse_session_file(
     match tool {
         "hermes"      => parse_hermes_json(path),
         "codex"       => parse_codex_session_jsonl(path),
+        "codebuddy"   => parse_codebuddy_session_jsonl(path),
         "pi" | "omp"  => parse_pi_session_jsonl(path, tool),
         "qwen"        => parse_qwen_session_jsonl(path),
         "antigravity" => parse_gemini_session_jsonl(path, antigravity_project_map),
@@ -4241,6 +4406,16 @@ fn history_root(tool: &crate::tools::ToolDescriptor, shape: &crate::tools::Histo
         }
         if let Ok(session_dir) = std::env::var("PI_CODING_AGENT_SESSION_DIR") {
             if !session_dir.is_empty() { default = PathBuf::from(session_dir); }
+        }
+    }
+    if tool.id == "codebuddy" {
+        // CodeBuddy's documented config-dir override replaces `~/.codebuddy`
+        // wholesale (getHomeDir in the shipped bundle), and transcripts hang
+        // off `<config-dir>/projects`.
+        if let Ok(config_dir) = std::env::var("CODEBUDDY_CONFIG_DIR") {
+            if !config_dir.is_empty() {
+                default = PathBuf::from(config_dir).join("projects");
+            }
         }
     }
     crate::tool_config::history_path_for(tool.id, default)
