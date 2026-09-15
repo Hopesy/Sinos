@@ -41,6 +41,8 @@ import { commands } from '../../tauri';
 import { supportsAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, type ToolType, type ThemeColor } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { getToolDisplayName } from '../../lib/tool-info';
+import { THEME_COLORS } from '../../lib/personalization';
+import { useDataAttr } from '../../lib/use-data-attr';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
 import '@xterm/xterm/css/xterm.css';
 import './TierTerminal.css';
@@ -74,54 +76,15 @@ export const TERM_COLOR_SCHEMES: TermColorScheme[] = [
 // Mirror of `--bg-terminal` from global.css. Kept in JS so the terminal can
 // pick the right background synchronously on theme prop change — reading the
 // CSS variable lags by one switch (child effects fire before App.tsx writes
-// `data-theme`). Must stay in sync with each [data-theme] block in global.css.
-// All themes follow "terminal bg == bg-app" for a continuous surface.
-// Light uses warm paper; dark themes use gently tinted charcoal.
-const THEME_TERMINAL_BG: Record<string, string> = {
-  dark:       '#15110e',
-  light:      '#eeece6',
-  cappuccino: '#1e1e1e',
-  sakura:     '#262024',
-  lavender:   '#25212b',
-  mint:       '#1f2723',
-  obsidian:   '#0a0a0a',
-  cobalt:     '#171d26',
-  moss:       '#101812',
-  crimson:    '#1c1619',
-  sunset:     '#1e1915',
-  amber:      '#272219',
-  emerald:    '#161e19',
-  teal:       '#15101b',
-  indigo:     '#101620',
-  fuchsia:    '#1e1824',
-  glacier:    '#20252d',
-  slate:      '#130f11',
-};
-
-// Per-theme selection accent. Picked so each theme's selection highlight
-// reads as a deeper variant of that theme's signature hue rather than the
-// brand coffee for every theme. deriveSelectionBg further darkens these
-// and applies alpha before they reach xterm.
-const THEME_SELECTION_ACCENT: Record<string, string> = {
-  dark:       '#a97d5c',
-  light:      '#5c6267',
-  cappuccino: '#b3b3b3',
-  sakura:     '#dab2be',
-  lavender:   '#c7b3d4',
-  mint:       '#b0c9bc',
-  obsidian:   '#858585',
-  cobalt:     '#86a5cd',
-  moss:       '#6d9d82',
-  crimson:    '#c58e9a',
-  sunset:     '#bd9270',
-  amber:      '#d2b28e',
-  emerald:    '#8ab59e',
-  teal:       '#9a78ae',
-  indigo:     '#6789b6',
-  fuchsia:    '#ad90bf',
-  glacier:    '#adc3dd',
-  slate:      '#ad7480',
-};
+// `data-theme`). All families follow "terminal bg == bg-app" for a continuous
+// surface. The background + selection accent come straight from THEME_COLORS
+// (the same table the appearance grid paints), so a palette can never drift
+// between the swatch the user picked and the terminal they get. Each family
+// carries a night and a day value; `isDark` selects the half on screen — which
+// also keeps OSC 11 (Claude Code's /theme auto) honest in every palette.
+function themePair(themeName: string) {
+  return THEME_COLORS.find(c => c.code === themeName);
+}
 
 // Collapse any mix of CRLF / bare CR into plain LF before handing text to
 // xterm.paste. Windows puts CRLF into the clipboard and most TUIs on the
@@ -179,10 +142,10 @@ export function buildFontFamily(userFont?: string): string {
   return userFont ? `"${userFont}", ${base}` : base;
 }
 
-function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId?: string, rawShell = false) {
-  const isDark = themeName !== 'light';
+function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId?: string, rawShell = false, isDark = true) {
   const scheme = schemeId ? TERM_COLOR_SCHEMES.find(s => s.id === schemeId) : undefined;
-  const bgOpaque = THEME_TERMINAL_BG[themeName] || THEME_TERMINAL_BG[isDark ? 'obsidian' : 'light'];
+  const pair = themePair(themeName);
+  const bgOpaque = (isDark ? pair?.swatch : pair?.daySwatch) ?? (isDark ? '#0a0a0a' : '#eeece6');
   const bg = hasBg ? 'rgba(0,0,0,0)' : bgOpaque;
 
   // Build the default warm palette first (full 16 ANSI colors), then let
@@ -190,9 +153,9 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
   const defaultFg = isDark ? '#e8e4de' : '#2d2c2a';
   const fg = scheme?.fg ?? defaultFg;
   // Selection priority: terminal-color-scheme chip (if set) → app theme accent
-  // → coffee. So picking sakura/cobalt/mint etc. recolors the highlight even
+  // → coffee. So picking sakura/indigo/mint etc. recolors the highlight even
   // without choosing a per-terminal fg chip.
-  const selectionAccent = scheme?.fg ?? THEME_SELECTION_ACCENT[themeName] ?? '#c4956a';
+  const selectionAccent = scheme?.fg ?? (isDark ? pair?.ring : pair?.dayRing) ?? '#c4956a';
   const selectionBackground = deriveSelectionBg(selectionAccent, isDark);
 
   const base = isDark ? {
@@ -416,6 +379,9 @@ function TierTerminalImpl({
   // caret — the xterm cursor is the only input-position indicator, so these
   // tabs keep it visible (issue #95). Drives the theme + CSS below.
   const isRawShell = tool === 'terminal' || tool === 'remote';
+  // Which half of the colour family is on screen (App.tsx owns the attribute;
+  // follow-system flips it live, so the terminal re-tints with the app).
+  const isDarkTheme = useDataAttr('data-mode') !== 'light';
   // Dispatch-only subscription. Never re-renders this component.
   const dispatch = useAppDispatch();
   // Output handlers need current sibling-pane state, but rendering already
@@ -543,7 +509,7 @@ function TierTerminalImpl({
       // Required to load Unicode11Addon below (xterm 6 gates the unicode
       // provider API as proposed). No other proposed API is used.
       allowProposedApi: true,
-      theme: buildXtermTheme(theme, hasBg, termColorScheme, isRawShell),
+      theme: buildXtermTheme(theme, hasBg, termColorScheme, isRawShell, isDarkTheme),
     });
 
     const usesAgentStatus = supportsAgentStatus(tool);
@@ -1685,8 +1651,8 @@ function TierTerminalImpl({
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    term.options.theme = buildXtermTheme(theme, hasBg, termColorScheme, isRawShell);
-  }, [theme, termColorScheme, hasBg, isRawShell]);
+    term.options.theme = buildXtermTheme(theme, hasBg, termColorScheme, isRawShell, isDarkTheme);
+  }, [theme, termColorScheme, hasBg, isRawShell, isDarkTheme]);
 
   // ── Terminal font sync (live, no PTY restart) ────────────────────────────
   useEffect(() => {
@@ -2109,7 +2075,8 @@ function TierTerminalImpl({
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  const solidBg = THEME_TERMINAL_BG[theme] || THEME_TERMINAL_BG[theme === 'light' ? 'light' : 'obsidian'];
+  const solidBg = (isDarkTheme ? themePair(theme)?.swatch : themePair(theme)?.daySwatch)
+    ?? (isDarkTheme ? '#0a0a0a' : '#eeece6');
   const terminalBg = hasBg ? 'transparent' : solidBg;
 
   return (

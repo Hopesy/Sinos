@@ -6,7 +6,8 @@ import { retryInvoke } from './tauri';
 import { initNotifySound } from './lib/notify-sound';
 import { routeFileDrop } from './lib/file-drop';
 import { initHistoryAutoRefresh } from './lib/history-cache';
-import { isFrostShape } from './lib/personalization';
+import { isFrostShape, resolveThemeMode } from './lib/personalization';
+import { useDataAttr } from './lib/use-data-attr';
 import { TitleBar } from './components/common/TitleBar';
 import { ResizeEdges } from './components/common/ResizeEdges';
 import { PanelResizer, type PanelSide } from './components/common/PanelResizer';
@@ -186,6 +187,9 @@ function useSlidingPanel(hidden: boolean): { mounted: boolean; collapsed: boolea
 
 export function App() {
   const { state } = useAppState();
+  // Resolved half of the palette (index.html sets it pre-paint, the effect
+  // below keeps it current) — re-renders us when follow-system flips.
+  const resolvedMode = useDataAttr('data-mode');
 
   const [panelWidths, setPanelWidths] = useState<PanelWidths>(() => loadPanelWidths(
     window.innerWidth,
@@ -275,10 +279,68 @@ export function App() {
   }, [state.terminals]);
 
   // Apply theme + shape on mount and change — must sync with the inline script in index.html
+  //
+  // data-theme carries the colour family and data-mode the half of it in use
+  // (light / night / whatever the OS asks for). Everything that needs to know
+  // "is this a light UI right now" reads data-mode: the CSS one-off rules, the
+  // syntax-highlighting theme, the xterm palette, the frosted backdrop tint.
+  // Components subscribe with useDataAttr('data-mode'), so a follow-system
+  // flip re-renders them the same way a manual pick does.
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', state.currentTheme);
-    try { localStorage.setItem('cc-theme', state.currentTheme); } catch { /* Best-effort operation; failure is non-fatal. */ }
-  }, [state.currentTheme]);
+    const el = document.documentElement;
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
+    // Follow-system reads two signals, because neither one covers every
+    // platform: the media query is what WebView2 and WKWebView expose (and what
+    // WebKitGTK derives from the GTK theme name), while Tauri's own window theme
+    // reads the freedesktop portal on Linux — where the media query can stay
+    // pinned to a stale GTK theme. Either one asking for dark wins: a light UI
+    // on a dark desktop is the failure users actually notice. Until Tauri
+    // answers (or if it never does, e.g. a plain browser preview) this is just
+    // the media query.
+    let nativeDark = false;
+    const apply = () => {
+      const mode = resolveThemeMode(state.themeMode, nativeDark || !!mq?.matches);
+      el.setAttribute('data-theme', state.currentTheme);
+      el.setAttribute('data-mode', mode);
+    };
+    apply();
+    try {
+      localStorage.setItem('cc-theme', state.currentTheme);
+      localStorage.setItem('cc-mode', state.themeMode);
+    } catch { /* Best-effort operation; failure is non-fatal. */ }
+
+    // Follow-system only: re-apply whenever the OS flips.
+    if (state.themeMode !== 'system') return;
+    mq?.addEventListener('change', apply);
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const win = getCurrentWindow();
+        // Read once up front: on Linux the first paint would otherwise use a
+        // media query that hasn't caught up with the desktop setting.
+        const current = await win.theme();
+        if (cancelled) return;
+        if (current) {
+          nativeDark = current === 'dark';
+          apply();
+        }
+        const un = await win.onThemeChanged(({ payload }) => {
+          nativeDark = payload === 'dark';
+          apply();
+        });
+        // The listeners resolve a tick later, so a fast theme flip can clean up
+        // before `un` exists — detach immediately in that case.
+        if (cancelled) un(); else unlisten = un;
+      } catch { /* Not running under Tauri — the media query is all we have. */ }
+    })();
+    return () => {
+      cancelled = true;
+      mq?.removeEventListener('change', apply);
+      unlisten?.();
+    };
+  }, [state.currentTheme, state.themeMode]);
 
   useEffect(() => {
     // Frost shapes reuse the whole glass chrome; normalize data-shape to
@@ -303,10 +365,10 @@ export function App() {
     if (inv) {
       inv('set_frosted_backdrop', {
         on: frost,
-        dark: state.currentTheme !== 'light',
+        dark: resolvedMode !== 'light',
       }).catch(() => {});
     }
-  }, [state.currentShape, state.currentTheme]);
+  }, [state.currentShape, state.currentTheme, resolvedMode]);
 
   // Sync the UI language to the <html> lang attribute so CSS :lang(zh)
   // selectors can fire. This is what swaps the splash-label out of the

@@ -7,17 +7,17 @@ import { useDataAttr } from '../../lib/use-data-attr';
 import { commands } from '../../tauri';
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
-  const dataTheme = useDataAttr('data-theme');
+  const dataMode = useDataAttr('data-mode');
   const [tokens, setTokens] = useState<LineTokens[] | null>(null);
 
   useEffect(() => {
     if (!lang) return;
     let cancelled = false;
-    tokenizeByLang(code, lang, getShikiTheme(dataTheme)).then(value => {
+    tokenizeByLang(code, lang, getShikiTheme(dataMode)).then(value => {
       if (!cancelled) setTokens(value);
     });
     return () => { cancelled = true; };
-  }, [code, lang, dataTheme]);
+  }, [code, lang, dataMode]);
 
   return (
     <pre className="md-code"><code>

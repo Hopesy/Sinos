@@ -386,8 +386,8 @@ textarea,
     --bg-terminal: #15110e; /* Match bg-app */
 }
 
-/* ─── 明亮 — neutral, soft ──── */
-[data-theme="light"] {
+/* ─── 明亮 — neutral, soft · day ──── */
+[data-mode="light"][data-theme="light"] {
     --bg-app: #eeece6;
     --bg-panel: #f6f4ef;
     --bg-card: #f9f7f2;
@@ -418,40 +418,6 @@ textarea,
     --glass-blur: blur(24px);
 
     --bg-terminal: #eeece6; /* Match bg-app */
-}
-
-/* ─── 代码夜 — neutral, balanced ──── */
-[data-theme="cappuccino"] {
-    --bg-app: #1e1e1e;
-    --bg-panel: #262626;
-    --bg-card: rgba(228, 228, 228, 0.025);
-    --bg-input: #2e2e2e;
-    --bg-input-focus: #363636;
-    --bg-hover: rgba(179, 179, 179, 0.07);
-    --bg-active: rgba(179, 179, 179, 0.11);
-
-    --border: rgba(228, 228, 228, 0.11);
-    --border-input: rgba(228, 228, 228, 0.16);
-    --border-focus: rgba(179, 179, 179, 0.5);
-
-    --text-1: #e4e4e4;
-    --text-2: #bcbcbc;
-    --text-3: #a5a5a5;
-
-    --accent: #b3b3b3;
-    --accent-hover: #bebebe;
-    --accent-active: #a7a7a7;
-    --accent-bg: rgba(179, 179, 179, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 179, 179, 179;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #1e1e1e; /* Match bg-app */
 }
 
 /* ─── 夜樱 — rose, soft ──── */
@@ -590,40 +556,6 @@ textarea,
     --bg-terminal: #0a0a0a; /* Match bg-app */
 }
 
-/* ─── 钴蓝 — blue, balanced ──── */
-[data-theme="cobalt"] {
-    --bg-app: #171d26;
-    --bg-panel: #1f252e;
-    --bg-card: rgba(223, 229, 238, 0.025);
-    --bg-input: #272d36;
-    --bg-input-focus: #2f353e;
-    --bg-hover: rgba(134, 165, 205, 0.07);
-    --bg-active: rgba(134, 165, 205, 0.11);
-
-    --border: rgba(223, 229, 238, 0.09);
-    --border-input: rgba(223, 229, 238, 0.14);
-    --border-focus: rgba(134, 165, 205, 0.5);
-
-    --text-1: #dfe5ee;
-    --text-2: #b0bdcf;
-    --text-3: #97a6bb;
-
-    --accent: #86a5cd;
-    --accent-hover: #97b2d4;
-    --accent-active: #7d9ac0;
-    --accent-bg: rgba(134, 165, 205, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 134, 165, 205;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #171d26; /* Match bg-app */
-}
-
 /* ─── 苔藓 — green, deep ──── */
 [data-theme="moss"] {
     --bg-app: #101812;
@@ -658,74 +590,6 @@ textarea,
     --bg-terminal: #101812; /* Match bg-app */
 }
 
-/* ─── 暗红 — rose, balanced ──── */
-[data-theme="crimson"] {
-    --bg-app: #1c1619;
-    --bg-panel: #241e21;
-    --bg-card: rgba(233, 224, 226, 0.025);
-    --bg-input: #2c2629;
-    --bg-input-focus: #342e31;
-    --bg-hover: rgba(197, 142, 154, 0.07);
-    --bg-active: rgba(197, 142, 154, 0.11);
-
-    --border: rgba(233, 224, 226, 0.09);
-    --border-input: rgba(233, 224, 226, 0.14);
-    --border-focus: rgba(197, 142, 154, 0.5);
-
-    --text-1: #e9e0e2;
-    --text-2: #c1b2b6;
-    --text-3: #ad999f;
-
-    --accent: #c58e9a;
-    --accent-hover: #cd9ea8;
-    --accent-active: #b78490;
-    --accent-bg: rgba(197, 142, 154, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 197, 142, 154;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #1c1619; /* Match bg-app */
-}
-
-/* ─── 落日橙 — orange, balanced ──── */
-[data-theme="sunset"] {
-    --bg-app: #1e1915;
-    --bg-panel: #26211d;
-    --bg-card: rgba(233, 226, 220, 0.025);
-    --bg-input: #2e2925;
-    --bg-input-focus: #36312d;
-    --bg-hover: rgba(189, 146, 112, 0.07);
-    --bg-active: rgba(189, 146, 112, 0.11);
-
-    --border: rgba(233, 226, 220, 0.09);
-    --border-input: rgba(233, 226, 220, 0.14);
-    --border-focus: rgba(189, 146, 112, 0.5);
-
-    --text-1: #e9e2dc;
-    --text-2: #c3b6a9;
-    --text-3: #ae9c8c;
-
-    --accent: #bd9270;
-    --accent-hover: #c6a184;
-    --accent-active: #b08869;
-    --accent-bg: rgba(189, 146, 112, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 189, 146, 112;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #1e1915; /* Match bg-app */
-}
-
 /* ─── 琥珀 — orange, soft ──── */
 [data-theme="amber"] {
     --bg-app: #272219;
@@ -758,40 +622,6 @@ textarea,
     --glass-blur: blur(24px);
 
     --bg-terminal: #272219; /* Match bg-app */
-}
-
-/* ─── 翠绿 — green, balanced ──── */
-[data-theme="emerald"] {
-    --bg-app: #161e19;
-    --bg-panel: #1e2621;
-    --bg-card: rgba(223, 232, 226, 0.025);
-    --bg-input: #262e29;
-    --bg-input-focus: #2e3631;
-    --bg-hover: rgba(138, 181, 158, 0.07);
-    --bg-active: rgba(138, 181, 158, 0.11);
-
-    --border: rgba(223, 232, 226, 0.09);
-    --border-input: rgba(223, 232, 226, 0.14);
-    --border-focus: rgba(138, 181, 158, 0.5);
-
-    --text-1: #dfe8e2;
-    --text-2: #afc1b6;
-    --text-3: #98ad9f;
-
-    --accent: #8ab59e;
-    --accent-hover: #9abfac;
-    --accent-active: #81a993;
-    --accent-bg: rgba(138, 181, 158, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 138, 181, 158;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #161e19; /* Match bg-app */
 }
 
 /* ─── 葡萄紫 — violet, deep ──── */
@@ -862,40 +692,6 @@ textarea,
     --bg-terminal: #101620; /* Match bg-app */
 }
 
-/* ─── 烟紫 — violet, balanced ──── */
-[data-theme="fuchsia"] {
-    --bg-app: #1e1824;
-    --bg-panel: #26202c;
-    --bg-card: rgba(232, 224, 233, 0.025);
-    --bg-input: #2e2834;
-    --bg-input-focus: #36303c;
-    --bg-hover: rgba(173, 144, 191, 0.07);
-    --bg-active: rgba(173, 144, 191, 0.11);
-
-    --border: rgba(232, 224, 233, 0.09);
-    --border-input: rgba(232, 224, 233, 0.14);
-    --border-focus: rgba(173, 144, 191, 0.5);
-
-    --text-1: #e8e0e9;
-    --text-2: #c0b2c4;
-    --text-3: #ae9ab2;
-
-    --accent: #ad90bf;
-    --accent-hover: #b8a0c8;
-    --accent-active: #a286b3;
-    --accent-bg: rgba(173, 144, 191, 0.13);
-
-    --green: #98b89d;
-    --red: #d99a9a;
-    --blue: #93b3d2;
-
-    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
-    --shadow-rgb: 173, 144, 191;
-    --glass-blur: blur(24px);
-
-    --bg-terminal: #1e1824; /* Match bg-app */
-}
-
 /* ─── 冰川蓝 — blue, soft ──── */
 [data-theme="glacier"] {
     --bg-app: #20252d;
@@ -962,6 +758,352 @@ textarea,
     --glass-blur: blur(24px);
 
     --bg-terminal: #130f11; /* Match bg-app */
+}
+
+/* ─── Day (light) palettes ───────────────────────────────────────────────
+   Every night family gets a light counterpart with the same hue, so the
+   appearance grid can show the same 12 slots in either mode and the
+   follow-system mode can swap between the two halves without changing the
+   user's colour family. Surfaces are tinted by the family hue (--bg-app is the
+   tint anchor; panel sits above it, input below), text is a hue-tinted
+   near-black, and the accent is the dark palette's hue darkened enough to
+   carry 4.5:1 on the tinted canvas.
+
+   The mode-invariant light values (semantic hues, shadows) live in the shared
+   [data-mode="light"] rule; each family block only carries its own tints.
+   Selectors carry two attributes on purpose: that outranks the single-
+   attribute night blocks above regardless of order, so a family's light
+   palette always wins when data-mode="light". */
+[data-mode="light"] {
+    --green: #496b4e;
+    --red: #9b4c49;
+    --blue: #476a8a;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.04);
+    --shadow-rgb: 0, 0, 0;
+    --glass-blur: blur(24px);
+}
+
+/* ─── 樱粉 — day ──── */
+[data-mode="light"][data-theme="sakura"] {
+    --bg-app: #f4f0f2;
+    --bg-panel: #f9f8f8;
+    --bg-card: #fdfcfc;
+    --bg-input: #ece4e6;
+    --bg-input-focus: #e7dcdf;
+    --bg-hover: rgba(119, 59, 77, 0.07);
+    --bg-active: rgba(119, 59, 77, 0.11);
+
+    --border: rgba(55, 47, 49, 0.14);
+    --border-input: rgba(55, 47, 49, 0.2);
+    --border-focus: rgba(119, 59, 77, 0.6);
+
+    --text-1: #372f31;
+    --text-2: #52474a;
+    --text-3: #64585c;
+
+    --accent: #773b4d;
+    --accent-hover: #663342;
+    --accent-active: #592c39;
+    --accent-bg: rgba(119, 59, 77, 0.12);
+
+    --bg-terminal: #f4f0f2; /* Match bg-app */
+}
+
+/* ─── 琥珀 — day ──── */
+[data-mode="light"][data-theme="amber"] {
+    --bg-app: #f5f2ef;
+    --bg-panel: #faf9f7;
+    --bg-card: #fdfcfc;
+    --bg-input: #eee8e2;
+    --bg-input-focus: #eae2d9;
+    --bg-hover: rgba(127, 92, 52, 0.07);
+    --bg-active: rgba(127, 92, 52, 0.11);
+
+    --border: rgba(57, 51, 45, 0.14);
+    --border-input: rgba(57, 51, 45, 0.2);
+    --border-focus: rgba(127, 92, 52, 0.6);
+
+    --text-1: #39332d;
+    --text-2: #544d45;
+    --text-3: #675f56;
+
+    --accent: #7f5c34;
+    --accent-hover: #6d4f2c;
+    --accent-active: #5e4426;
+    --accent-bg: rgba(127, 92, 52, 0.12);
+
+    --bg-terminal: #f5f2ef; /* Match bg-app */
+}
+
+/* ─── 薄荷 — day ──── */
+[data-mode="light"][data-theme="mint"] {
+    --bg-app: #f1f4f2;
+    --bg-panel: #f8f9f9;
+    --bg-card: #fcfdfc;
+    --bg-input: #e5ebe8;
+    --bg-input-focus: #dde6e2;
+    --bg-hover: rgba(67, 112, 89, 0.07);
+    --bg-active: rgba(67, 112, 89, 0.11);
+
+    --border: rgba(48, 54, 51, 0.14);
+    --border-input: rgba(48, 54, 51, 0.2);
+    --border-focus: rgba(67, 112, 89, 0.6);
+
+    --text-1: #303633;
+    --text-2: #48514c;
+    --text-3: #5a635e;
+
+    --accent: #437059;
+    --accent-hover: #39604c;
+    --accent-active: #325342;
+    --accent-bg: rgba(67, 112, 89, 0.12);
+
+    --bg-terminal: #f1f4f2; /* Match bg-app */
+}
+
+/* ─── 冰川 — day ──── */
+[data-mode="light"][data-theme="glacier"] {
+    --bg-app: #f0f2f5;
+    --bg-panel: #f8f9fa;
+    --bg-card: #fcfcfd;
+    --bg-input: #e2e7ee;
+    --bg-input-focus: #dae1e9;
+    --bg-hover: rgba(52, 86, 127, 0.07);
+    --bg-active: rgba(52, 86, 127, 0.11);
+
+    --border: rgba(45, 50, 57, 0.14);
+    --border-input: rgba(45, 50, 57, 0.2);
+    --border-focus: rgba(52, 86, 127, 0.6);
+
+    --text-1: #2d3239;
+    --text-2: #454c54;
+    --text-3: #565e67;
+
+    --accent: #34567f;
+    --accent-hover: #2c496d;
+    --accent-active: #26405e;
+    --accent-bg: rgba(52, 86, 127, 0.12);
+
+    --bg-terminal: #f0f2f5; /* Match bg-app */
+}
+
+/* ─── 薰衣草 — day ──── */
+[data-mode="light"][data-theme="lavender"] {
+    --bg-app: #f3f1f4;
+    --bg-panel: #f9f8f9;
+    --bg-card: #fcfcfd;
+    --bg-input: #e9e4ec;
+    --bg-input-focus: #e3dce7;
+    --bg-hover: rgba(95, 61, 117, 0.07);
+    --bg-active: rgba(95, 61, 117, 0.11);
+
+    --border: rgba(52, 47, 55, 0.14);
+    --border-input: rgba(52, 47, 55, 0.2);
+    --border-focus: rgba(95, 61, 117, 0.6);
+
+    --text-1: #342f37;
+    --text-2: #4e4752;
+    --text-3: #5f5964;
+
+    --accent: #5f3d75;
+    --accent-hover: #513465;
+    --accent-active: #462d57;
+    --accent-bg: rgba(95, 61, 117, 0.12);
+
+    --bg-terminal: #f3f1f4; /* Match bg-app */
+}
+
+/* ─── 瓷白 — day, deep ────
+   Cool porcelain, a clear step below 明亮's warm cream — as the two neutrals
+   of this column they were reading as two whites. */
+[data-mode="light"][data-theme="obsidian"] {
+    --bg-app: #dde0e3;
+    --bg-panel: #e9eaec;
+    --bg-card: #f3f3f4;
+    --bg-input: #d1d6db;
+    --bg-input-focus: #c8ced5;
+    --bg-hover: rgba(76, 85, 97, 0.07);
+    --bg-active: rgba(76, 85, 97, 0.11);
+
+    --border: rgba(47, 53, 60, 0.14);
+    --border-input: rgba(47, 53, 60, 0.2);
+    --border-focus: rgba(76, 85, 97, 0.6);
+
+    --text-1: #2f353c;
+    --text-2: #464e58;
+    --text-3: #57606b;
+
+    --accent: #4c5561;
+    --accent-hover: #414953;
+    --accent-active: #383f47;
+    --accent-bg: rgba(76, 85, 97, 0.12);
+
+    --bg-terminal: #dde0e3; /* Match bg-app */
+}
+
+/* ─── 玫瑰 — day ──── */
+[data-mode="light"][data-theme="slate"] {
+    --bg-app: #e9e2e4;
+    --bg-panel: #f3eff0;
+    --bg-card: #f8f7f7;
+    --bg-input: #e1d5d8;
+    --bg-input-focus: #dccdd1;
+    --bg-hover: rgba(107, 56, 67, 0.07);
+    --bg-active: rgba(107, 56, 67, 0.11);
+
+    --border: rgba(55, 47, 49, 0.14);
+    --border-input: rgba(55, 47, 49, 0.2);
+    --border-focus: rgba(107, 56, 67, 0.6);
+
+    --text-1: #372f31;
+    --text-2: #52474a;
+    --text-3: #64595b;
+
+    --accent: #6b3843;
+    --accent-hover: #5b2f39;
+    --accent-active: #4d2830;
+    --accent-bg: rgba(107, 56, 67, 0.12);
+
+    --bg-terminal: #e9e2e4; /* Match bg-app */
+}
+
+/* ─── 拿铁 — day ──── */
+[data-mode="light"][data-theme="dark"] {
+    --bg-app: #eae5e1;
+    --bg-panel: #f3f1ef;
+    --bg-card: #f8f7f6;
+    --bg-input: #e3dad4;
+    --bg-input-focus: #dfd4cb;
+    --bg-hover: rgba(114, 77, 49, 0.07);
+    --bg-active: rgba(114, 77, 49, 0.11);
+
+    --border: rgba(56, 50, 46, 0.14);
+    --border-input: rgba(56, 50, 46, 0.2);
+    --border-focus: rgba(114, 77, 49, 0.6);
+
+    --text-1: #38322e;
+    --text-2: #534c46;
+    --text-3: #665d57;
+
+    --accent: #724d31;
+    --accent-hover: #604129;
+    --accent-active: #523823;
+    --accent-bg: rgba(114, 77, 49, 0.12);
+
+    --bg-terminal: #eae5e1; /* Match bg-app */
+}
+
+/* ─── 苔藓 — day ──── */
+[data-mode="light"][data-theme="moss"] {
+    --bg-app: #e3e8e5;
+    --bg-panel: #f0f2f1;
+    --bg-card: #f7f8f7;
+    --bg-input: #d7e0db;
+    --bg-input-focus: #cfdbd4;
+    --bg-hover: rgba(61, 102, 79, 0.07);
+    --bg-active: rgba(61, 102, 79, 0.11);
+
+    --border: rgba(48, 54, 51, 0.14);
+    --border-input: rgba(48, 54, 51, 0.2);
+    --border-focus: rgba(61, 102, 79, 0.6);
+
+    --text-1: #303633;
+    --text-2: #48514c;
+    --text-3: #5a635e;
+
+    --accent: #3d664f;
+    --accent-hover: #335643;
+    --accent-active: #2c4939;
+    --accent-bg: rgba(61, 102, 79, 0.12);
+
+    --bg-terminal: #e3e8e5; /* Match bg-app */
+}
+
+/* ─── 靛蓝 — day ──── */
+[data-mode="light"][data-theme="indigo"] {
+    --bg-app: #e1e5ea;
+    --bg-panel: #eff1f3;
+    --bg-card: #f6f7f8;
+    --bg-input: #d3dae3;
+    --bg-input-focus: #cbd4df;
+    --bg-hover: rgba(47, 77, 116, 0.07);
+    --bg-active: rgba(47, 77, 116, 0.11);
+
+    --border: rgba(45, 50, 57, 0.14);
+    --border-input: rgba(45, 50, 57, 0.2);
+    --border-focus: rgba(47, 77, 116, 0.6);
+
+    --text-1: #2d3239;
+    --text-2: #464c53;
+    --text-3: #575d66;
+
+    --accent: #2f4d74;
+    --accent-hover: #284162;
+    --accent-active: #223753;
+    --accent-bg: rgba(47, 77, 116, 0.12);
+
+    --bg-terminal: #e1e5ea; /* Match bg-app */
+}
+
+/* ─── 葡萄紫 — day ──── */
+[data-mode="light"][data-theme="teal"] {
+    --bg-app: #e6e2e9;
+    --bg-panel: #f1f0f2;
+    --bg-card: #f8f7f8;
+    --bg-input: #ddd6e1;
+    --bg-input-focus: #d7cedc;
+    --bg-hover: rgba(88, 58, 106, 0.07);
+    --bg-active: rgba(88, 58, 106, 0.11);
+
+    --border: rgba(52, 47, 55, 0.14);
+    --border-input: rgba(52, 47, 55, 0.2);
+    --border-focus: rgba(88, 58, 106, 0.6);
+
+    --text-1: #342f37;
+    --text-2: #4e4851;
+    --text-3: #605964;
+
+    --accent: #583a6a;
+    --accent-hover: #4a3159;
+    --accent-active: #3f294c;
+    --accent-bg: rgba(88, 58, 106, 0.12);
+
+    --bg-terminal: #e6e2e9; /* Match bg-app */
+}
+
+/* ─── 石墨 — neutral, soft · night ──── */
+[data-mode="dark"][data-theme="light"] {
+    --bg-app: #24221f;
+    --bg-panel: #2c2a27;
+    --bg-card: rgba(238, 236, 230, 0.025);
+    --bg-input: #34322e;
+    --bg-input-focus: #3c3a36;
+    --bg-hover: rgba(154, 160, 166, 0.07);
+    --bg-active: rgba(154, 160, 166, 0.11);
+
+    --border: rgba(233, 231, 225, 0.1);
+    --border-input: rgba(233, 231, 225, 0.15);
+    --border-focus: rgba(154, 160, 166, 0.5);
+
+    --text-1: #e9e7e1;
+    --text-2: #bdbab2;
+    --text-3: #a5a29a;
+
+    --accent: #9aa0a6;
+    --accent-hover: #a8adb3;
+    --accent-active: #8d9399;
+    --accent-bg: rgba(154, 160, 166, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 154, 160, 166;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #24221f; /* Match bg-app */
 }
 
 /* ─── App Shell ──────────────────────────────────────── */
@@ -2031,15 +2173,15 @@ html.is-windows[data-frost="frost"] #root {
    glass backdrop (light `--bg-card` is #ffffff), so the controls stayed
    pure-white. Swap to a genuinely translucent version of the theme card
    colour so the frosted backdrop shows through — "符合半透明主题". */
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn,
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search,
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger {
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn,
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search,
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger {
     background: color-mix(in oklab, var(--bg-card) 65%, transparent);
     border: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
 }
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn:hover,
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger:hover,
-[data-theme="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search:focus {
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn:hover,
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger:hover,
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search:focus {
     background: color-mix(in oklab, var(--bg-card) 72%, transparent);
     border-color: color-mix(in oklab, var(--accent) 55%, transparent);
 }
@@ -2151,7 +2293,7 @@ html.is-windows[data-frost="frost"] #root {
 }
 
 /* Light theme inverts the divider color (white-on-white wouldn't show) */
-[data-shape="panel"][data-theme="light"] {
+[data-shape="panel"][data-mode="light"] {
     --border: rgba(0, 0, 0, 0.14);
     --border-input: rgba(0, 0, 0, 0.14);
 }
@@ -2186,7 +2328,8 @@ html.is-windows[data-frost="frost"] #root {
    aesthetic that wants a visible bordered rectangle around the tabs,
    like classic tmux / iTerm2 split panes. */
 [data-shape="panel"] .explorer-tabs,
-[data-shape="panel"] .right-tabs {
+[data-shape="panel"] .right-tabs,
+[data-shape="panel"] .settings-mode-tabs {
     border: 1px solid var(--border);
 }
 
@@ -2196,13 +2339,22 @@ html.is-windows[data-frost="frost"] #root {
     border-radius: 0;
 }
 
+/* Settings' mode tabs sit in a header row rather than a 50/50 strip, so they
+   keep side padding — without it the divider would touch the label. */
+[data-shape="panel"] .settings-mode-tab {
+    padding: 6px 12px;
+    border-radius: 0;
+}
+
 [data-shape="panel"] .explorer-tab + .explorer-tab,
-[data-shape="panel"] .right-tab + .right-tab {
+[data-shape="panel"] .right-tab + .right-tab,
+[data-shape="panel"] .settings-mode-tab + .settings-mode-tab {
     border-left: 1px solid var(--border);
 }
 
 [data-shape="panel"] .explorer-tab.active,
-[data-shape="panel"] .right-tab.active {
+[data-shape="panel"] .right-tab.active,
+[data-shape="panel"] .settings-mode-tab.active {
     background: var(--bg-hover);
     color: var(--text-1);
 }
@@ -2338,14 +2490,14 @@ html.is-windows[data-frost="frost"] #root {
    generic light veil intentionally turns its base graphite-gray, so give this
    one pairing a material-specific palette while retaining the same mask and
    zero-cost static rendering. */
-[data-shape="monogram"][data-theme="light"] #root {
+[data-shape="monogram"][data-mode="light"] #root {
     background: #f7f6f1;
 }
-[data-shape="monogram"][data-theme="light"] #root::before {
+[data-shape="monogram"][data-mode="light"] #root::before {
     background: #a7834e;
     opacity: 0.30;
 }
-[data-shape="monogram"][data-theme="light"] #root::after {
+[data-shape="monogram"][data-mode="light"] #root::after {
     background: rgba(255, 255, 255, 0.18);
 }
 
@@ -2414,21 +2566,21 @@ html.is-windows[data-frost="frost"] #root {
    the wrapper's overflow:hidden radius. The inner card clears to transparent so
    the wrapper's fill is the single surface. A hairline border + whisper shadow
    give the now-translucent card a defined edge against the mesh. */
-:is([data-shape="carbon"], [data-shape="monogram"])[data-theme="light"] .launchpad-card-group {
+:is([data-shape="carbon"], [data-shape="monogram"])[data-mode="light"] .launchpad-card-group {
     background: color-mix(in oklab, #fffdf9 64%, transparent);
     border-color: rgba(0, 0, 0, 0.06);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
-:is([data-shape="carbon"], [data-shape="monogram"])[data-theme="light"] .launchpad-card {
+:is([data-shape="carbon"], [data-shape="monogram"])[data-mode="light"] .launchpad-card {
     background: transparent;
 }
 
 /* Session search box (shared by the left Sessions rail and the right
    HistoryBoard) — same warm translucent fill so it reads as part of the
    material, not a white slab. Focus lifts opacity for input legibility. */
-:is([data-shape="carbon"], [data-shape="monogram"])[data-theme="light"] .agent-session-search {
+:is([data-shape="carbon"], [data-shape="monogram"])[data-mode="light"] .agent-session-search {
     background: color-mix(in oklab, #fffdf9 64%, transparent);
 }
-:is([data-shape="carbon"], [data-shape="monogram"])[data-theme="light"] .agent-session-search:focus {
+:is([data-shape="carbon"], [data-shape="monogram"])[data-mode="light"] .agent-session-search:focus {
     background: color-mix(in oklab, #fffdf9 80%, transparent);
 }

@@ -6,7 +6,7 @@
 // highlighter loads asynchronously (and the file's language grammar loads
 // the first time we touch that extension) — diff text renders plain on
 // first paint and re-renders with token colors once tokenization resolves.
-// Theme tracks `data-theme` via MutationObserver so theme switches re-tint
+// Theme tracks `data-mode` via MutationObserver so theme switches re-tint
 // the tokens without a remount.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -109,7 +109,7 @@ interface DiffPanelProps {
 
 export function DiffPanel({ path, repoRoot, rel, kind, commitHash, onClose, mode, onToggleExpanded, heightPercent, added, deleted }: DiffPanelProps) {
   const t = useT();
-  const dataTheme = useDataAttr('data-theme');
+  const dataMode = useDataAttr('data-mode');
   const [result, setResult] = useState<DiffResult>({ state: 'loading' });
   // `expanded` (tab mode) is the legacy name kept locally so the keyboard +
   // sizing logic below reads as before; the prop surface is `mode`.
@@ -240,7 +240,7 @@ export function DiffPanel({ path, repoRoot, rel, kind, commitHash, onClose, mode
         // Tokenize BEFORE the first 'ok' render. Painting plain text first
         // and then swapping in Shiki tokens caused a visible color flip on
         // every file open — single-shot avoids that.
-        const theme = getShikiTheme(dataTheme);
+        const theme = getShikiTheme(dataMode);
         const [oldTokens, newTokens] = await Promise.all([
           tokenizeFile(oldText, path, theme),
           tokenizeFile(newText, path, theme),
@@ -294,7 +294,7 @@ export function DiffPanel({ path, repoRoot, rel, kind, commitHash, onClose, mode
       window.clearInterval(poll);
       window.removeEventListener('fs-refresh', refresh);
     };
-  }, [path, repoRoot, rel, kind, commitHash, dataTheme]);
+  }, [path, repoRoot, rel, kind, commitHash, dataMode]);
 
   const basename = useMemo(() => path.replace(/\\/g, '/').split('/').pop() || path, [path]);
 

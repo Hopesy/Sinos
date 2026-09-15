@@ -13,14 +13,14 @@
 // is unchanged; only the presentation moved.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { useAppState, useAppDispatch, HOTKEY_SCHEMES, type HotkeyScheme, type TitlebarToggleDisplay, type ThemeColor, type ThemeShape, type IconTheme } from '../../store/app-state';
+import { useAppState, useAppDispatch, HOTKEY_SCHEMES, type HotkeyScheme, type TitlebarToggleDisplay, type ThemeColor, type ThemeMode, type ThemeShape, type IconTheme } from '../../store/app-state';
 import { playNotifySound } from '../../lib/notify-sound';
 import { useT } from '../../i18n/useT';
 import { IS_MACOS, IS_WINDOWS } from '../../lib/platform';
 import { TERM_COLOR_SCHEMES } from '../center/TierTerminal';
 import { commands, type FontInfo } from '../../tauri';
 import { FontPicker } from './FontPicker';
-import { THEME_COLORS, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
+import { THEME_COLORS, THEME_MODES, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
 import './SettingsModal.css';
 
 type Section = 'appearance' | 'wallpaper' | 'terminal' | 'gambit' | 'sound' | 'tasks' | 'language' | 'feedback';
@@ -175,6 +175,7 @@ export function SettingsModal() {
 
   // ── Handlers (identical to the former left-panel ThemeMenu/Lang wiring) ──
   const setTheme = (th: ThemeColor) => dispatch({ type: 'SET_THEME', theme: th });
+  const setThemeMode = (mode: ThemeMode) => dispatch({ type: 'SET_THEME_MODE', mode });
   const setShape = (s: ThemeShape) => dispatch({ type: 'SET_SHAPE', shape: s });
   const setIconTheme = (th: IconTheme) => {
     dispatch({ type: 'SET_ICON_THEME', theme: th });
@@ -316,10 +317,38 @@ export function SettingsModal() {
           <div className="settings-body">
             {section === 'appearance' && (
               <>
-                <div className="settings-section-label">{t('theme.section.color')}</div>
+                <div className="settings-section-head">
+                  <span className="settings-section-label">{t('theme.section.color')}</span>
+                  {/* Mode lives on the section header: it picks which half of
+                      every family below is applied, so it reads left-to-right
+                      "colors, then which half". */}
+                  <div className="settings-mode-tabs" role="tablist">
+                    {THEME_MODES.map(m => (
+                      <button
+                        key={m.code}
+                        type="button"
+                        role="tab"
+                        aria-selected={state.themeMode === m.code}
+                        className={`settings-mode-tab${state.themeMode === m.code ? ' active' : ''}`}
+                        onClick={() => setThemeMode(m.code)}
+                      >
+                        {t(m.labelKey)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="settings-theme-grid">
                   {THEME_COLORS.map(c => {
                     const active = c.code === state.currentTheme;
+                    // Follow-system cards stand for a family rather than one
+                    // half, so their preview is the day/night split; the label
+                    // stays the family's single name in every tab.
+                    const follow = state.themeMode === 'system';
+                    // The night tab shows the night half only; the day tab and
+                    // the follow tab both start from the day half.
+                    const showDay = follow || state.themeMode === 'light';
+                    const bg = showDay ? c.daySwatch : c.swatch;
+                    const ring = showDay ? c.dayRing : c.ring;
                     return (
                       <button
                         key={c.code}
@@ -327,16 +356,26 @@ export function SettingsModal() {
                         onClick={() => setTheme(c.code)}
                         aria-pressed={active}
                       >
-                        <span className="settings-theme-preview" style={{ '--ring': c.ring } as CSSProperties}>
-                          <span className="settings-theme-band-bg" style={{ background: c.swatch }} />
-                          <span className="settings-theme-band-accent" style={{ background: c.ring }} />
+                        <span className={`settings-theme-preview${follow ? ' split' : ''}`} style={{ '--ring': ring } as CSSProperties}>
+                          <span className="settings-theme-half">
+                            <span className="settings-theme-band-bg" style={{ background: bg }} />
+                            <span className="settings-theme-band-accent" style={{ background: ring }} />
+                          </span>
+                          {follow && (
+                            <span className="settings-theme-half">
+                              <span className="settings-theme-band-bg" style={{ background: c.swatch }} />
+                              <span className="settings-theme-band-accent" style={{ background: c.ring }} />
+                            </span>
+                          )}
                           {active && (
-                            <span className="settings-theme-check" style={{ background: c.ring }}>
-                              <svg viewBox="0 0 24 24" fill="none" stroke={c.swatch} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                            <span className="settings-theme-check" style={{ background: ring }}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke={bg} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
                             </span>
                           )}
                         </span>
-                        <span className="settings-theme-name">{t(c.labelKey)}</span>
+                        <span className="settings-theme-name">
+                          {t(c.labelKey)}
+                        </span>
                       </button>
                     );
                   })}

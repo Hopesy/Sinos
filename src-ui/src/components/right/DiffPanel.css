@@ -362,8 +362,8 @@
 .diff-line-add .diff-marker { color: #b8e8c4; }
 .diff-line-del .diff-marker { color: #e8b8b8; }
 
-[data-theme="light"] .diff-line-add .diff-marker { color: #1a4d2a; }
-[data-theme="light"] .diff-line-del .diff-marker { color: #4d1a1a; }
+[data-mode="light"] .diff-line-add .diff-marker { color: #1a4d2a; }
+[data-mode="light"] .diff-line-del .diff-marker { color: #4d1a1a; }
 
 /* Row-level background tint — the "whole line is +/- at a glance"
  * scanning signal. Distinct concern from Shiki token coloring
@@ -379,9 +379,9 @@
   background: #4d1a1a;
 }
 
-[data-theme="light"] .diff-line-add {
+[data-mode="light"] .diff-line-add {
   background: #c0e8c8;
 }
-[data-theme="light"] .diff-line-del {
+[data-mode="light"] .diff-line-del {
   background: #e8c0c0;
 }

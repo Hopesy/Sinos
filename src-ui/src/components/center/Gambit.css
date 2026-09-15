@@ -75,7 +75,7 @@
     to   { opacity: 1; }
 }
 
-[data-theme="light"] .gambit {
+[data-mode="light"] .gambit {
     /* Inherits the same 4-layer 80/60/40/20 falloff defined on
        .gambit. With --shadow-rgb=0,0,0 (light theme black) the
        shadow reads naturally against the ivory background. */
