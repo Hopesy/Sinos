@@ -35,6 +35,7 @@ import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
 import { parseOmpTerminalTitle } from '../../lib/omp-terminal-title';
 import { markNotifySoundPromptSubmitted } from '../../lib/notify-sound';
+import { usesSelfRenderedCaret } from '../../lib/chat-tools';
 import { onWindowForeground } from '../../lib/window-focus-filter';
 import { createTerminalSizeSync, DEFAULT_TERMINAL_GRID } from '../../lib/terminal-size-sync';
 import { commands } from '../../tauri';
@@ -113,15 +114,10 @@ function deriveSelectionBg(hex: string, isDark: boolean): string {
   return `rgba(${r},${g},${b},${isDark ? 0.55 : 0.45})`;
 }
 
-// In AI-agent tabs the upstream TUI (each agent's input box, the Compose
-// textarea) paints its own caret, so xterm's cursor is either redundant or a
-// stranded artifact. Paint its cell in the terminal background, but keep
-// cursorAccent equal to the foreground so xterm does not erase the character
-// beneath that cell. The DOM renderer is also covered by `.xterm-cursor {
-// display: none }` in TierTerminal.css.
-// Raw-shell tabs (local terminal / remote SSH) are the exception: no TUI
-// draws a caret there, so the xterm cursor is the only input-position
-// indicator — keep it visible with the foreground color (issue #95).
+// Some verified TUIs paint their own caret, so xterm's cursor would be a
+// duplicate or stranded artifact. Paint its cell in the terminal background
+// for those tools only. Every other tool keeps xterm's foreground caret; the
+// conservative default makes new and terminal-only tools usable immediately.
 // Build the xterm fontFamily stack. `userFont` (from Settings) is prepended
 // so it wins for the glyphs it has; the bundled CascadiaMono + Nerd Fonts +
 // platform monospace faces follow, and the CJK cascade backstops Chinese/
@@ -142,7 +138,7 @@ export function buildFontFamily(userFont?: string): string {
   return userFont ? `"${userFont}", ${base}` : base;
 }
 
-function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId?: string, rawShell = false, isDark = true) {
+function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId?: string, showXtermCursor = true, isDark = true) {
   const scheme = schemeId ? TERM_COLOR_SCHEMES.find(s => s.id === schemeId) : undefined;
   const pair = themePair(themeName);
   const bgOpaque = (isDark ? pair?.swatch : pair?.daySwatch) ?? (isDark ? '#0a0a0a' : '#eeece6');
@@ -174,9 +170,9 @@ function buildXtermTheme(themeName: string, hasBg: boolean | undefined, schemeId
     ...base,
     background: bg,
     foreground: fg,
-    // AI-agent tabs: the cursor cell blends into the background while its
-    // character remains readable. Raw shells get a real, visible caret.
-    cursor: rawShell ? fg : bgOpaque,
+    // Self-rendered-caret TUIs blend the xterm cell into the background while
+    // its character remains readable. All other tools get a visible caret.
+    cursor: showXtermCursor ? fg : bgOpaque,
     cursorAccent: fg,
   };
 }
@@ -375,10 +371,7 @@ function TierTerminalImpl({
   sessionId, tool, toolName, theme, lang, isActive, conversationActive = false,
   toolData, folderPath, resumeToken, hasBg, bgUrl, bgType, termColorScheme, termFont,
 }: TierTerminalProps) {
-  // Raw shells (local terminal / remote SSH) have no TUI painting its own
-  // caret — the xterm cursor is the only input-position indicator, so these
-  // tabs keep it visible (issue #95). Drives the theme + CSS below.
-  const isRawShell = tool === 'terminal' || tool === 'remote';
+  const selfRenderedCaret = usesSelfRenderedCaret(tool);
   // Which half of the colour family is on screen (App.tsx owns the attribute;
   // follow-system flips it live, so the terminal re-tints with the app).
   const isDarkTheme = useDataAttr('data-mode') !== 'light';
@@ -509,7 +502,7 @@ function TierTerminalImpl({
       // Required to load Unicode11Addon below (xterm 6 gates the unicode
       // provider API as proposed). No other proposed API is used.
       allowProposedApi: true,
-      theme: buildXtermTheme(theme, hasBg, termColorScheme, isRawShell, isDarkTheme),
+      theme: buildXtermTheme(theme, hasBg, termColorScheme, !selfRenderedCaret, isDarkTheme),
     });
 
     const usesAgentStatus = supportsAgentStatus(tool);
@@ -1651,8 +1644,8 @@ function TierTerminalImpl({
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    term.options.theme = buildXtermTheme(theme, hasBg, termColorScheme, isRawShell, isDarkTheme);
-  }, [theme, termColorScheme, hasBg, isRawShell, isDarkTheme]);
+    term.options.theme = buildXtermTheme(theme, hasBg, termColorScheme, !selfRenderedCaret, isDarkTheme);
+  }, [theme, termColorScheme, hasBg, selfRenderedCaret, isDarkTheme]);
 
   // ── Terminal font sync (live, no PTY restart) ────────────────────────────
   useEffect(() => {
@@ -2210,9 +2203,7 @@ function TierTerminalImpl({
           // If no image found, let the event propagate to xterm for normal text paste
         }}
       >
-        {/* Raw shells get the `raw-shell` class so the CSS cursor-hiding
-            rule skips them (issue #95 — see TierTerminal.css). */}
-        <div ref={termRef} className={`tier-xterm${isRawShell ? ' raw-shell' : ''}`} />
+        <div ref={termRef} className={`tier-xterm${selfRenderedCaret ? ' self-rendered-caret' : ''}`} />
       </div>
 
       {/* Terminal right-click context menu */}

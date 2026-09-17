@@ -15,6 +15,19 @@ and `git tag --list "v*"`.
   its closed, unstable session formats or offers history, resume, heatmap, or
   protocol-specific configuration.
 
+### Fixed
+- **Light and translucent themes now have consistent surface depth.** Light
+  palettes use a brighter workspace and deeper side rails without stacking
+  several near-white card colors; Glass/Frost history controls now match the
+  launchpad's faint glass treatment.
+- **Session history interactions are clearer.** Rows regain visible hover
+  feedback across every shape, and the delete action appears beside a fading
+  title without covering metadata or animating into place. Continued Codex
+  rollout files also use stable unique React keys.
+- **Qwen and terminal-only tools now show an input cursor.** xterm's cursor is
+  hidden only for verified TUIs that draw their own caret; unknown and future
+  tools default to a visible static cursor. (#145)
+
 ## [3.2.9] — 2026-07-31
 
 ### Fixed

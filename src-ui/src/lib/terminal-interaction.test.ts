@@ -15,7 +15,7 @@
  *
  * Run with `node scripts/run-terminal-interaction-test.mjs` (esbuild-based).
  */
-import { supportsConversationTool } from './chat-tools';
+import { supportsConversationTool, usesSelfRenderedCaret } from './chat-tools';
 import { supportsAgentStatus, supportsNativeAgentStatus } from '../store/app-state';
 import { parseOmpTerminalTitle } from './omp-terminal-title';
 import type { Terminal } from '@xterm/xterm';
@@ -584,6 +584,10 @@ export function main(): void {
   for (const tool of ['claude', 'codex', 'kimicode'] as const) {
     equal(supportsTerminalInteraction(tool), true, `${tool}: Coffee interaction enabled`);
     equal(supportsConversationTool(tool), true, `${tool}: conversation mode enabled`);
+    equal(usesSelfRenderedCaret(tool), true, `${tool}: upstream TUI owns its caret`);
+  }
+  for (const tool of ['qwen', 'antigravity', 'terminal', 'remote', null] as const) {
+    equal(usesSelfRenderedCaret(tool), false, `${tool}: xterm cursor remains visible`);
   }
 
   // A Claude-shaped prompt must not be accepted by another tool family.
