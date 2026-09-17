@@ -388,11 +388,8 @@ textarea,
 
 /* ─── 明亮 — neutral, soft · day ──── */
 [data-mode="light"][data-theme="light"] {
-    --bg-app: #eeece6;
-    --bg-panel: #f6f4ef;
-    --bg-card: #f9f7f2;
-    --bg-input: #e7e4dc;
-    --bg-input-focus: #dfdcd3;
+    --bg-app: #f6f4ef;
+    --bg-panel: #eeece6;
     --bg-hover: rgba(92, 98, 103, 0.07);
     --bg-active: rgba(92, 98, 103, 0.11);
 
@@ -417,7 +414,6 @@ textarea,
     --shadow-rgb: 0, 0, 0;
     --glass-blur: blur(24px);
 
-    --bg-terminal: #eeece6; /* Match bg-app */
 }
 
 /* ─── 夜樱 — rose, soft ──── */
@@ -764,8 +760,10 @@ textarea,
    Every night family gets a light counterpart with the same hue, so the
    appearance grid can show the same 12 slots in either mode and the
    follow-system mode can swap between the two halves without changing the
-   user's colour family. Surfaces are tinted by the family hue (--bg-app is the
-   tint anchor; panel sits above it, input below), text is a hue-tinted
+   user's colour family. Surfaces are tinted by the family hue: the main
+   workspace uses the lighter --bg-app and the side rails use the deeper
+   --bg-panel. Cards and controls reuse those two surfaces instead of adding
+   more near-white layers. Text is a hue-tinted
    near-black, and the accent is the dark palette's hue darkened enough to
    carry 4.5:1 on the tinted canvas.
 
@@ -786,11 +784,8 @@ textarea,
 
 /* ─── 樱粉 — day ──── */
 [data-mode="light"][data-theme="sakura"] {
-    --bg-app: #f4f0f2;
-    --bg-panel: #f9f8f8;
-    --bg-card: #fdfcfc;
-    --bg-input: #ece4e6;
-    --bg-input-focus: #e7dcdf;
+    --bg-app: #f9f8f8;
+    --bg-panel: #f4f0f2;
     --bg-hover: rgba(119, 59, 77, 0.07);
     --bg-active: rgba(119, 59, 77, 0.11);
 
@@ -807,16 +802,12 @@ textarea,
     --accent-active: #592c39;
     --accent-bg: rgba(119, 59, 77, 0.12);
 
-    --bg-terminal: #f4f0f2; /* Match bg-app */
 }
 
 /* ─── 琥珀 — day ──── */
 [data-mode="light"][data-theme="amber"] {
-    --bg-app: #f5f2ef;
-    --bg-panel: #faf9f7;
-    --bg-card: #fdfcfc;
-    --bg-input: #eee8e2;
-    --bg-input-focus: #eae2d9;
+    --bg-app: #faf9f7;
+    --bg-panel: #f5f2ef;
     --bg-hover: rgba(127, 92, 52, 0.07);
     --bg-active: rgba(127, 92, 52, 0.11);
 
@@ -833,16 +824,12 @@ textarea,
     --accent-active: #5e4426;
     --accent-bg: rgba(127, 92, 52, 0.12);
 
-    --bg-terminal: #f5f2ef; /* Match bg-app */
 }
 
 /* ─── 薄荷 — day ──── */
 [data-mode="light"][data-theme="mint"] {
-    --bg-app: #f1f4f2;
-    --bg-panel: #f8f9f9;
-    --bg-card: #fcfdfc;
-    --bg-input: #e5ebe8;
-    --bg-input-focus: #dde6e2;
+    --bg-app: #f8f9f9;
+    --bg-panel: #f1f4f2;
     --bg-hover: rgba(67, 112, 89, 0.07);
     --bg-active: rgba(67, 112, 89, 0.11);
 
@@ -859,16 +846,12 @@ textarea,
     --accent-active: #325342;
     --accent-bg: rgba(67, 112, 89, 0.12);
 
-    --bg-terminal: #f1f4f2; /* Match bg-app */
 }
 
 /* ─── 冰川 — day ──── */
 [data-mode="light"][data-theme="glacier"] {
-    --bg-app: #f0f2f5;
-    --bg-panel: #f8f9fa;
-    --bg-card: #fcfcfd;
-    --bg-input: #e2e7ee;
-    --bg-input-focus: #dae1e9;
+    --bg-app: #f8f9fa;
+    --bg-panel: #f0f2f5;
     --bg-hover: rgba(52, 86, 127, 0.07);
     --bg-active: rgba(52, 86, 127, 0.11);
 
@@ -885,16 +868,12 @@ textarea,
     --accent-active: #26405e;
     --accent-bg: rgba(52, 86, 127, 0.12);
 
-    --bg-terminal: #f0f2f5; /* Match bg-app */
 }
 
 /* ─── 薰衣草 — day ──── */
 [data-mode="light"][data-theme="lavender"] {
-    --bg-app: #f3f1f4;
-    --bg-panel: #f9f8f9;
-    --bg-card: #fcfcfd;
-    --bg-input: #e9e4ec;
-    --bg-input-focus: #e3dce7;
+    --bg-app: #f9f8f9;
+    --bg-panel: #f3f1f4;
     --bg-hover: rgba(95, 61, 117, 0.07);
     --bg-active: rgba(95, 61, 117, 0.11);
 
@@ -911,18 +890,14 @@ textarea,
     --accent-active: #462d57;
     --accent-bg: rgba(95, 61, 117, 0.12);
 
-    --bg-terminal: #f3f1f4; /* Match bg-app */
 }
 
 /* ─── 瓷白 — day, deep ────
    Cool porcelain, a clear step below 明亮's warm cream — as the two neutrals
    of this column they were reading as two whites. */
 [data-mode="light"][data-theme="obsidian"] {
-    --bg-app: #d9dde2;
-    --bg-panel: #eaecee;
-    --bg-card: #f4f5f6;
-    --bg-input: #ccd1d9;
-    --bg-input-focus: #c2cad3;
+    --bg-app: #eaecee;
+    --bg-panel: #d9dde2;
     --bg-hover: rgba(60, 74, 93, 0.07);
     --bg-active: rgba(60, 74, 93, 0.11);
 
@@ -939,18 +914,14 @@ textarea,
     --accent-active: #2a3441;
     --accent-bg: rgba(60, 74, 93, 0.12);
 
-    --bg-terminal: #d9dde2; /* Match bg-app */
 }
 
 /* ─── 玫瑰 — day, deep ────
    Every deep row keeps its hue but sits a real step below the soft row: in the
    swatch grid the two rows were reading as the same colour, one hair lighter. */
 [data-mode="light"][data-theme="slate"] {
-    --bg-app: #e5d7da;
-    --bg-panel: #efe9ea;
-    --bg-card: #f6f3f4;
-    --bg-input: #dcc8cd;
-    --bg-input-focus: #d7bec4;
+    --bg-app: #efe9ea;
+    --bg-panel: #e5d7da;
     --bg-hover: rgba(101, 52, 63, 0.07);
     --bg-active: rgba(101, 52, 63, 0.11);
 
@@ -967,16 +938,12 @@ textarea,
     --accent-active: #46252c;
     --accent-bg: rgba(101, 52, 63, 0.12);
 
-    --bg-terminal: #e5d7da; /* Match bg-app */
 }
 
 /* ─── 拿铁 — day, deep ──── */
 [data-mode="light"][data-theme="dark"] {
-    --bg-app: #e6ddd5;
-    --bg-panel: #f0ebe8;
-    --bg-card: #f7f5f3;
-    --bg-input: #dfd1c6;
-    --bg-input-focus: #dbc9bb;
+    --bg-app: #f0ebe8;
+    --bg-panel: #e6ddd5;
     --bg-hover: rgba(107, 72, 46, 0.07);
     --bg-active: rgba(107, 72, 46, 0.11);
 
@@ -993,16 +960,12 @@ textarea,
     --accent-active: #4b3320;
     --accent-bg: rgba(107, 72, 46, 0.12);
 
-    --bg-terminal: #e6ddd5; /* Match bg-app */
 }
 
 /* ─── 苔藓 — day, deep ──── */
 [data-mode="light"][data-theme="moss"] {
-    --bg-app: #d8e3dd;
-    --bg-panel: #e9eeec;
-    --bg-card: #f4f6f5;
-    --bg-input: #cadad1;
-    --bg-input-focus: #c1d5c9;
+    --bg-app: #e9eeec;
+    --bg-panel: #d8e3dd;
     --bg-hover: rgba(57, 96, 74, 0.07);
     --bg-active: rgba(57, 96, 74, 0.11);
 
@@ -1019,16 +982,12 @@ textarea,
     --accent-active: #284334;
     --accent-bg: rgba(57, 96, 74, 0.12);
 
-    --bg-terminal: #d8e3dd; /* Match bg-app */
 }
 
 /* ─── 靛蓝 — day, deep ──── */
 [data-mode="light"][data-theme="indigo"] {
-    --bg-app: #d5dde7;
-    --bg-panel: #e8ebf0;
-    --bg-card: #f3f5f7;
-    --bg-input: #c5d1e0;
-    --bg-input-focus: #bac8db;
+    --bg-app: #e8ebf0;
+    --bg-panel: #d5dde7;
     --bg-hover: rgba(44, 72, 109, 0.07);
     --bg-active: rgba(44, 72, 109, 0.11);
 
@@ -1045,16 +1004,12 @@ textarea,
     --accent-active: #1f334c;
     --accent-bg: rgba(44, 72, 109, 0.12);
 
-    --bg-terminal: #d5dde7; /* Match bg-app */
 }
 
 /* ─── 葡萄紫 — day, deep ──── */
 [data-mode="light"][data-theme="teal"] {
-    --bg-app: #e0d8e4;
-    --bg-panel: #ede9ef;
-    --bg-card: #f5f4f6;
-    --bg-input: #d5c9dc;
-    --bg-input-focus: #cebfd6;
+    --bg-app: #ede9ef;
+    --bg-panel: #e0d8e4;
     --bg-hover: rgba(82, 54, 99, 0.07);
     --bg-active: rgba(82, 54, 99, 0.11);
 
@@ -1071,7 +1026,16 @@ textarea,
     --accent-active: #3a2645;
     --accent-bg: rgba(82, 54, 99, 0.12);
 
-    --bg-terminal: #e0d8e4; /* Match bg-app */
+}
+
+/* Light mode deliberately uses only two solid surfaces: a brighter main
+   workspace and a deeper chrome/rail surface. Session rows and ordinary
+   controls stay on the rail surface instead of introducing a third white. */
+[data-mode="light"][data-theme] {
+    --bg-card: var(--bg-panel);
+    --bg-input: var(--bg-panel);
+    --bg-input-focus: var(--bg-app);
+    --bg-terminal: var(--bg-app);
 }
 
 /* ─── 石墨 — neutral, soft · night ──── */
@@ -1493,13 +1457,10 @@ body.resizing-panels .pane-resizer {
     overflow: hidden;
     transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1),
                 min-width 250ms cubic-bezier(0.4, 0, 0.2, 1);
-    /* IDE-style framing: side panels share --bg-panel (slightly lighter
-       in every theme), center workspace stays at --bg-app / --bg-terminal
-       (slightly darker), so the terminal reads as the focal "recessed"
-       surface between two brighter rails. Light theme already had this
-       differentiation via --bg-terminal != --bg-app; this rule extends
-       the same pattern to all dark themes by giving the side panels a
-       distinct surface from the body. */
+    /* IDE-style framing: side panels share --bg-panel while the center stays
+       at --bg-app / --bg-terminal. Light palettes make the workspace brighter
+       and the auxiliary rails deeper; dark palettes keep their existing
+       recessed-terminal treatment. */
     background: var(--bg-panel);
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
@@ -1697,8 +1658,7 @@ body.gambit-docked .conversation-scroll {
     overflow: hidden;
     transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1),
                 min-width 250ms cubic-bezier(0.4, 0, 0.2, 1);
-    /* Same --bg-panel as .panel-left (see comment there) — sandwich
-       the darker terminal/launchpad center between two brighter rails. */
+    /* Same --bg-panel as .panel-left (see comment there). */
     background: var(--bg-panel);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -2278,10 +2238,10 @@ html.is-windows[data-frost="frost"] #root {
    All surfaces collapse to a single base color. Only borders
    separate regions, like Warp / tmux / iTerm2 split panes —
    "drawn-on-terminal" feel. Placed AFTER theme blocks so the
-   cascade overrides their --bg-* values. Equal specificity,
-   later rule wins.
+   cascade overrides their --bg-* values. Include data-mode so this
+   remains as specific as the paired light-mode theme selectors.
    ═══════════════════════════════════════════════════════ */
-[data-shape="panel"] {
+[data-mode][data-shape="panel"] {
     --bg-panel: var(--bg-app);
     --bg-card: var(--bg-app);
     --bg-input: var(--bg-app);

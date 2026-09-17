@@ -25,19 +25,19 @@ export const THEME_COLORS: {
 }[] = [
   // Columns: neutral, rose, orange, green, blue, violet; rows: soft, deep.
   // Stable codes preserve saved preferences when a palette is renamed.
-  { code: 'light',      labelKey: 'theme.color.light',      swatch: '#24221f', ring: '#9aa0a6', daySwatch: '#eeece6', dayRing: '#5c6267' },
-  { code: 'sakura',     labelKey: 'theme.color.sakura',     swatch: '#262024', ring: '#dab2be', daySwatch: '#f4f0f2', dayRing: '#773b4d' },
-  { code: 'amber',      labelKey: 'theme.color.amber',      swatch: '#272219', ring: '#d2b28e', daySwatch: '#f5f2ef', dayRing: '#7f5c34' },
-  { code: 'mint',       labelKey: 'theme.color.mint',       swatch: '#1f2723', ring: '#b0c9bc', daySwatch: '#f1f4f2', dayRing: '#437059' },
-  { code: 'glacier',    labelKey: 'theme.color.glacier',    swatch: '#20252d', ring: '#adc3dd', daySwatch: '#f0f2f5', dayRing: '#34567f' },
-  { code: 'lavender',   labelKey: 'theme.color.lavender',   swatch: '#25212b', ring: '#c7b3d4', daySwatch: '#f3f1f4', dayRing: '#5f3d75' },
+  { code: 'light',      labelKey: 'theme.color.light',      swatch: '#24221f', ring: '#9aa0a6', daySwatch: '#f6f4ef', dayRing: '#5c6267' },
+  { code: 'sakura',     labelKey: 'theme.color.sakura',     swatch: '#262024', ring: '#dab2be', daySwatch: '#f9f8f8', dayRing: '#773b4d' },
+  { code: 'amber',      labelKey: 'theme.color.amber',      swatch: '#272219', ring: '#d2b28e', daySwatch: '#faf9f7', dayRing: '#7f5c34' },
+  { code: 'mint',       labelKey: 'theme.color.mint',       swatch: '#1f2723', ring: '#b0c9bc', daySwatch: '#f8f9f9', dayRing: '#437059' },
+  { code: 'glacier',    labelKey: 'theme.color.glacier',    swatch: '#20252d', ring: '#adc3dd', daySwatch: '#f8f9fa', dayRing: '#34567f' },
+  { code: 'lavender',   labelKey: 'theme.color.lavender',   swatch: '#25212b', ring: '#c7b3d4', daySwatch: '#f9f8f9', dayRing: '#5f3d75' },
 
-  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#858585', daySwatch: '#d9dde2', dayRing: '#3c4a5d' },
-  { code: 'slate',      labelKey: 'theme.color.slate',      swatch: '#130f11', ring: '#ad7480', daySwatch: '#e5d7da', dayRing: '#65343f' },
-  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#15110e', ring: '#a97d5c', daySwatch: '#e6ddd5', dayRing: '#6b482e' },
-  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#101812', ring: '#6d9d82', daySwatch: '#d8e3dd', dayRing: '#39604a' },
-  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#101620', ring: '#6789b6', daySwatch: '#d5dde7', dayRing: '#2c486d' },
-  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#15101b', ring: '#9a78ae', daySwatch: '#e0d8e4', dayRing: '#523663' },
+  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#858585', daySwatch: '#eaecee', dayRing: '#3c4a5d' },
+  { code: 'slate',      labelKey: 'theme.color.slate',      swatch: '#130f11', ring: '#ad7480', daySwatch: '#efe9ea', dayRing: '#65343f' },
+  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#15110e', ring: '#a97d5c', daySwatch: '#f0ebe8', dayRing: '#6b482e' },
+  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#101812', ring: '#6d9d82', daySwatch: '#e9eeec', dayRing: '#39604a' },
+  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#101620', ring: '#6789b6', daySwatch: '#e8ebf0', dayRing: '#2c486d' },
+  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#15101b', ring: '#9a78ae', daySwatch: '#ede9ef', dayRing: '#523663' },
 ];
 
 // ─── Theme mode (light / night / follow the OS) ──────────────────────────────
