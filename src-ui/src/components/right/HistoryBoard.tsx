@@ -499,7 +499,7 @@ export function HistoryBoard() {
         const isRenaming = renamingKey === sessionKey;
         return (
           <div
-            key={session.id}
+            key={`${sessionKey}:${session.file_path ?? session.saved_at}`}
             className="history-card"
             onClick={() => handleViewHistory(session)}
             onContextMenu={(e) => {
