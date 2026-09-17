@@ -9,6 +9,12 @@ and `git tag --list "v*"`.
 
 ## [Unreleased]
 
+### Changed
+- **Antigravity CLI is now T3 (launch-only).** Coffee CLI keeps the `agy`
+  launch tile, icon, PATH detection, and terminal startup, but no longer scans
+  its closed, unstable session formats or offers history, resume, heatmap, or
+  protocol-specific configuration.
+
 ## [3.2.9] — 2026-07-31
 
 ### Fixed

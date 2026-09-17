@@ -42,11 +42,6 @@ const TOOL_DEFAULTS: Record<string, ToolConfigEntry> = {
   // Grok Build - per-session dirs under ~/.grok/sessions/<encoded-cwd>/<uuid>/.
   // GROK_HOME env (and this history_path override) both redirect the scan.
   grok:     { command: 'grok',     extra_args: [], default_cwd: '', history_path: '~/.grok/sessions' },
-  // Antigravity CLI session JSONL lives under `~/.gemini/tmp/<project>/
-  // chats/`. The protobuf at `~/.gemini/antigravity-cli/conversations/`
-  // is the model-side state; the JSONL is enough for history titles
-  // and turn counts (same format Gemini CLI used).
-  antigravity: { command: 'agy', extra_args: [], default_cwd: '', history_path: '~/.gemini/tmp' },
   qwen:     { command: 'qwen',     extra_args: [], default_cwd: '', history_path: '' },
   opencode: { command: 'opencode', extra_args: [], default_cwd: '', history_path: '~/.local/share/opencode' },
   // MiMo Code — Xiaomi's OpenCode fork. `command` is a best guess (could be
@@ -73,11 +68,10 @@ const TOOL_DEFAULTS: Record<string, ToolConfigEntry> = {
 
 // Tools whose session history Coffee CLI's history scanner actually reads
 // (load_native_history_blocking in src/server.rs). For these we surface
-// the history_path field. For tools NOT in this set (only qwen now —
-// no Qwen scanner has been written), the field is hidden — letting the
+// the history_path field. For tools outside this set, the field is hidden — letting the
 // user fill a path that nothing ever scans would just be a footgun.
 const HISTORY_SCANNED_TOOLS = new Set([
-  'claude', 'codex', 'grok', 'antigravity', 'hermes', 'opencode', 'openclaw', 'mimocode', 'kilo', 'pi', 'kimicode', 'omp', 'codebuddy',
+  'claude', 'codex', 'grok', 'hermes', 'opencode', 'openclaw', 'mimocode', 'kilo', 'pi', 'kimicode', 'omp', 'codebuddy',
 ]);
 
 const defaultsFor = (key: string): ToolConfigEntry => TOOL_DEFAULTS[key] ?? EMPTY;

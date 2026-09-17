@@ -256,22 +256,6 @@ pub const AGENT_PRESETS: &[AgentPreset] = &[
         ),
         token_format: Some(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
     },
-    // Antigravity CLI (Google) — `agy` binary, successor to Gemini CLI.
-    // Google retired Gemini CLI for consumers 2026-05-19 in favor of
-    // this tool. Resume uses `--conversation <uuid>` (NOT `--resume`).
-    // Conversation id is the basename of the JSON file under
-    // `~/.antigravitycli/<uuid>.json`; nothing in stdout scrapes
-    // reliably yet, so session_id_pattern is None and resume tokens
-    // can only come from the history reader (deferred until the JSON
-    // schema is observed).
-    AgentPreset {
-        tool_name: "antigravity",
-        resume_program: Some("agy"),
-        resume_args_before: &["--conversation"],
-        resume_args_after: &[],
-        session_id_pattern: None,
-        token_format: Some(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
-    },
     AgentPreset {
         tool_name: "hermes",
         resume_program: Some("hermes"),
@@ -1266,7 +1250,7 @@ mod tests {
 
     #[test]
     fn find_preset_known_tools() {
-        for tool in &["claude", "antigravity", "hermes", "pi", "kimicode"] {
+        for tool in &["claude", "hermes", "pi", "kimicode"] {
             assert!(find_preset(tool).is_some(), "preset not found for {tool}");
         }
     }
@@ -1280,6 +1264,7 @@ mod tests {
         assert!(find_preset("definitely_not_a_tool").is_none());
         assert!(find_preset("").is_none());
         assert!(find_preset("gpt").is_none());
+        assert!(find_preset("antigravity").is_none(), "T3 tools have no resume preset");
     }
 
     #[test]

@@ -264,13 +264,13 @@ fn scan_once(
     tool: &str,
 ) -> Option<SavedSession> {
     let maps = std::collections::HashMap::new();
-    parse_session_cached(cache, path, tool, &maps, &maps)
+    parse_session_cached(cache, path, tool, &maps)
 }
 
 /// A cold, uncached parse — the reference a cached scan must match.
 fn cold_parse(path: &std::path::Path, tool: &str) -> Option<SavedSession> {
     let maps = std::collections::HashMap::new();
-    parse_session_file(path, tool, &maps, &maps)
+    parse_session_file(path, tool, &maps)
 }
 
 fn assert_matches_cold(cache: &mut SessionParseCache, path: &std::path::Path, tool: &str, stage: &str) {
@@ -347,9 +347,8 @@ fn history_cache_does_not_persist_missing_or_rejected_sessions() {
     assert!(cache.entries.is_empty());
 }
 
-/// The cwd fallback comes from ~/.claude.json / ~/.gemini/projects.json.
-/// When either moves, a cached entry could be holding a cwd resolved from
-/// the older map, so the whole cache is dropped.
+/// The cwd fallback comes from ~/.claude.json. When it moves, a cached entry
+/// could hold a cwd resolved from the older map, so the whole cache is dropped.
 #[test]
 fn history_parse_cache_drops_entries_when_aux_maps_move() {
     let path = temp_jsonl("aux");
@@ -357,14 +356,14 @@ fn history_parse_cache_drops_entries_when_aux_maps_move() {
     let mut cache = new_cache();
     let empty = std::collections::HashMap::new();
     scan_once(&mut cache, &path, "codex").unwrap();
-    assert!(!sync_aux_generation(&mut cache, &empty, &empty));
+    assert!(!sync_aux_generation(&mut cache, &empty));
     assert_eq!(cache.entries.len(), 1);
     let claude = std::collections::HashMap::from([("project".to_string(), "/new/path".to_string())]);
-    assert!(sync_aux_generation(&mut cache, &claude, &empty));
+    assert!(sync_aux_generation(&mut cache, &claude));
     assert!(cache.entries.is_empty());
-    assert!(!sync_aux_generation(&mut cache, &claude, &empty));
+    assert!(!sync_aux_generation(&mut cache, &claude));
     scan_once(&mut cache, &path, "codex").unwrap();
-    assert!(sync_aux_generation(&mut cache, &claude, &claude));
+    assert!(sync_aux_generation(&mut cache, &empty));
     assert!(cache.entries.is_empty());
     let _ = std::fs::remove_file(&path);
 }

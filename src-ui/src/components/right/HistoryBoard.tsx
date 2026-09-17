@@ -43,21 +43,15 @@ import OPENCLAW_SVG from '../../icons-inline/openclaw.svg?raw';
 import CODEBUDDY_SVG from '../../icons-inline/codebuddy.svg?raw';
 import './HistoryBoard.css';
 
-// Tool icons — claude/codex/qwen/antigravity load via <img src=public/...>
+// Tool icons — claude/codex/qwen load via <img src=public/...>
 // because HistoryBoard mounts once at app start and never re-mounts on tab
 // switch, so the one-time decode flash is invisible. Hermes/OpenCode are
 // PNG-inlined to share the same bytes the Launchpad uses (no duplicate files).
-//
-// Antigravity covers both new agy sessions and any older Gemini-CLI
-// sessions sitting in the same `~/.gemini/tmp/` dir — see
-// `parse_gemini_session_jsonl` in server.rs for why we label both as
-// Antigravity rather than splitting the rows by writer.
 
 const TOOL_ICON_SRC: Record<string, string> = {
   claude:      '/icons/tools/claude.svg',
   codex:       '/icons/tools/codex.svg',
   qwen:        '/icons/tools/qwen.svg',
-  antigravity: '/icons/tools/antigravity.svg',
   hermes:      HERMES_DATA_URL,
   opencode:    OPENCODE_DATA_URL,
   kimicode:    KIMICODE_DATA_URL,

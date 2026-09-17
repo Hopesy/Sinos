@@ -51,16 +51,6 @@ pub enum HistoryShape {
         depth: u8,
     },
 
-    /// Antigravity CLI (agy) — `tmp/<project-folder>/chats/session-*.jsonl`.
-    /// Custom parser `parse_gemini_session_jsonl` (format inherited
-    /// from the retired Gemini CLI; agy writes the same schema).
-    /// Project-folder names resolve to real cwd via a sibling
-    /// `projects.json` map (also Gemini-format, written by agy).
-    AntigravityTmp {
-        root_under_home: &'static str,
-        depth: u8,
-    },
-
     /// OpenCode: SQLite DB (`storage/db.sqlite`) plus legacy
     /// JSONL files. Walked by `find_opencode_sessions`, cannot be
     /// processed by the generic mtime-then-parse pipeline.
@@ -99,7 +89,6 @@ impl HistoryShape {
             HistoryShape::GenericJsonl { root_under_home, .. }
             | HistoryShape::CodexRollout { root_under_home, .. }
             | HistoryShape::QwenProjects { root_under_home, .. }
-            | HistoryShape::AntigravityTmp { root_under_home, .. }
             | HistoryShape::OpenCodeMixed { root_under_home }
             | HistoryShape::KimiIndex { root_under_home }
             | HistoryShape::GrokSessions { root_under_home } => Some(root_under_home),
@@ -133,8 +122,7 @@ impl HistoryShape {
         match self {
             HistoryShape::GenericJsonl { depth, .. }
             | HistoryShape::CodexRollout { depth, .. }
-            | HistoryShape::QwenProjects { depth, .. }
-            | HistoryShape::AntigravityTmp { depth, .. } => Some(*depth),
+            | HistoryShape::QwenProjects { depth, .. } => Some(*depth),
             HistoryShape::HermesFlatJson
             | HistoryShape::OpenCodeMixed { .. }
             | HistoryShape::KimiIndex { .. }
@@ -188,8 +176,7 @@ pub struct ToolDescriptor {
     /// Shape of this tool's on-disk session history. `None` =
     /// tool doesn't expose a scannable history (no entries on
     /// the History board, no contributions in the heatmap).
-    /// Currently every registered CLI has a history; field is
-    /// optional for future tools that may not.
+    /// T3 launch-only tools use `None`.
     pub history_shape: Option<HistoryShape>,
 
     /// Argv prepended to every spawn of this tool *before* any
@@ -213,7 +200,7 @@ mod openclaw;
 mod opencode;
 mod qwen;
 // Pi/Oh-My-Pi are T2 with history; Kimi Code is T1;
-// Aider/Crush/Goose/Copilot/Cursor are T3
+// Antigravity/Aider/Crush/Goose/Copilot/Cursor are T3
 // launch-only, no history/status integration.
 mod aider;
 mod cline;
@@ -248,7 +235,7 @@ pub static TOOLS: &[&ToolDescriptor] = &[
     &kilo::DESCRIPTOR,
     // Pi/Oh-My-Pi have T2 history/heatmap/resume; Kimi Code is T1.
     // The others —
-    // Crush / Aider / Goose / Copilot / Cursor — are T3
+    // Antigravity / Crush / Aider / Goose / Copilot / Cursor — are T3
     // launch-only: display name + PATH probe + launch binary, history_shape:
     // None and has_legacy_hook_artifacts: false.
     &pi::DESCRIPTOR,

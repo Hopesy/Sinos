@@ -481,7 +481,7 @@ const VALID_PIN_KEYS = new Set<string>([
 ]);
 
 const CONFIGURABLE_AGENT_TOOLS = new Set<ToolType>([
-  'claude', 'codex', 'grok', 'antigravity', 'qwen', 'opencode',
+  'claude', 'codex', 'grok', 'qwen', 'opencode',
   'mimocode', 'kilo', 'openclaw', 'hermes', 'pi', 'kimicode', 'omp',
   'codebuddy',
 ]);
@@ -594,7 +594,7 @@ export function CenterPanel() {
   // the order here is the launchpad's preferred presentation order.
   const BUILTIN_AI_CLI_FALLBACK: { key: ToolType; label: string }[] = [
     'claude', 'opencode', 'mimocode', 'kilo', 'openclaw', 'codex', 'grok', 'antigravity', 'qwen', 'hermes',
-    // Pi/Oh-My-Pi (T2), Kimi Code (T1), Crush/Aider/Goose/Copilot/Cursor/Cline (T3).
+    // Pi/Oh-My-Pi (T2), Kimi Code (T1), Antigravity/Crush/Aider/Goose/Copilot/Cursor/Cline (T3).
     'pi', 'crush', 'aider', 'kimicode', 'goose', 'copilot', 'cursor', 'cline', 'omp',
     'codebuddy',
   ].map((key) => ({ key: key as ToolType, label: getToolDisplayName(key) }));

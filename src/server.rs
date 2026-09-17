@@ -1219,13 +1219,8 @@ const SYSTEM_INJECTION_TAGS: &[&str] = &[
     // pre-v1.5 Coffee-CLI workspace pointer as a synthetic user
     // message at session start.
     "# AGENTS.md",
-    // Retained for orphan Gemini CLI sessions (see
-    // parse_gemini_session_jsonl) — Gemini's IDE integration injected
-    // the contents of `GEMINI.md` as a synthetic user message at
-    // session start, and we still filter those out when extracting
-    // titles for the history list. Coffee CLI no longer ships a
-    // Gemini tool tile, but legacy session files keep this constant
-    // relevant.
+    // Gemini-derived tools and imported legacy logs may inject their project
+    // instructions as a synthetic first user message.
     "# GEMINI.md",
     // Claude Code's own session-summary / compaction prompt, injected as
     // a user message at session start (by Claude Code's compaction, and by
@@ -1317,9 +1312,8 @@ fn project_root_from_cwd(cwd: &str) -> String {
 /// same rule — encoding is deterministic and lossless in this direction, so a
 /// match is exact, never a guess.
 ///
-/// Built ONCE per history scan and passed into `parse_agent_jsonl` (mirroring
-/// `antigravity_project_map`), rather than re-reading + re-parsing this
-/// (often 100 KB+) file per candidate session.
+/// Built ONCE per history scan and passed into `parse_agent_jsonl`, rather than
+/// re-reading + re-parsing this (often 100 KB+) file per candidate session.
 fn load_claude_project_map(home: &std::path::Path) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     let path = home.join(".claude.json");
@@ -2011,139 +2005,6 @@ fn is_codex_subagent_session(payload: &serde_json::Value) -> bool {
         .map_or(false, |s| s == "subagent")
 }
 
-/// Reader for `~/.gemini/tmp/<project>/chats/session-*.jsonl`.
-///
-/// Format origin is the (now-retired-as-launchpad-tile) Gemini CLI,
-/// but the **agy** binary writes the exact same schema to the exact
-/// same directory — verified on populated 2026-05-20 sessions.
-/// Older Gemini sessions and newer Antigravity sessions are
-/// indistinguishable by content (no app/version field), so Coffee
-/// CLI labels everything in this dir as `tool="antigravity"`. Gemini
-/// CLI as a separate product is retiring (consumer access ends
-/// 2026-06-18), so the unified label matches user expectations
-/// after they've moved to agy.
-///
-/// Schema:
-///   - first row: `{sessionId, projectHash, startTime, lastUpdated, kind: "main"}`
-///   - subsequent rows: `{id, timestamp, type: "user"|"gemini", content}`
-///     where user content is `[{text}]` and gemini content is a string.
-///   - interleaved `{$set: {lastUpdated}}` rows that we just skip.
-///
-/// `cwd` isn't recorded in the file. We resolve it from
-/// `~/.gemini/projects.json` which maps absolute cwd → short folder
-/// name, so we reverse-lookup short-name → cwd. Falls back to the
-/// short folder name itself if the projects.json mapping is missing.
-fn parse_gemini_session_jsonl(
-    file_path: &std::path::Path,
-    project_short_to_cwd: &std::collections::HashMap<String, String>,
-) -> Option<SavedSession> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
-
-    let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
-    let mut cwd = String::new();
-    let mut updated_at = String::new();
-    let mut title = String::new();
-    let mut total_messages = 0;
-    let mut created_at = None;
-
-    if let Some(short) = file_path
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-    {
-        if let Some(real) = project_short_to_cwd.get(short) {
-            cwd = real.clone();
-        } else {
-            cwd = short.to_string();
-        }
-    }
-
-    for line in reader.lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if let Some(s) = value.get("sessionId").and_then(|v| v.as_str()) {
-            if !s.is_empty() {
-                session_id = s.to_string();
-            }
-        }
-        if created_at.is_none() {
-            created_at = value.get("startTime").and_then(json_timestamp_string);
-        }
-        let row_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if row_type == "user" || row_type == "gemini" {
-            total_messages += 1;
-        }
-        if !title.is_empty() || row_type != "user" {
-            continue;
-        }
-        let Some(content_arr) = value.get("content").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for block in content_arr {
-            let Some(text) = block.get("text").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if is_system_injected(text) {
-                continue;
-            }
-            let safe = text.replace('\n', " ");
-            let mut chars = safe.chars();
-            let chunk: String = chars.by_ref().take(40).collect();
-            title = if chars.next().is_some() { format!("{}...", chunk) } else { chunk };
-            break;
-        }
-    }
-
-    if let Ok(meta) = std::fs::metadata(file_path) {
-        if let Ok(mod_time) = meta.modified() {
-            if let Ok(dur) = mod_time.duration_since(std::time::SystemTime::UNIX_EPOCH) {
-                updated_at = dur.as_millis().to_string();
-            }
-        }
-    }
-    if title.is_empty() {
-        title = "Antigravity Session".to_string();
-    }
-    let turn_count = if total_messages > 0 { std::cmp::max(1, (total_messages + 1) / 2) } else { 0 };
-
-    Some(SavedSession {
-        id: format!("antigravity_native_{}", session_id),
-        name: title,
-        tool: "antigravity".to_string(),
-        cwd,
-        session_token: Some(session_id),
-        saved_at: updated_at,
-        created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
-        file_path: Some(file_path.to_string_lossy().into_owned()),
-        turn_count: Some(turn_count),
-    })
-}
-
-/// Antigravity / Gemini project-hash → cwd map. Reads `~/.gemini/projects.json`
-/// — same file both CLIs maintain (Gemini-format, written by agy too).
-/// Returns empty on any error (missing file, invalid JSON, permission
-/// denied) — sessions just fall back to using the short folder name
-/// as the cwd display.
-fn load_gemini_project_map() -> std::collections::HashMap<String, String> {
-    use std::collections::HashMap;
-    let mut map = HashMap::new();
-    let Some(home) = dirs::home_dir() else { return map };
-    let path = home.join(".gemini").join("projects.json");
-    let Ok(text) = std::fs::read_to_string(path) else { return map };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { return map };
-    let Some(projects) = value.get("projects").and_then(|v| v.as_object()) else { return map };
-    for (cwd, short) in projects {
-        if let Some(short_str) = short.as_str() {
-            map.insert(short_str.to_string(), cwd.clone());
-        }
-    }
-    map
-}
-
 /// Parse a Qwen Code session jsonl. Layout:
 ///   `~/.qwen/projects/<sanitized-cwd>/chats/<session>.jsonl`
 /// Each line: `{uuid, type: 'user'|'assistant'|'tool_result'|'system',
@@ -2285,20 +2146,11 @@ fn validated_native_session_path(file_path: &str) -> Result<std::path::PathBuf, 
         home.join(".qwen").join("projects"),
         home.join(".local").join("share").join("opencode"),
         home.join(".openclaw").join("agents"),
-        // Antigravity CLI lives under `.gemini/antigravity-cli/` (shares
-        // namespace with retiring Gemini CLI). `~/.antigravitycli/` is
-        // an unrelated stale placeholder some installers leave behind.
-        home.join(".gemini").join("antigravity-cli"),
-        // Antigravity / legacy Gemini session dir — both CLIs write
-        // session JSONL under `~/.gemini/tmp/<project>/chats/`. Sessions
-        // surface in the history list tagged as Antigravity;
-        // ConversationView walks file_path through this gate to load them.
-        home.join(".gemini").join("tmp"),
     ];
     if hermes_legacy != hermes_root {
         allowed.push(hermes_legacy);
     }
-    for tool in ["claude", "hermes", "codex", "antigravity", "qwen", "opencode", "openclaw"] {
+    for tool in ["claude", "hermes", "codex", "qwen", "opencode", "openclaw"] {
         let cfg = crate::tool_config::get(tool).history_path;
         if !cfg.is_empty() {
             allowed.push(crate::tool_config::expand_path(&cfg));
@@ -4148,10 +4000,9 @@ struct CachedSession {
 
 #[derive(Default)]
 struct SessionParseCache {
-    // Compare the maps actually used by the parsers, avoiding timestamp
-    // collisions and a race between reading a map and statting it afterwards.
+    // Compare the map actually used by the parser, avoiding timestamp
+    // collisions and a race between reading it and statting it afterwards.
     claude_projects: std::collections::HashMap<String, String>,
-    antigravity_projects: std::collections::HashMap<String, String>,
     entries: std::collections::HashMap<std::path::PathBuf, CachedSession>,
 }
 
@@ -4163,14 +4014,12 @@ fn session_parse_cache() -> &'static std::sync::Mutex<SessionParseCache> {
 fn sync_aux_generation(
     cache: &mut SessionParseCache,
     claude_projects: &std::collections::HashMap<String, String>,
-    antigravity_projects: &std::collections::HashMap<String, String>,
 ) -> bool {
-    if cache.claude_projects == *claude_projects && cache.antigravity_projects == *antigravity_projects {
+    if cache.claude_projects == *claude_projects {
         return false;
     }
     cache.entries.clear();
     cache.claude_projects = claude_projects.clone();
-    cache.antigravity_projects = antigravity_projects.clone();
     true
 }
 
@@ -4180,7 +4029,6 @@ fn sync_aux_generation(
 fn parse_session_file(
     path: &std::path::Path,
     tool: &str,
-    antigravity_project_map: &std::collections::HashMap<String, String>,
     claude_project_map: &std::collections::HashMap<String, String>,
 ) -> Option<SavedSession> {
     match tool {
@@ -4189,7 +4037,6 @@ fn parse_session_file(
         "codebuddy"   => parse_codebuddy_session_jsonl(path),
         "pi" | "omp"  => parse_pi_session_jsonl(path, tool),
         "qwen"        => parse_qwen_session_jsonl(path),
-        "antigravity" => parse_gemini_session_jsonl(path, antigravity_project_map),
         other         => parse_agent_jsonl(path, other, claude_project_map),
     }
 }
@@ -4201,7 +4048,6 @@ fn parse_session_cached(
     cache: &mut SessionParseCache,
     path: &std::path::Path,
     tool: &str,
-    antigravity_project_map: &std::collections::HashMap<String, String>,
     claude_project_map: &std::collections::HashMap<String, String>,
 ) -> Option<SavedSession> {
     let before = file_stamp(path);
@@ -4211,7 +4057,7 @@ fn parse_session_cached(
         }
     }
     cache.entries.remove(path);
-    let session = parse_session_file(path, tool, antigravity_project_map, claude_project_map)?;
+    let session = parse_session_file(path, tool, claude_project_map)?;
     if let Some(stamp) = before {
         // A writer may append/replace the transcript during parsing. Never
         // associate that result with an earlier snapshot of the file.
@@ -4242,15 +4088,6 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
     file_candidates.sort_by(|a, b| b.0.cmp(&a.0));
     file_candidates.truncate(HISTORY_LIMIT);
 
-    // Lazy-load the Antigravity / Gemini project-hash → cwd map only
-    // if we actually have antigravity candidates — file I/O isn't
-    // free and not every user has agy on this machine.
-    let antigravity_project_map = if file_candidates.iter().any(|(_, _, t)| *t == "antigravity") {
-        load_gemini_project_map()
-    } else {
-        std::collections::HashMap::new()
-    };
-
     // Same treatment for Claude's encoded-folder → real-cwd registry: read and
     // encode `~/.claude.json` ONCE (not per empty-cwd session), and only if
     // there are Claude candidates that might need the fallback at all.
@@ -4268,7 +4105,7 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
         Some(c) => c,
         None => &mut fallback,
     };
-    sync_aux_generation(cache, &claude_project_map, &antigravity_project_map);
+    sync_aux_generation(cache, &claude_project_map);
 
     let mut keep_paths: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::with_capacity(file_candidates.len());
@@ -4278,7 +4115,6 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
             cache,
             path,
             tool,
-            &antigravity_project_map,
             &claude_project_map,
         );
         if let Some(session) = parsed {

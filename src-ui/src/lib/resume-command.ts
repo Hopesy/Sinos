@@ -19,7 +19,6 @@ interface ResumeShape {
 
 const RESUME_SHAPES: Record<string, ResumeShape> = {
   claude:      { program: 'claude',  argsBefore: ['--resume'] },
-  antigravity: { program: 'agy',     argsBefore: ['--conversation'] },
   hermes:      { program: 'hermes',  argsBefore: ['--resume'] },
   opencode:    { program: 'opencode', argsBefore: ['--session'] },
   mimocode:    { program: 'mimo',    argsBefore: ['--session'] },
