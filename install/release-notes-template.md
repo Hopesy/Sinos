@@ -1,54 +1,59 @@
 <details open>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-### Coffee CLI v3.5.3
+### Coffee CLI v3.5.5
 
-- **补上 Cline 启动入口。** 修复 Cline 未出现在 Agent 选择列表的问题，恢复选择与置顶操作。
-- **扩展 Orca 残留清理。** 启动时清理已识别的 Orca hook 和插件，补齐 Pi、Oh-My-Pi、Prime Agent 等扩展及旧版配置、备份中的残留；Orca 正在运行时跳过。
-- **保留用户配置与数据。** 清理保留用户 hook、扩展、登录信息和会话记录，处理混合 JSONC 配置、Windows 编码命令及 TOML 路径转义，并修正 Codex 清理后的 hook 信任记录索引。
+- **优化明亮与透明主题。** 主工作区、侧栏和会话记录使用更清晰的两层配色；Glass/Frost 搜索控件与工具卡采用一致的淡玻璃质感。
+- **改进会话记录交互。** 悬停反馈恢复，删除按钮移至标题右侧，长标题渐隐让位且无多余动画。
+- **修复 Qwen 输入光标。** 仅对确认会自行绘制光标的 TUI 隐藏 xterm 光标，其他工具默认显示静态光标。
+- **Antigravity 调整为 T3。** 保留 `agy` 一键启动，移除不稳定的私有历史、恢复、热力图和协议配置支持。
 
 </details>
 
 <details>
 <summary><b>🇬🇧 English</b></summary>
 
-### Coffee CLI v3.5.3
+### Coffee CLI v3.5.5
 
-- **Restore Cline in the launchpad.** Cline appears in the agent picker again, with selection and pin controls restored.
-- **Expand Orca residue cleanup.** Startup cleanup removes recognized Orca hooks and plugins, including Pi, Oh-My-Pi, and Prime Agent extensions, legacy configuration entries, and backup residue. Cleanup is skipped while Orca is running.
-- **Preserve user configuration and data.** Keep user hooks, extensions, credentials, and sessions while handling mixed JSONC files, Windows encoded commands, and escaped TOML paths. Codex hook trust indices stay aligned after cleanup.
+- **Refine light and translucent themes.** The workspace, side rails, and session history now use a clearer two-surface hierarchy; Glass/Frost search controls match the launchpad's subtle glass treatment.
+- **Improve session history interactions.** Hover feedback is restored, the delete action sits beside the title, and long titles fade into it without extra animation.
+- **Restore the Qwen input cursor.** xterm's cursor is hidden only for verified TUIs that draw their own caret; every other tool shows a static cursor by default.
+- **Move Antigravity to T3.** Keep one-click `agy` launch while removing unstable private history, resume, heatmap, and protocol-configuration support.
 
 </details>
 
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-### Coffee CLI v3.5.3
+### Coffee CLI v3.5.5
 
-- **補回 Cline 啟動入口。** 修復 Cline 未出現在 Agent 選擇清單的問題，恢復選擇與置頂操作。
-- **擴充 Orca 殘留清理。** 啟動時清理已識別的 Orca hook 與外掛，補齊 Pi、Oh-My-Pi、Prime Agent 等擴充及舊版設定、備份中的殘留；Orca 執行中時跳過。
-- **保留使用者設定與資料。** 保留使用者 hook、擴充、登入資訊與工作階段，處理混合 JSONC 設定、Windows 編碼命令及 TOML 路徑跳脫，並修正 Codex 清理後的 hook 信任記錄索引。
+- **改善明亮與透明主題。** 主工作區、側欄與工作階段記錄改用更清楚的雙層配色；Glass/Frost 搜尋控制項與工具卡採用一致的淡玻璃質感。
+- **改善工作階段記錄互動。** 恢復懸停回饋，刪除按鈕移至標題右側，長標題以漸隱讓位且沒有多餘動畫。
+- **修復 Qwen 輸入游標。** 只有確認會自行繪製游標的 TUI 才隱藏 xterm 游標，其他工具預設顯示靜態游標。
+- **Antigravity 調整為 T3。** 保留 `agy` 一鍵啟動，移除不穩定的私有歷史、恢復、熱力圖與協定設定支援。
 
 </details>
 
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-### Coffee CLI v3.5.3
+### Coffee CLI v3.5.5
 
-- **Cline の起動項目を復元。** エージェント選択一覧に Cline が表示されない問題を修正し、選択とピン留めを復元しました。
-- **Orca の残留ファイルのクリーンアップを拡充。** 起動時に識別可能な Orca の hook やプラグインを削除します。Pi、Oh-My-Pi、Prime Agent の拡張機能、旧設定やバックアップ内の残留項目にも対応。Orca の実行中はスキップします。
-- **ユーザーの設定とデータを保持。** ユーザーの hook、拡張機能、認証情報、セッションを保持し、混在した JSONC 設定、Windows のエンコード済みコマンド、TOML パスのエスケープを処理します。削除後の Codex hook の信頼記録のインデックスも整合させます。
+- **ライト／透明テーマを改善。** ワークスペース、サイドバー、セッション履歴を明確な2層配色に整理し、Glass/Frost の検索操作をツールカードと同じ淡いガラス表現に統一しました。
+- **セッション履歴の操作性を改善。** ホバー表示を復元し、削除ボタンをタイトル右側へ移動。長いタイトルはアニメーションなしで自然にフェードします。
+- **Qwen の入力カーソルを修正。** 独自カーソルを描画すると確認済みの TUI のみ xterm カーソルを隠し、それ以外は静的カーソルを表示します。
+- **Antigravity を T3 に変更。** `agy` のワンクリック起動を残し、不安定な非公開の履歴・再開・ヒートマップ・プロトコル設定対応を削除しました。
 
 </details>
 
 <details>
 <summary><b>🇰🇷 한국어</b></summary>
 
-### Coffee CLI v3.5.3
+### Coffee CLI v3.5.5
 
-- **Cline 실행 항목 복원.** 에이전트 선택 목록에서 Cline이 누락된 문제를 수정하고 선택 및 고정 기능을 복원했습니다.
-- **Orca 잔여 항목 정리 확대.** 시작 시 식별된 Orca hook과 플러그인을 정리합니다. Pi, Oh-My-Pi, Prime Agent 확장과 이전 설정 및 백업의 잔여 항목도 처리하며, Orca 실행 중에는 건너뜁니다.
-- **사용자 설정과 데이터 보존.** 사용자 hook, 확장, 인증 정보와 세션을 유지하면서 혼합 JSONC 설정, Windows 인코딩 명령과 TOML 경로 이스케이프를 처리합니다. 정리 후 Codex hook 신뢰 기록의 인덱스도 올바르게 맞춥니다.
+- **밝은 테마와 투명 테마 개선.** 작업 공간, 사이드바, 세션 기록을 명확한 2단계 표면으로 정리하고 Glass/Frost 검색 컨트롤을 도구 카드와 같은 은은한 유리 스타일로 통일했습니다.
+- **세션 기록 상호작용 개선.** 호버 피드백을 복원하고 삭제 버튼을 제목 오른쪽으로 이동했으며, 긴 제목은 추가 애니메이션 없이 자연스럽게 흐려집니다.
+- **Qwen 입력 커서 복원.** 자체 커서를 그리는 것으로 확인된 TUI에서만 xterm 커서를 숨기고, 나머지 도구는 기본적으로 정적 커서를 표시합니다.
+- **Antigravity를 T3로 조정.** `agy` 원클릭 실행은 유지하고 불안정한 비공개 기록, 재개, 히트맵 및 프로토콜 설정 지원은 제거했습니다.
 
 </details>
