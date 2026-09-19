@@ -249,15 +249,20 @@ const SvgAntigravity = () => inlineSvgIcon(ANTIGRAVITY_SVG);
 // (see bgIcon). Hermes uses `cover` to fill the rounded square.
 const SvgHermes      = () => bgIcon(HERMES_DATA_URL, '1em', { borderRadius: 'var(--radius-xs)', backgroundSize: 'cover' });
 // Additional tool icons. Monochrome marks (Pi, Copilot) are inline SVG
-// using currentColor so they follow the theme; raster brand marks render via
-// bgIcon with a rounded square to match the other PNG-backed icons.
+// using currentColor so they follow the theme; raster brand marks render via bgIcon.
 const SvgPi        = () => inlineSvgIcon(PI_SVG);
 const SvgCopilot   = () => inlineSvgIcon(COPILOT_SVG);
 const SvgGrok       = () => inlineSvgIcon(GROK_SVG);
 const SvgAider     = () => bgIcon(AIDER_DATA_URL, '1em', { borderRadius: 'var(--radius-xs)' });
 const SvgKimi      = () => bgIcon(KIMICODE_DATA_URL, '1em', { borderRadius: 'var(--radius-xs)' });
 const SvgCrush     = () => bgIcon(CRUSH_DATA_URL, '1em', { borderRadius: 'var(--radius-xs)' });
-const SvgGoose     = () => bgIcon(GOOSE_DATA_URL, '1em', { borderRadius: 'var(--radius-xs)' });
+// Goose is a monochrome PNG, so its alpha channel masks the inherited theme color.
+const SvgGoose     = () => bgIcon(GOOSE_DATA_URL, '1em', {
+  backgroundImage: 'none',
+  backgroundColor: 'currentColor',
+  WebkitMask: `url(${GOOSE_DATA_URL}) center / contain no-repeat`,
+  mask: `url(${GOOSE_DATA_URL}) center / contain no-repeat`,
+});
 // Cursor / Cline are monochrome currentColor marks (like Grok) so they follow
 // the theme text color via inline SVG; Oh-My-Pi keeps its full-color gradient.
 const SvgCursor    = () => inlineSvgIcon(CURSOR_SVG);
