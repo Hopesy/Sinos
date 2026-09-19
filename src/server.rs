@@ -1364,6 +1364,11 @@ fn parse_agent_jsonl(
     let mut updated_at = String::new();
     let mut created_at = None;
     let mut title = String::new();
+    // Titles Claude Code writes into the transcript itself: `ai-title` rows
+    // (generated, rewritten as the session evolves) and `custom-title` rows
+    // (`/rename`). The last row of each kind wins.
+    let mut custom_title = String::new();
+    let mut ai_title = String::new();
     let mut total_messages = 0;
     // Count of REAL user messages — ones that are not IDE/system injections
     // (compaction prompt, AGENTS.md, environment_context, etc.). A session
@@ -1383,6 +1388,24 @@ fn parse_agent_jsonl(
             }
             if let Some(c) = value.get("cwd").and_then(|v| v.as_str()) {
                 if cwd.is_empty() && !c.is_empty() { cwd = c.to_string(); }
+            }
+            let row_title = |key: &str| -> Option<String> {
+                value.get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            };
+            match value.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "custom-title" => {
+                    if let Some(t) = row_title("customTitle") { custom_title = t; }
+                    continue;
+                }
+                "ai-title" => {
+                    if let Some(t) = row_title("aiTitle") { ai_title = t; }
+                    continue;
+                }
+                _ => {}
             }
             let mut maybe_msg_obj = value.get("message").and_then(|v| v.as_object());
             if maybe_msg_obj.is_none() {
@@ -1499,6 +1522,14 @@ fn parse_agent_jsonl(
         }
     }
 
+    // Title precedence mirrors the CLI's own: a user rename wins over a
+    // generated title, and both win over the first prompt — so the row reads
+    // the same here as in the CLI's own session picker.
+    if !custom_title.is_empty() {
+        title = custom_title;
+    } else if !ai_title.is_empty() {
+        title = ai_title;
+    }
     if title.is_empty() {
         let mut chars = tool_name.chars();
         let cap_name = match chars.next() {
@@ -1966,6 +1997,44 @@ fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
     })
+}
+
+/// Thread names Codex keeps for its own session picker, keyed by thread id.
+/// `~/.codex/session_index.jsonl` is append-only — one
+/// `{"id", "thread_name", "updated_at"}` row per (re)naming — so a later row
+/// for the same id replaces the earlier one.
+fn parse_codex_thread_names(index: &str) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    for line in index.lines() {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let field = |key: &str| {
+            row.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty())
+        };
+        if let (Some(id), Some(name)) = (field("id"), field("thread_name")) {
+            names.insert(id.to_string(), name.to_string());
+        }
+    }
+    names
+}
+
+/// Replace the first-prompt title of Codex rows with the thread name Codex
+/// itself shows. Applied to the finished list rather than inside
+/// `parse_codex_session_jsonl` because the name lives outside the rollout
+/// file: a rename leaves the rollout's stamp untouched, so a name baked into
+/// the per-file parse cache would go stale.
+fn apply_codex_thread_names(home: &std::path::Path, sessions: &mut [SavedSession]) {
+    if !sessions.iter().any(|s| s.tool == "codex") {
+        return;
+    }
+    let Ok(index) = std::fs::read_to_string(home.join(".codex").join("session_index.jsonl")) else {
+        return;
+    };
+    let names = parse_codex_thread_names(&index);
+    for session in sessions.iter_mut().filter(|s| s.tool == "codex") {
+        if let Some(name) = session.session_token.as_ref().and_then(|id| names.get(id)) {
+            session.name = name.clone();
+        }
+    }
 }
 
 /// Whether a Codex `session_meta` payload describes an internal sub-agent
@@ -4126,6 +4195,10 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
     // can't grow without bound across a long-running session.
     cache.entries.retain(|k, _| keep_paths.contains(k));
 
+    if let Some(home) = home.as_ref() {
+        apply_codex_thread_names(home, &mut result);
+    }
+
     // OpenCode second pass — SQLite is cheap (query already caps rows).
     // Bypasses the mtime pipeline: find_opencode_sessions pushes finished
     // SavedSession objects directly.
@@ -5805,6 +5878,82 @@ mod tests {
         let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("real session kept");
         assert_eq!(got.name, "修复一下历史记录的 bug");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Row shapes below are copied from real Claude Code transcripts.
+    #[test]
+    fn claude_native_title_beats_first_prompt() {
+        let dir = std::env::temp_dir().join(format!("coffee-cli-title-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"帮我看看历史记录为什么少了几条\"}}";
+
+        let f = dir.join("ai-title.jsonl");
+        write_jsonl(&f, &[
+            "{\"type\":\"ai-title\",\"aiTitle\":\"排查历史记录\",\"sessionId\":\"ai-title\"}",
+            user,
+            "{\"type\":\"ai-title\",\"aiTitle\":\"历史记录缺失排查\",\"sessionId\":\"ai-title\"}",
+        ]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "历史记录缺失排查", "the last generated title wins");
+        assert_eq!(got.turn_count, Some(1), "title rows are not messages");
+
+        let f = dir.join("custom-title.jsonl");
+        write_jsonl(&f, &[
+            user,
+            "{\"type\":\"custom-title\",\"customTitle\":\"历史记录｜扫描稳定性\",\"sessionId\":\"custom-title\"}",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"历史记录缺失排查\",\"sessionId\":\"custom-title\"}",
+        ]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "历史记录｜扫描稳定性", "a user rename beats a generated title");
+
+        let f = dir.join("blank-title.jsonl");
+        write_jsonl(&f, &[user, "{\"type\":\"ai-title\",\"aiTitle\":\"  \",\"sessionId\":\"blank-title\"}"]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "帮我看看历史记录为什么少了几条", "a blank title falls back to the first prompt");
+
+        // A title row is not a conversation: still a phantom without a real user line.
+        let f = dir.join("title-only.jsonl");
+        write_jsonl(&f, &["{\"type\":\"ai-title\",\"aiTitle\":\"Orphan\",\"sessionId\":\"title-only\"}"]);
+        assert!(parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_thread_names_overlay_first_prompt_titles() {
+        let names = parse_codex_thread_names(concat!(
+            "{\"id\":\"t1\",\"thread_name\":\"修正 Codex 本地代理配置\",\"updated_at\":\"2026-09-19T10:31:30Z\"}\n",
+            "not json\n",
+            "{\"id\":\"t2\",\"thread_name\":\"  \"}\n",
+            "{\"id\":\"t1\",\"thread_name\":\"Codex代理｜核对本地地址绕过配置\",\"updated_at\":\"2026-09-19T10:33:37Z\"}\n",
+        ));
+        assert_eq!(names.len(), 1, "blank names and malformed rows are skipped");
+        assert_eq!(names["t1"], "Codex代理｜核对本地地址绕过配置", "a later row renames the thread");
+
+        let home = std::env::temp_dir().join(format!("coffee-cli-codex-index-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex").join("session_index.jsonl"),
+            "{\"id\":\"t1\",\"thread_name\":\"Codex代理｜核对本地地址绕过配置\"}\n",
+        ).unwrap();
+        let row = |tool: &str, token: &str| SavedSession {
+            id: format!("{}_native_{}", tool, token),
+            name: "first prompt".to_string(),
+            tool: tool.to_string(),
+            cwd: String::new(),
+            session_token: Some(token.to_string()),
+            saved_at: String::new(),
+            created_at: None,
+            file_path: None,
+            turn_count: None,
+        };
+        let mut sessions = vec![row("codex", "t1"), row("codex", "unnamed"), row("claude", "t1")];
+        apply_codex_thread_names(&home, &mut sessions);
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(sessions[0].name, "Codex代理｜核对本地地址绕过配置");
+        assert_eq!(sessions[1].name, "first prompt", "threads absent from the index keep their title");
+        assert_eq!(sessions[2].name, "first prompt", "other tools are never touched");
     }
 
     #[test]
