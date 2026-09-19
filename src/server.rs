@@ -2022,11 +2022,14 @@ fn parse_codex_thread_names(index: &str) -> std::collections::HashMap<String, St
 /// `parse_codex_session_jsonl` because the name lives outside the rollout
 /// file: a rename leaves the rollout's stamp untouched, so a name baked into
 /// the per-file parse cache would go stale.
-fn apply_codex_thread_names(home: &std::path::Path, sessions: &mut [SavedSession]) {
+fn apply_codex_thread_names(history_dir: &std::path::Path, sessions: &mut [SavedSession]) {
     if !sessions.iter().any(|s| s.tool == "codex") {
         return;
     }
-    let Ok(index) = std::fs::read_to_string(home.join(".codex").join("session_index.jsonl")) else {
+    // The index is a sibling of the configured sessions directory. Never
+    // fall back to another profile's index when the matching index is absent.
+    let Some(profile_dir) = history_dir.parent() else { return };
+    let Ok(index) = std::fs::read_to_string(profile_dir.join("session_index.jsonl")) else {
         return;
     };
     let names = parse_codex_thread_names(&index);
@@ -4196,7 +4199,11 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
     cache.entries.retain(|k, _| keep_paths.contains(k));
 
     if let Some(home) = home.as_ref() {
-        apply_codex_thread_names(home, &mut result);
+        if let Some(tool) = crate::tools::find("codex") {
+            if let Some(shape) = tool.history_shape.as_ref() {
+                apply_codex_thread_names(&history_root(tool, shape, home), &mut result);
+            }
+        }
     }
 
     // OpenCode second pass — SQLite is cheap (query already caps rows).
@@ -5949,7 +5956,7 @@ mod tests {
             turn_count: None,
         };
         let mut sessions = vec![row("codex", "t1"), row("codex", "unnamed"), row("claude", "t1")];
-        apply_codex_thread_names(&home, &mut sessions);
+        apply_codex_thread_names(&home.join(".codex/sessions"), &mut sessions);
         let _ = std::fs::remove_dir_all(&home);
         assert_eq!(sessions[0].name, "Codex代理｜核对本地地址绕过配置");
         assert_eq!(sessions[1].name, "first prompt", "threads absent from the index keep their title");
