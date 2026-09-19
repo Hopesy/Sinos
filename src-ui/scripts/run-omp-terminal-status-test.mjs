@@ -1,4 +1,4 @@
-/** Exercise OMP's production title callback, submission handling and reducer. */
+/** Exercise OMP/Claude's production title callback, submission handling and reducer. */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ const bundle = await build({
   stdin: {
     contents: `
       export { parseOmpTerminalTitle } from './src/lib/omp-terminal-title';
+      export { parseClaudeTerminalTitle } from './src/lib/claude-terminal-title';
       export { supportsAgentStatus } from './src/store/app-state';
     `,
     resolveDir: fileURLToPath(new URL('..', import.meta.url)),
@@ -78,9 +79,28 @@ const staticState = omp.state();
 omp.submit(); omp.flushTimers();
 assert.equal(omp.state(), staticState, 'disabled title reporting must not guess activity from Enter');
 
+const claude = fixture('claude');
+claude.title('◐ Codex 技能汉化'); claude.expectStatus('working');
+const claudeWorkingState = claude.state();
+for (const frame of ['◑', '◐', '⠂', '⠐']) {
+  claude.title(`${frame} Codex 技能汉化`);
+  claude.expectStatus('working');
+  assert.equal(claude.state(), claudeWorkingState, 'Claude spinner frames keep state and title stable');
+}
+assert.equal(claude.actions.filter(action => action.type === 'SET_TAB_TITLE').length, 1);
+assert.equal(claude.actions.find(action => action.type === 'SET_TAB_TITLE').title, 'Codex 技能汉化');
+claude.submit(); claude.flushTimers(); claude.expectStatus('working');
+claude.title('✳ Codex 技能汉化'); claude.expectStatus('idle');
+claude.title('◑ Next turn'); claude.expectStatus('working');
+claude.title('✳ Next turn'); claude.expectStatus('idle');
+for (const title of ['', 'Claude Code', 'Notes ◐ inside', '◐prefix is not a status']) {
+  assert.deepEqual(production.parseClaudeTerminalTitle(title), { status: 'idle', displayTitle: title });
+}
+assert.deepEqual(production.parseClaudeTerminalTitle('  ◑  中文标题  '), { status: 'working', displayTitle: '中文标题' });
+
 for (const tool of ['claude', 'codex', 'kimicode']) {
   const other = fixture(tool);
   other.submit(); other.expectStatus('working');
   other.flushTimers(); other.expectStatus('idle');
 }
-console.log('OK: OMP title lifecycle, pending selectors, empty Enter, state/title deduplication, and existing-tool submission behavior');
+console.log('OK: OMP/Claude title lifecycle, current/legacy Claude frames, pending selectors, empty Enter, state/title deduplication, and existing-tool submission behavior');
