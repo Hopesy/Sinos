@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn codex_titles_follow_history_root_and_refresh_cached_sessions() {
+    let home = temp_jsonl("codex-title-root").with_extension("");
+    let default_root = home.join(".codex/sessions");
+    let custom_root = home.join("custom-codex/sessions");
+    std::fs::create_dir_all(&default_root).unwrap();
+    std::fs::create_dir_all(&custom_root).unwrap();
+    let path = custom_root.join("rollout.jsonl");
+    write_jsonl(&path, &[CODEX_HEADER, CODEX_USER]);
+    let default_index = default_root.parent().unwrap().join("session_index.jsonl");
+    let custom_index = custom_root.parent().unwrap().join("session_index.jsonl");
+    write_jsonl(&default_index, &[
+        r#"{"id":"sess-resume","thread_name":"Old default profile title"}"#,
+    ]);
+    let mut cache = new_cache();
+    let stamp = file_stamp(&path).unwrap();
+
+    for title in ["Custom profile title", "Renamed custom title"] {
+        write_jsonl(&custom_index, &[
+            &serde_json::json!({"id": "sess-resume", "thread_name": title}).to_string(),
+        ]);
+        let mut sessions = vec![scan_once(&mut cache, &path, "codex").unwrap()];
+        apply_codex_thread_names(&custom_root, &mut sessions);
+        assert_eq!(sessions[0].name, title, "use the index belonging to the history root");
+        assert!(file_stamp(&path).as_ref() == Some(&stamp), "only the index changed");
+        assert_eq!(cache.entries[&path].session.name, "add retry backoff");
+    }
+
+    // A missing custom index must not pick up stale names from the default store.
+    std::fs::remove_file(&custom_index).unwrap();
+    let mut sessions = vec![scan_once(&mut cache, &path, "codex").unwrap()];
+    apply_codex_thread_names(&custom_root, &mut sessions);
+    assert_eq!(sessions[0].name, "add retry backoff");
+
+    // The same resolver still reads titles for the standard ~/.codex/sessions layout.
+    apply_codex_thread_names(&default_root, &mut sessions);
+    assert_eq!(sessions[0].name, "Old default profile title");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn omp_history_preserves_identity_titles_and_counts_only_messages() {
     let path = temp_jsonl("omp");
     write_jsonl(&path, &[
