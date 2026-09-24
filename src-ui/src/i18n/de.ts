@@ -105,6 +105,7 @@ export const de = {
   'settings.wallpaper': 'Hintergrund',
   'settings.terminal': 'Terminal',
   'settings.gambit': 'Tastenkürzel',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Sprache',
   'settings.sound': 'Sound',
   'settings.sound.done': 'Ton bei Aufgabenabschluss',

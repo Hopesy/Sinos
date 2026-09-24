@@ -1,0 +1,10 @@
+﻿import { writeFileSync } from 'node:fs';
+import nacl from 'tweetnacl';
+import { sealFrame } from '../../src-ui/src/remote/pair/crypto';
+import { toBase64Url } from '../../src-ui/src/remote/pair/encoding';
+const secret = new Uint8Array(32).fill(7), key = new Uint8Array(32).fill(9);
+const host = nacl.box.keyPair.fromSecretKey(secret), guest = nacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(11));
+const nonce = new Uint8Array(24).fill(13), boxed = nacl.box(key, nonce, host.publicKey, guest.secretKey);
+const payload = { type: 'request', id: 'interop', text: '手机与 Rust 互通', seq: 1 };
+const frame = await sealFrame(key, payload);
+writeFileSync('test/crypto-vector.json', JSON.stringify({ secret: toBase64Url(secret), key: toBase64Url(key), boxed: [guest.publicKey, nonce, boxed].map(toBase64Url).join('.'), frame: toBase64Url(frame), payload }, null, 2));

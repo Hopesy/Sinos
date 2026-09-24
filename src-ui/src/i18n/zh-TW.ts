@@ -103,6 +103,7 @@ export const zhTW = {
   'settings.appearance': '外觀',
   'settings.wallpaper': '桌布',
   'settings.terminal': '終端',
+  'settings.remote': 'Mobile Remote',
   'settings.language': '語言',
   'settings.sound': '聲音',
   'settings.sound.done': '任務完成提示音',

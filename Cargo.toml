@@ -21,7 +21,13 @@ tauri-build = { version = "2", features = [] }
 portable-pty = "0.9"
 # Only `task::spawn_blocking` is used by the system-font scanner. The old
 # loopback hook server and its network/runtime features have been removed.
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = { version = "0.3", features = ["sink"] }
+aes-gcm = "0.10"
+crypto_box = "0.9"
+url = "2"
+tower = { version = "0.5", features = ["util"] }
 
 # Regex (used by terminal.rs for ANSI strip)
 regex = "1"
@@ -62,14 +68,14 @@ notify = "6.1.1"
 # single handler callback so the frontend doesn't re-scan 50 times.
 notify-debouncer-full = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = "3"
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 
 # Multi-agent MCP server (v1.0: 3 tools, HTTP Streamable transport)
 # See docs/MULTI-AGENT-ARCHITECTURE.md §5.5 for why HTTP over stdio.
 # Note: schemars is NOT a direct dep — we use rmcp's re-exported schemars
 # to avoid version conflicts (rmcp 0.8 uses schemars 1.x internally).
 rmcp = { version = "0.8", features = ["server", "macros", "transport-streamable-http-server"] }
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 uuid = { version = "1", features = ["v4"] }
 
 [profile.release]

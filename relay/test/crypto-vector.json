@@ -1,0 +1,12 @@
+{
+  "secret": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "key": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+  "boxed": "c7LYt2qptTZgAyvI9di-46OuTjs6f9Sa3oH3NHo0qmg.DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0N.iZqxZnWo69dToxrh9-mRoO0NyVxwJMeqCowas2vGmMwf-UtcILF2QbndyGsTTyaC",
+  "frame": "Aa2r0TarkrhiPUnq8-LQXxz2JcnRe9ogKjh6N5pa_buuV81IwqFbALZRuRn-fx3FOz3XNnXxWV0wdp3siWJuDbmSKn49lEnd-FMRy8dsEXJxc5wqkPknYl75Y9hqqcyozakqoQM",
+  "payload": {
+    "type": "request",
+    "id": "interop",
+    "text": "手机与 Rust 互通",
+    "seq": 1
+  }
+}

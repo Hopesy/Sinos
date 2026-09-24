@@ -104,6 +104,7 @@ export const fr = {
   'settings.wallpaper': "Fond d'écran",
   'settings.terminal': 'Terminal',
   'settings.gambit': 'Raccourcis',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Langue',
   'settings.sound': 'Son',
   'settings.sound.done': 'Sonnerie de tâche terminée',

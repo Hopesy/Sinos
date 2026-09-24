@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -440,6 +440,10 @@ pub fn find_preset(tool_name: &str) -> Option<&'static AgentPreset> {
 // ─── Shared Session State ─────────────────────────────────
 
 pub struct TerminalSession {
+    pub mobile_runtime: Arc<Mutex<crate::remote_runtime::Runtime>>,
+    /// Stable workspace shared with the mobile file browser.
+    pub cwd: String,
+    pub chat_source: Mutex<Option<crate::server::SavedSession>>,
     /// Cloneable Arc for write operations — lets callers release the session map
     /// lock before doing PTY I/O, preventing multi-tab starvation.
     pub writer_lock: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -467,6 +471,16 @@ pub struct TerminalSession {
     /// confirmed. The observer fires within a frame or two for a genuinely
     /// visible tab, so the visible-tab throttled window is tiny.
     pub is_tab_active: Arc<AtomicBool>,
+    /// True while the attached process tree is suspended. Shared by the
+    /// desktop UI and the remote mobile controller so both surfaces render
+    /// the same lifecycle state.
+    pub paused: Arc<AtomicBool>,
+    /// Monotonic number of output batches written to `output_buffer`. Remote
+    /// WebSocket clients use it to detect ring-buffer rollover without
+    /// dropping or replaying chunks when the 2000-entry cap is reached.
+    pub output_sequence: Arc<AtomicU64>,
+    /// Each projected mobile choice can be applied once per output snapshot.
+    pub answered_output_sequence: Arc<AtomicU64>,
     /// Ring buffer of recent base64-encoded output chunks. Originally
     /// populated for DetachedTerminal's history replay (retired 2026-04)
     /// and the MCP `read_pane` tool (also archived). Currently referenced
@@ -973,6 +987,8 @@ pub fn spawn(
 
     // Store session with shared writer reference and master kept alive.
     let output_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let output_sequence: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    let mobile_runtime = Arc::new(Mutex::new(crate::remote_runtime::Runtime::new()));
     {
         let writer_clone = writer.clone();
         let master_clone = master_arc.clone();
@@ -981,6 +997,10 @@ pub fn spawn(
         map.insert(
             session_id.clone(),
             TerminalSession {
+                mobile_runtime: mobile_runtime.clone(),
+                chat_source: Mutex::new(None),
+                cwd: cwd.as_ref().filter(|dir| std::path::Path::new(dir).is_dir()).cloned()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned()),
                 writer_lock: writer_clone,
                 kill_tx,
                 process_id,
@@ -989,6 +1009,9 @@ pub fn spawn(
                 _master: master_clone,
                 output_buffer: buffer_clone,
                 is_tab_active: is_tab_active.clone(),
+                paused: Arc::new(AtomicBool::new(false)),
+                output_sequence: output_sequence.clone(),
+                answered_output_sequence: Arc::new(AtomicU64::new(u64::MAX)),
             },
         );
     }
@@ -1078,6 +1101,7 @@ pub fn spawn(
     let app_out = app.clone();
     let session_id_out = session_id.clone();
     let output_buffer_for_emitter = output_buffer.clone();
+    let output_sequence_for_emitter = output_sequence.clone();
     let is_active_for_emitter = is_tab_active.clone();
 
     std::thread::spawn(move || {
@@ -1175,6 +1199,7 @@ pub fn spawn(
                 let cwd_change = extract_osc7_cwd(&pending[..valid_end]);
 
                 let data = String::from_utf8_lossy(&pending[..valid_end]).to_string();
+                if let Ok(mut runtime) = mobile_runtime.lock() { runtime.observe_output(&data, tool_name.as_deref().unwrap_or("")); }
                 let stripped = ansi_re.replace_all(&data, "").to_string();
 
                 // Session token capture (once per session, for `--resume`).
@@ -1217,6 +1242,7 @@ pub fn spawn(
                         let drain = ring.len() - 2000;
                         ring.drain(..drain);
                     }
+                    output_sequence_for_emitter.fetch_add(1, Ordering::Relaxed);
                 }
 
                 if let Some(new_cwd) = cwd_change {

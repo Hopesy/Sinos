@@ -68,6 +68,14 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Browser-mode `/remote` talks to the Rust bridge during development.
+    // Tauri itself still uses IPC and never goes through this proxy.
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8787',
+        ws: true,
+      },
+    },
   },
   // Allow Tauri IPC
   envPrefix: ['VITE_', 'TAURI_'],
@@ -89,6 +97,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
+        remote: resolve(__dirname, 'remote/index.html'),
       },
     },
   },

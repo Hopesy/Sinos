@@ -104,6 +104,7 @@ export const ko = {
   'settings.wallpaper': '배경화면',
   'settings.terminal': '터미널',
   'settings.gambit': '단축키',
+  'settings.remote': 'Mobile Remote',
   'settings.language': '언어',
   'settings.sound': '소리',
   'settings.sound.done': '작업 완료 알림음',

@@ -107,6 +107,7 @@ export const vi = {
   'settings.wallpaper': 'Hình nền',
   'settings.terminal': 'Terminal',
   'settings.gambit': 'Phím tắt',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Ngôn ngữ',
   'settings.sound': 'Âm thanh',
   'settings.sound.done': 'Chuông khi hoàn thành tác vụ',

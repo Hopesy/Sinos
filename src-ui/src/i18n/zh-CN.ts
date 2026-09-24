@@ -139,6 +139,7 @@ export const zhCN = {
   'settings.appearance': '外观',
   'settings.wallpaper': '壁纸',
   'settings.terminal': '终端',
+  'settings.remote': '移动端',
   'settings.language': '语言',
   'settings.sound': '声音',
   'settings.sound.done': '任务完成提示音',

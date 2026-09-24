@@ -33,6 +33,9 @@ pub struct LaunchRequest {
     pub tool: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Mobile launches reserve an ID so the phone can select the exact tab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Parse a `launch` subcommand from a raw argv (with or without argv[0]).
@@ -83,7 +86,7 @@ pub fn parse_launch_args(args: &[String]) -> Option<LaunchRequest> {
             return None;
         }
     }
-    Some(LaunchRequest { tool, cwd })
+    Some(LaunchRequest { tool, cwd, session_id: None })
 }
 
 #[cfg(test)]

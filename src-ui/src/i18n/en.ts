@@ -176,6 +176,7 @@ export const en = {
   'settings.appearance': 'Appearance',
   'settings.wallpaper': 'Wallpaper',
   'settings.terminal': 'Terminal',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Language',
   'settings.sound': 'Sound',
   'settings.sound.done': 'Task complete chime',

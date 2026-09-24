@@ -21,9 +21,10 @@ import { TERM_COLOR_SCHEMES } from '../center/TierTerminal';
 import { commands, type FontInfo } from '../../tauri';
 import { FontPicker } from './FontPicker';
 import { THEME_COLORS, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
+import { RelaySettings } from './RelaySettings';
 import './SettingsModal.css';
 
-type Section = 'appearance' | 'wallpaper' | 'terminal' | 'gambit' | 'sound' | 'tasks' | 'language' | 'feedback';
+type Section = 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'tasks' | 'language' | 'feedback';
 
 // Trailing "opens outside the app" affordance on the feedback cards.
 const ExternalLinkArrow = () => (
@@ -79,6 +80,12 @@ const ICONS: Record<Section, ReactNode> = {
   terminal: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="m7 11 2-2-2-2" /><path d="M11 13h4" /><rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+    </svg>
+  ),
+  remote: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M10 5h4M10 18h4" />
+      <path d="M3 9h2M19 9h2M3 13h2M19 13h2" />
     </svg>
   ),
   gambit: (
@@ -261,6 +268,7 @@ export function SettingsModal() {
     { id: 'appearance', label: t('settings.appearance') },
     { id: 'wallpaper',  label: t('settings.wallpaper') },
     { id: 'terminal',   label: t('settings.terminal') },
+    { id: 'remote',     label: t('settings.remote') },
     { id: 'gambit',     label: t('settings.gambit') },
     { id: 'sound',      label: t('settings.sound') },
     { id: 'tasks',      label: t('settings.tasks') },
@@ -525,6 +533,8 @@ export function SettingsModal() {
                 </div>
               </>
             )}
+
+            {section === 'remote' && <RelaySettings />}
 
             {section === 'gambit' && (
               <>

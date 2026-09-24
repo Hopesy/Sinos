@@ -6,6 +6,7 @@ export interface ChatMessage {
   content: string;
   toolName?: string;
   toolStatus?: 'running' | 'done' | 'failed';
+  output?: string;
 }
 
 export interface ChatTranscriptState {
@@ -118,13 +119,21 @@ function parseBlocks(
       const failed = block.is_error === true || block.error != null;
       if (targetIndex !== undefined) {
         const status = failed ? 'failed' : 'done';
-        if (out[targetIndex].toolStatus !== status) {
+        const output = stringValue(block.content ?? block.output ?? block.error);
+        if (out[targetIndex].toolStatus !== status || out[targetIndex].output !== output) {
           if (targetIndex < previousCount && !owned.has(targetIndex)) {
             out[targetIndex] = { ...out[targetIndex] };
             owned.add(targetIndex);
           }
           out[targetIndex].toolStatus = status;
+          out[targetIndex].output = output;
         }
+      } else {
+        // A paginated tail can begin with a result whose call is in an older
+        // page. Keep it visible; reparsing after prepend joins it to the call.
+        const resultId = id || `${rowId}:${index}`;
+        out.push({ id: resultId, role: 'tool', toolName: String(block.name ?? '工具结果'), content: '', output: stringValue(block.content ?? block.output ?? block.error), toolStatus: failed ? 'failed' : 'done' });
+        toolById.set(resultId, out.length - 1);
       }
     }
   });

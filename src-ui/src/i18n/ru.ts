@@ -105,6 +105,7 @@ export const ru = {
   'settings.wallpaper': 'Обои',
   'settings.terminal': 'Терминал',
   'settings.gambit': 'Горячие клавиши',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Язык',
   'settings.sound': 'Звук',
   'settings.sound.done': 'Сигнал о завершении задачи',

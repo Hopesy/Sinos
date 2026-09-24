@@ -10,7 +10,7 @@ const EDITOR_MAX_BYTES: usize = 5 * 1024 * 1024;
 static EDITOR_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize)]
-struct EditorFileSnapshot {
+pub(crate) struct EditorFileSnapshot {
     content: String,
     revision: String,
     line_ending: String,
@@ -20,7 +20,7 @@ struct EditorFileSnapshot {
 
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-enum EditorSaveResponse {
+pub(crate) enum EditorSaveResponse {
     Saved { revision: String, size: u64 },
     Conflict { current_revision: Option<String> },
 }
@@ -128,7 +128,7 @@ fn read_editor_bytes(path: &str, workspace_root: &str) -> Result<(PathBuf, Vec<u
 }
 
 #[tauri::command]
-fn read_editor_file(path: String, workspace_root: String) -> Result<EditorFileSnapshot, String> {
+pub(crate) fn read_editor_file(path: String, workspace_root: String) -> Result<EditorFileSnapshot, String> {
     let (_file, bytes) = read_editor_bytes(&path, &workspace_root)?;
     let has_utf8_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     let text_bytes = if has_utf8_bom { &bytes[3..] } else { &bytes[..] };
@@ -184,7 +184,7 @@ fn atomic_replace_editor_file(temp: &std::path::Path, target: &std::path::Path) 
 }
 
 #[tauri::command]
-fn write_editor_file(
+pub(crate) fn write_editor_file(
     path: String,
     workspace_root: String,
     content: String,
@@ -574,6 +574,8 @@ fn window_close(window: tauri::Window, app: tauri::AppHandle) {
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
+    #[cfg(debug_assertions)]
+    eprintln!("[main-window] frontend ready; revealing desktop window");
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -1625,10 +1627,10 @@ fn tier_terminal_input(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Grab the writer handle while holding the map lock (cheap clone, no I/O).
-    let writer_arc = {
+    let (writer_arc, runtime) = {
         let map = state.terminal_session.lock().unwrap();
         match map.get(&session_id) {
-            Some(s) => s.writer_lock.clone(),
+            Some(s) => (s.writer_lock.clone(), s.mobile_runtime.clone()),
             None => return Err(format!("No active terminal session for id: {}", session_id)),
         }
     };
@@ -1637,6 +1639,8 @@ fn tier_terminal_input(
     // PTY write may block under back-pressure, after the session-map lock has
     // already been released so other tabs remain responsive.
     use std::io::Write;
+    let mut activity = runtime.lock().map_err(|_| "Activity unavailable")?;
+    activity.desktop_input(&data);
     let mut w = writer_arc.lock().map_err(|e| format!("Writer lock poisoned: {}", e))?;
     w.write_all(data.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
     w.flush().map_err(|e| format!("Flush failed: {}", e))?;
@@ -1655,13 +1659,20 @@ fn tier_terminal_pause(
     paused: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let pid = {
+    let (pid, paused_state) = {
         let map = state.terminal_session.lock().map_err(|e| e.to_string())?;
-        map.get(&session_id)
-            .and_then(|session| session.process_id)
-            .ok_or_else(|| format!("No active process for terminal session: {session_id}"))?
+        let session = map
+            .get(&session_id)
+            .ok_or_else(|| format!("No active process for terminal session: {session_id}"))?;
+        (
+            session.process_id
+                .ok_or_else(|| format!("No active process for terminal session: {session_id}"))?,
+            session.paused.clone(),
+        )
     };
-    crate::terminal::set_process_paused(pid, paused)
+    crate::terminal::set_process_paused(pid, paused)?;
+    paused_state.store(paused, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1747,10 +1758,25 @@ fn tier_terminal_resize(
     Ok(())
 }
 
+#[tauri::command]
+fn get_remote_pairing() -> crate::remote_server::RemotePairingInfo {
+    crate::remote_server::pairing_info()
+}
+
+#[tauri::command]
+fn create_remote_pairing() -> Result<crate::remote_server::RemotePairingInfo, String> {
+    crate::remote_server::create_pairing_token()
+}
+
+#[tauri::command]
+fn revoke_remote_pairing() -> Result<crate::remote_server::RemotePairingInfo, String> {
+    crate::remote_server::revoke_pairing_token()
+}
+
 // ─── Session Resume API ──────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
-struct SavedSession {
+pub(crate) struct SavedSession {
     id: String,
     name: String,
     tool: String,
@@ -3043,6 +3069,39 @@ struct ChatSessionRead {
     append: bool,
     prepend: bool,
     unchanged: bool,
+}
+
+#[tauri::command]
+fn bind_mobile_chat(session_id: String, source: SavedSession, state: State<'_, AppState>) -> Result<(), String> {
+    let sessions = state.terminal_session.lock().map_err(|_| "Session unavailable")?;
+    let session = sessions.get(&session_id).ok_or("Session ended")?;
+    if session.tool_name.as_deref() != Some(source.tool.as_str()) || normalize_mobile_path(&session.cwd) != normalize_mobile_path(&source.cwd) {
+        return Err("Transcript does not belong to this workspace".into());
+    }
+    *session.chat_source.lock().map_err(|_| "Session unavailable")? = Some(source);
+    Ok(())
+}
+
+fn normalize_mobile_path(path: &str) -> String {
+    let path = path.replace('\\', "/").trim_end_matches('/').to_string();
+    if cfg!(windows) { path.to_lowercase() } else { path }
+}
+
+/// Resolve only the native transcript bound to this live terminal. The phone
+/// cannot supply an arbitrary transcript path or inspect another project.
+pub(crate) fn read_mobile_chat(tool: String, cwd: String, token: Option<String>, source: Option<SavedSession>, cursor: Option<u64>, revision: Option<String>, before: Option<u64>) -> Result<serde_json::Value, String> {
+    let session = if source.is_some() { source } else if let Some(token) = token.filter(|s| !s.is_empty()) {
+        load_native_history_cached(false)?.into_iter().find(|s| s.tool == tool && s.session_token.as_deref() == Some(&token) && normalize_mobile_path(&s.cwd) == normalize_mobile_path(&cwd))
+    } else { None };
+    let Some(session) = session else {
+        return Ok(serde_json::json!({"bound":false}));
+    };
+    let title = session.name.clone();
+    let source_id = session.id.clone();
+    let read = read_chat_session_blocking(session, cursor, revision.as_deref(), before)?;
+    let mut value = serde_json::to_value(read).map_err(|e| e.to_string())?;
+    value["bound"] = true.into(); value["title"] = title.into(); value["sourceId"] = source_id.into();
+    Ok(value)
 }
 
 #[derive(Serialize)]
@@ -5405,6 +5464,14 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             tier_terminal_raw_write,
             tier_terminal_kill,
             tier_terminal_resize,
+            get_remote_pairing,
+            create_remote_pairing,
+            revoke_remote_pairing,
+            crate::relay_host::relay_status,
+            crate::relay_host::relay_test_connection,
+            crate::relay_host::relay_create_pairing,
+            crate::relay_host::relay_cancel_pairing,
+            crate::relay_host::relay_revoke_device,
             set_background_mode,
             set_session_active,
             get_native_history,
@@ -5412,6 +5479,7 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             read_chat_session,
             read_chat_navigation,
             get_terminal_session_token,
+            bind_mobile_chat,
             check_network_port,
             check_tools_installed,
             detect_shells,
@@ -5450,6 +5518,13 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             // Remove Coffee status hooks/plugins left by older releases.
             // Current integrations are read-only terminal/title parsers.
             crate::hook_installer::cleanup_all();
+
+            // The remote companion binds to the local Tailscale interface so
+            // tailnet phones can reach it directly. Tailscale Serve remains
+            // optional, while the browser UI still shares the exact same PTY
+            // sessions as Tauri.
+            let remote_sessions = app.state::<AppState>().terminal_session.clone();
+            crate::remote_server::spawn(app.handle().clone(), remote_sessions);
 
             // Per-pane MCP servers are spawned lazily inside
             // `tier_terminal_start` when each multi-agent pane boots

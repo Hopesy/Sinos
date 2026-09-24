@@ -666,6 +666,11 @@ function ConversationViewImpl({
 
   useEffect(() => {
     if (!source) return;
+    if (isTauri) void commands.bindMobileChat(sessionId, source).catch(() => {});
+  }, [sessionId, source]);
+
+  useEffect(() => {
+    if (!source) return;
     let cancelled = false;
     void loadNavigationIndex(source).then(rows => {
       if (!cancelled) setNavigationRows(rows);

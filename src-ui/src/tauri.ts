@@ -139,6 +139,13 @@ export type EditorSaveResponse =
   | { status: 'saved'; revision: string; size: number }
   | { status: 'conflict'; current_revision: string | null };
 
+export interface RemotePairingInfo {
+  remoteUrl: string | null;
+  token: string | null;
+  authEnabled: boolean;
+  port: number;
+}
+
 // ─── Typed Commands ──────────────────────────────────────────────────────────
 
 export const commands = {
@@ -182,6 +189,7 @@ export const commands = {
     invoke<void>('set_session_active', { sessionId, active }),
   getTerminalSessionToken: (sessionId: string) =>
     invoke<string | null>('get_terminal_session_token', { sessionId }),
+  bindMobileChat: (sessionId: string, source: SavedSession) => invoke<void>('bind_mobile_chat', { sessionId, source }),
 
   // Session Resume
   getNativeHistory: (force = false) => invoke<SavedSession[]>('get_native_history', { force }),
@@ -224,6 +232,10 @@ export const commands = {
    *  one entry per supported AI CLI with the canonical display name.
    *  Loaded once at app boot and cached; see `lib/tool-info.ts`. */
   listTools: () => invoke<{ id: string; displayName: string }[]>('list_tools'),
+
+  getRemotePairing: () => invoke<RemotePairingInfo>('get_remote_pairing'),
+  createRemotePairing: () => invoke<RemotePairingInfo>('create_remote_pairing'),
+  revokeRemotePairing: () => invoke<RemotePairingInfo>('revoke_remote_pairing'),
 
   /** Re-run legacy cleanup and non-hook presentation migration for one tool. */
   maintainToolIntegration: (tool: string) =>

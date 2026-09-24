@@ -1,0 +1,25 @@
+{
+  "name": "sinos-relay",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8788",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "build:phone": "npm --prefix ../src-ui run build:phone",
+    "deploy": "npm run build:phone && wrangler deploy",
+    "deploy:check": "npm run build:phone && wrangler deploy --dry-run",
+    "test:integration": "tsx test/integration.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260923.1",
+    "@types/node": "^24.12.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.0",
+    "tweetnacl": "^1.0.3",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.136.3",
+    "ws": "^8.21.3"
+  }
+}

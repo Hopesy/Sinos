@@ -104,6 +104,7 @@ export const es = {
   'settings.wallpaper': 'Fondo',
   'settings.terminal': 'Terminal',
   'settings.gambit': 'Atajos',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Idioma',
   'settings.sound': 'Sonido',
   'settings.sound.done': 'Aviso de tarea completada',

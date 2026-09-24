@@ -10,21 +10,31 @@
 // If you need a new context menu or keyboard shortcut that touches
 // the clipboard, import from here. Do not re-derive.
 
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { commands } from '../tauri';
-
-/** Write text to the system clipboard. Silently swallows failures
- *  because clipboard writes are always best-effort UX glue — we never
- *  want a rejected promise to break the caller. */
-export function clipboardWrite(text: string): Promise<void> {
-  return writeText(text).catch(() => {});
+/** Tauri uses its native plugin; the phone uses the browser on an explicit tap.
+ * Legacy callers remain best-effort. Callers showing a success message can
+ * request rejection so a denied write is never presented as successful. */
+export async function clipboardWrite(text: string, options?: { throwOnError: boolean }): Promise<void> {
+  try {
+    if ('__TAURI_INTERNALS__' in window) {
+      const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+      await writeText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
+  } catch (error) { if (options?.throwOnError) throw error; }
 }
 
 /** Read text from the system clipboard. Returns empty string on any
  *  failure (empty clipboard, permission denied, etc.) so callers can
  *  do a simple `if (text)` check without try/catch boilerplate. */
-export function clipboardRead(): Promise<string> {
-  return readText().then(t => t ?? '').catch(() => '');
+export async function clipboardRead(): Promise<string> {
+  try {
+    if ('__TAURI_INTERNALS__' in window) {
+      const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+      return (await readText()) ?? '';
+    }
+    return await navigator.clipboard.readText();
+  } catch { return ''; }
 }
 
 /** Read an image from the OS clipboard and persist it as a PNG temp file,
@@ -33,6 +43,8 @@ export function clipboardRead(): Promise<string> {
  *  `clipboardRead()` for the text-paste path. Goes through the Tauri
  *  backend (arboard), so unlike `navigator.clipboard.read()` it never
  *  triggers a WebView2 permission prompt. */
-export function clipboardReadImage(): Promise<string | null> {
-  return commands.readClipboardImage().catch(() => null);
+export async function clipboardReadImage(): Promise<string | null> {
+  if (!('__TAURI_INTERNALS__' in window)) return null;
+  try { const { commands } = await import('../tauri'); return await commands.readClipboardImage(); }
+  catch { return null; }
 }

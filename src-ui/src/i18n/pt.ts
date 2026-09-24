@@ -105,6 +105,7 @@ export const pt = {
   'settings.wallpaper': 'Papel de parede',
   'settings.terminal': 'Terminal',
   'settings.gambit': 'Atalhos',
+  'settings.remote': 'Mobile Remote',
   'settings.language': 'Idioma',
   'settings.sound': 'Som',
   'settings.sound.done': 'Som de tarefa concluída',

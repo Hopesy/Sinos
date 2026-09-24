@@ -104,6 +104,7 @@ export const ja = {
   'settings.wallpaper': '壁紙',
   'settings.terminal': 'ターミナル',
   'settings.gambit': 'ショートカット',
+  'settings.remote': 'Mobile Remote',
   'settings.language': '言語',
   'settings.sound': 'サウンド',
   'settings.sound.done': 'タスク完了のチャイム',

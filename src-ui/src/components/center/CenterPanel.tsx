@@ -907,6 +907,33 @@ export function CenterPanel() {
     });
   };
 
+  // Mobile transcripts share the desktop's validated native-session binding.
+  const [mobileWatching, setMobileWatching] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const watchers = new Map<string, ReturnType<typeof setTimeout>>();
+    void import('@tauri-apps/api/event').then(async ({ listen }) => {
+      const watch = (id: string) => {
+        if (disposed) return;
+        setMobileWatching(previous => previous.has(id) ? previous : new Set(previous).add(id));
+        clearTimeout(watchers.get(id));
+        watchers.set(id, setTimeout(() => {
+          watchers.delete(id);
+          setMobileWatching(previous => { const next = new Set(previous); next.delete(id); return next; });
+        }, 12000));
+      };
+      const stopWatch = await listen<{ sessionId: string }>('mobile-chat-watch', event => watch(event.payload.sessionId));
+      if (disposed) stopWatch(); else cleanups.push(stopWatch);
+      const stopPrompt = await listen<{ sessionId: string; text: string }>('mobile-chat-prompt', event => {
+        watch(event.payload.sessionId);
+        dispatch({ type: 'SET_CHAT_PENDING', id: event.payload.sessionId, pending: { text: event.payload.text, sentAt: Date.now() - 1000 } });
+      });
+      if (disposed) stopPrompt(); else cleanups.push(stopPrompt);
+    }).catch(() => {});
+    return () => { disposed = true; cleanups.forEach(stop => stop()); watchers.forEach(clearTimeout); };
+  }, [dispatch]);
+
   // External launch (`sinos-cli launch --tool <id> [--cwd <dir>]`) — reached
   // from the cold-start drain (takePendingLaunch) and the warm-start
   // single-instance forward ('launch-request' event). Reuses an idle
@@ -915,12 +942,16 @@ export function CenterPanel() {
   // the + button, which is also uncapped so launcher scripts never stall).
   const launchCtxRef = useRef({ terminals, activeTerminalId });
   useEffect(() => { launchCtxRef.current = { terminals, activeTerminalId }; });
-  const applyLaunchRequest = (tool: ToolType, cwd?: string) => {
+  const applyLaunchRequest = (tool: ToolType, cwd?: string, requestedId?: string) => {
     if (!BUILTIN_AI_CLI_FALLBACK.some(item => item.key === tool)) return;
     const { terminals: terms, activeTerminalId: activeId } = launchCtxRef.current;
     const current = terms.find(t => t.id === activeId);
     let id: string;
-    if (current && current.tool === null) {
+    if (requestedId) {
+      if (terms.some(term => term.id === requestedId)) return;
+      id = requestedId;
+      dispatch({ type: 'ADD_TERMINAL', session: { id, tool: null, folderPath: cwd ?? null } });
+    } else if (current && current.tool === null) {
       id = current.id;
     } else {
       const idle = terms.find(t => t.tool === null);
@@ -956,8 +987,8 @@ export function CenterPanel() {
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen<{ tool: string; cwd?: string }>('launch-request', e => {
-          applyLaunchRequest(e.payload.tool as ToolType, e.payload.cwd);
+        unlisten = await listen<{ tool: string; cwd?: string; sessionId?: string }>('launch-request', e => {
+          applyLaunchRequest(e.payload.tool as ToolType, e.payload.cwd, e.payload.sessionId);
         });
       } catch { /* event bridge unavailable (e.g. browser dev) — ignore */ }
     })();
@@ -1558,7 +1589,7 @@ export function CenterPanel() {
                     />
                   </ErrorBoundary>
                 </div>
-                {supportsConversationTool(t.tool) && (t.viewMode === 'chat' || t.chatPending) && (
+                {supportsConversationTool(t.tool) && (t.viewMode === 'chat' || t.chatPending || mobileWatching.has(t.id)) && (
                   <div
                     className="conversation-mode-surface"
                     style={{ display: t.viewMode === 'chat' ? 'flex' : 'none' }}
@@ -1573,7 +1604,7 @@ export function CenterPanel() {
                         startedAt={t.startedAt}
                         pending={t.chatPending}
                         agentStatus={t.agentStatus}
-                        isActive={t.id === activeTerminalId && !diffTabActive && !editorTabActive}
+                        isActive={mobileWatching.has(t.id) || (t.id === activeTerminalId && !diffTabActive && !editorTabActive)}
                         isVisible={t.viewMode === 'chat'}
                         onPendingResolved={() => dispatch({ type: 'SET_CHAT_PENDING', id: t.id })}
                         onPasteToDraft={(text) => dispatch({ type: 'APPEND_GAMBIT_DRAFT', id: t.id, text })}

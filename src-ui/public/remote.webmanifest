@@ -1,0 +1,11 @@
+{
+  "id": "/remote/",
+  "name": "Sinos 移动工作台",
+  "short_name": "Sinos",
+  "start_url": "/remote/",
+  "scope": "/remote/",
+  "display": "standalone",
+  "background_color": "#101211",
+  "theme_color": "#101211",
+  "icons": [{ "src": "/remote-icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }]
+}
