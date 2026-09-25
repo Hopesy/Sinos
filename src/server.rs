@@ -1837,6 +1837,10 @@ fn json_timestamp_string(value: &serde_json::Value) -> Option<String> {
 /// keeps the sidebar readable (no more "<ide_opened_file>The user
 /// opened the..." or "# AGENTS.md instructions for ..." cards).
 const SYSTEM_INJECTION_TAGS: &[&str] = &[
+    // Codex Desktop injects the currently available-but-uninstalled plugin
+    // catalogue as the first synthetic user message. It can be several KB
+    // long and must never become a session title.
+    "<recommended_plugins>",
     "<environment_context>",
     "<ide_opened_file>",
     "<ide_closed_file>",
@@ -1844,6 +1848,10 @@ const SYSTEM_INJECTION_TAGS: &[&str] = &[
     "<system-reminder>",
     "<command-message>",
     "<command-name>",
+    // Codex Desktop stores attached images as separate synthetic user
+    // wrapper messages around the actual request block.
+    "<image name=",
+    "</image>",
     // Codex injects the contents of `AGENTS.md` (project) and any
     // pre-v1.5 Coffee-CLI workspace pointer as a synthetic user
     // message at session start.
@@ -1982,6 +1990,9 @@ fn load_claude_project_map(home: &std::path::Path) -> std::collections::HashMap<
     map
 }
 
+// Larger sequential reads reduce syscall overhead for long JSONL transcripts.
+const SESSION_READ_BUF: usize = 128 * 1024;
+
 fn parse_agent_jsonl(
     file_path: &std::path::Path,
     tool_name: &str,
@@ -1989,13 +2000,18 @@ fn parse_agent_jsonl(
 ) -> Option<SavedSession> {
     use std::io::BufRead;
     let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
     let mut updated_at = String::new();
     let mut created_at = None;
     let mut title = String::new();
+    // Titles Claude Code writes into the transcript itself: `ai-title` rows
+    // (generated, rewritten as the session evolves) and `custom-title` rows
+    // (`/rename`). The last row of each kind wins.
+    let mut custom_title = String::new();
+    let mut ai_title = String::new();
     let mut total_messages = 0;
     // Count of REAL user messages — ones that are not IDE/system injections
     // (compaction prompt, AGENTS.md, environment_context, etc.). A session
@@ -2015,6 +2031,24 @@ fn parse_agent_jsonl(
             }
             if let Some(c) = value.get("cwd").and_then(|v| v.as_str()) {
                 if cwd.is_empty() && !c.is_empty() { cwd = c.to_string(); }
+            }
+            let row_title = |key: &str| -> Option<String> {
+                value.get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            };
+            match value.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "custom-title" => {
+                    if let Some(t) = row_title("customTitle") { custom_title = t; }
+                    continue;
+                }
+                "ai-title" => {
+                    if let Some(t) = row_title("aiTitle") { ai_title = t; }
+                    continue;
+                }
+                _ => {}
             }
             let mut maybe_msg_obj = value.get("message").and_then(|v| v.as_object());
             if maybe_msg_obj.is_none() {
@@ -2131,6 +2165,14 @@ fn parse_agent_jsonl(
         }
     }
 
+    // Title precedence mirrors the CLI's own: a user rename wins over a
+    // generated title, and both win over the first prompt — so the row reads
+    // the same here as in the CLI's own session picker.
+    if !custom_title.is_empty() {
+        title = custom_title;
+    } else if !ai_title.is_empty() {
+        title = ai_title;
+    }
     if title.is_empty() {
         let mut chars = tool_name.chars();
         let cap_name = match chars.next() {
@@ -2164,7 +2206,7 @@ fn parse_agent_jsonl(
 fn parse_pi_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession> {
     use std::io::BufRead;
     let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
 
     // File stem is `<ISO-ts>_<uuid>` — fall back to the trailing UUID if the
     // header row is missing/unparseable. `pi --session` accepts partial IDs,
@@ -2262,8 +2304,9 @@ fn parse_pi_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession> {
 ///
 /// Without stripping, the history title becomes the meaningless
 /// "# Files mentioned by the user: ## <file>..." preamble instead of
-/// the user's real first question. We split on the `## My request for`
-/// marker and return what follows it (after the product name + colon);
+/// the user's real first question. We split on either desktop request
+/// marker (`## My request for Codex:` or `## My request:`) and return
+/// what follows it (after the optional product name + colon);
 /// if the block has the preamble but no request marker (user attached
 /// files with no accompanying text), we return empty so the caller
 /// treats it like any other system injection and keeps scanning.
@@ -2273,17 +2316,22 @@ fn strip_codex_desktop_file_preamble(text: &str) -> &str {
     if !text.contains(PREAMBLE) {
         return text;
     }
-    const MARKER: &str = "## My request for";
-    let Some(idx) = text.find(MARKER) else {
-        return ""; // files-only message, no real text -> skip
-    };
-    let after_marker = &text[idx + MARKER.len()..];
-    // Skip the product name (e.g. "Codex") and the colon that ends
-    // the marker, then any leading whitespace.
-    match after_marker.find(':') {
-        Some(colon) => after_marker[colon + 1..].trim_start(),
-        None => after_marker.trim_start(),
+    // Desktop has emitted both forms over time:
+    //   `## My request for Codex:` (older)
+    //   `## My request:`           (current)
+    if let Some(idx) = text.find("## My request for") {
+        let after_marker = &text[idx + "## My request for".len()..];
+        // Skip the product name (e.g. "Codex") and the colon that ends
+        // the marker, then any leading whitespace.
+        return match after_marker.find(':') {
+            Some(colon) => after_marker[colon + 1..].trim_start(),
+            None => after_marker.trim_start(),
+        };
     }
+    if let Some(idx) = text.find("## My request:") {
+        return text[idx + "## My request:".len()..].trim_start();
+    }
+    "" // files-only message, no real text -> skip
 }
 
 /// Codex CLI sessions live at
@@ -2298,7 +2346,7 @@ fn strip_codex_desktop_file_preamble(text: &str) -> &str {
 fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession> {
     use std::io::BufRead;
     let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
@@ -2417,6 +2465,47 @@ fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession
     })
 }
 
+/// Thread names Codex keeps for its own session picker, keyed by thread id.
+/// `~/.codex/session_index.jsonl` is append-only — one
+/// `{"id", "thread_name", "updated_at"}` row per (re)naming — so a later row
+/// for the same id replaces the earlier one.
+fn parse_codex_thread_names(index: &str) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    for line in index.lines() {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let field = |key: &str| {
+            row.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty())
+        };
+        if let (Some(id), Some(name)) = (field("id"), field("thread_name")) {
+            names.insert(id.to_string(), name.to_string());
+        }
+    }
+    names
+}
+
+/// Replace the first-prompt title of Codex rows with the thread name Codex
+/// itself shows. Applied to the finished list rather than inside
+/// `parse_codex_session_jsonl` because the name lives outside the rollout
+/// file: a rename leaves the rollout's stamp untouched, so a name baked into
+/// the per-file parse cache would go stale.
+fn apply_codex_thread_names(history_dir: &std::path::Path, sessions: &mut [SavedSession]) {
+    if !sessions.iter().any(|s| s.tool == "codex") {
+        return;
+    }
+    // The index is a sibling of the configured sessions directory. Never
+    // fall back to another profile's index when the matching index is absent.
+    let Some(profile_dir) = history_dir.parent() else { return };
+    let Ok(index) = std::fs::read_to_string(profile_dir.join("session_index.jsonl")) else {
+        return;
+    };
+    let names = parse_codex_thread_names(&index);
+    for session in sessions.iter_mut().filter(|s| s.tool == "codex") {
+        if let Some(name) = session.session_token.as_ref().and_then(|id| names.get(id)) {
+            session.name = name.clone();
+        }
+    }
+}
+
 /// Whether a Codex `session_meta` payload describes an internal sub-agent
 /// rollout rather than a user-created top-level session. Codex (incl. Codex
 /// Desktop) writes one rollout JSONL per spawned sub-agent, which re-inherits
@@ -2482,7 +2571,7 @@ fn parse_gemini_session_jsonl(
 ) -> Option<SavedSession> {
     use std::io::BufRead;
     let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
@@ -2599,7 +2688,7 @@ fn load_gemini_project_map() -> std::collections::HashMap<String, String> {
 fn parse_qwen_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession> {
     use std::io::BufRead;
     let file = std::fs::File::open(file_path).ok()?;
-    let reader = std::io::BufReader::new(file);
+    let reader = std::io::BufReader::with_capacity(SESSION_READ_BUF, file);
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
@@ -3970,7 +4059,25 @@ fn collect_jsonl_paths_with_mtime(
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
+            // `entry.file_type()` is free — it comes out of the directory
+            // enumeration itself (FindNextFile on Windows, dirent d_type on
+            // Linux). `path.is_file()` and `path.is_dir()` each issue a real
+            // stat instead, and this walk runs on every history scan over a
+            // tree that reaches ~10k entries on a long-used machine (~5.3k
+            // under ~/.codex, ~4.7k under ~/.claude). Two saved syscalls per
+            // entry is the difference between a cheap scan and one the
+            // Defender filter driver has to inspect 20k times.
+            // Reparse points still need a stat to resolve their target; that
+            // is rare in an agent session store, and only then do we pay.
+            let (is_file, is_dir) = match entry.file_type() {
+                Ok(ft) if ft.is_symlink() => match std::fs::metadata(&path) {
+                    Ok(m) => (m.is_file(), m.is_dir()),
+                    Err(_) => continue,
+                },
+                Ok(ft) => (ft.is_file(), ft.is_dir()),
+                Err(_) => continue,
+            };
+            if is_file {
                 // OpenClaw writes two `.jsonl` per session side-by-side:
                 // `<uuid>.jsonl` (the conversation — what we want) and
                 // `<uuid>.trajectory.jsonl` (a trace/telemetry log). Both
@@ -3994,7 +4101,7 @@ fn collect_jsonl_paths_with_mtime(
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                     out.push((mtime, path, tool));
                 }
-            } else if path.is_dir() {
+            } else if is_dir {
                 collect_jsonl_paths_with_mtime(path, depth - 1, tool, out);
             }
         }
@@ -4577,6 +4684,111 @@ fn saved_session_epoch_ms(value: &str) -> u64 {
     }
 }
 
+// Cache unchanged files only. A larger file may be a rewrite or replacement,
+// and appended rows can change metadata as well as counts. Changed files always
+// use the same full parser as a cold scan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionFileStamp {
+    modified: std::time::SystemTime,
+    created: Option<std::time::SystemTime>,
+    size: u64,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+fn file_stamp(path: &std::path::Path) -> Option<SessionFileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Some(SessionFileStamp {
+        modified: metadata.modified().ok()?,
+        created: metadata.created().ok(),
+        size: metadata.len(),
+        #[cfg(unix)]
+        identity: (metadata.dev(), metadata.ino()),
+    })
+}
+
+struct CachedSession {
+    stamp: SessionFileStamp,
+    session: SavedSession,
+}
+
+#[derive(Default)]
+struct SessionParseCache {
+    // Compare the maps actually used by the parsers, avoiding timestamp
+    // collisions and a race between reading a map and statting it afterwards.
+    claude_projects: std::collections::HashMap<String, String>,
+    antigravity_projects: std::collections::HashMap<String, String>,
+    entries: std::collections::HashMap<std::path::PathBuf, CachedSession>,
+}
+
+fn session_parse_cache() -> &'static std::sync::Mutex<SessionParseCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<SessionParseCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(SessionParseCache::default()))
+}
+
+fn sync_aux_generation(
+    cache: &mut SessionParseCache,
+    claude_projects: &std::collections::HashMap<String, String>,
+    antigravity_projects: &std::collections::HashMap<String, String>,
+) -> bool {
+    if cache.claude_projects == *claude_projects && cache.antigravity_projects == *antigravity_projects {
+        return false;
+    }
+    cache.entries.clear();
+    cache.claude_projects = claude_projects.clone();
+    cache.antigravity_projects = antigravity_projects.clone();
+    true
+}
+
+/// Dispatch one candidate file to its tool-specific parser. Split out of
+/// `load_native_history_blocking` so the cache wrapper around it stays
+/// readable; the match arms are unchanged.
+fn parse_session_file(
+    path: &std::path::Path,
+    tool: &str,
+    antigravity_project_map: &std::collections::HashMap<String, String>,
+    claude_project_map: &std::collections::HashMap<String, String>,
+) -> Option<SavedSession> {
+    match tool {
+        "hermes"      => parse_hermes_json(path),
+        "codex"       => parse_codex_session_jsonl(path),
+        "pi"          => parse_pi_session_jsonl(path),
+        "qwen"        => parse_qwen_session_jsonl(path),
+        "antigravity" => parse_gemini_session_jsonl(path, antigravity_project_map),
+        other         => parse_agent_jsonl(path, other, claude_project_map),
+    }
+}
+
+/// Cache a stable successful parse. None also means an unreadable file in the
+/// existing parsers, so do not persist it: a temporary sharing/permission error
+/// must be retried even if the file's metadata does not change.
+fn parse_session_cached(
+    cache: &mut SessionParseCache,
+    path: &std::path::Path,
+    tool: &str,
+    antigravity_project_map: &std::collections::HashMap<String, String>,
+    claude_project_map: &std::collections::HashMap<String, String>,
+) -> Option<SavedSession> {
+    let before = file_stamp(path);
+    if let Some(hit) = cache.entries.get(path) {
+        if before.as_ref() == Some(&hit.stamp) {
+            return Some(hit.session.clone());
+        }
+    }
+    cache.entries.remove(path);
+    let session = parse_session_file(path, tool, antigravity_project_map, claude_project_map)?;
+    if let Some(stamp) = before {
+        // A writer may append/replace the transcript during parsing. Never
+        // associate that result with an earlier snapshot of the file.
+        if file_stamp(path).as_ref() == Some(&stamp) {
+            cache.entries.insert(path.to_path_buf(), CachedSession { stamp, session: session.clone() });
+        }
+    }
+    Some(session)
+}
+
 fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
     // Cap history to the N most recent entries. Keeps UI responsive when users
     // have hundreds of sessions — parsing a full jsonl/json file is expensive,
@@ -4614,17 +4826,42 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
         _ => std::collections::HashMap::new(),
     };
 
+    // Shared across scans; retain at most the newest HISTORY_LIMIT paths.
+    let mut guard = session_parse_cache().lock().ok();
+    // Poisoned mutex → run against a throwaway cache. Every lookup misses, so
+    // this is exactly the pre-cache behaviour: slower, never wrong.
+    let mut fallback = SessionParseCache::default();
+    let cache: &mut SessionParseCache = match guard.as_mut() {
+        Some(c) => c,
+        None => &mut fallback,
+    };
+    sync_aux_generation(cache, &claude_project_map, &antigravity_project_map);
+
+    let mut keep_paths: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::with_capacity(file_candidates.len());
     for (_, path, tool) in &file_candidates {
-        let parsed = match *tool {
-            "hermes"      => parse_hermes_json(path),
-            "codex"       => parse_codex_session_jsonl(path),
-            "pi"          => parse_pi_session_jsonl(path),
-            "qwen"        => parse_qwen_session_jsonl(path),
-            "antigravity" => parse_gemini_session_jsonl(path, &antigravity_project_map),
-            other         => parse_agent_jsonl(path, other, &claude_project_map),
-        };
+        keep_paths.insert(path.clone());
+        let parsed = parse_session_cached(
+            cache,
+            path,
+            tool,
+            &antigravity_project_map,
+            &claude_project_map,
+        );
         if let Some(session) = parsed {
             result.push(session);
+        }
+    }
+
+    // Drop entries for files that fell out of the newest-200 window so the cache
+    // can't grow without bound across a long-running session.
+    cache.entries.retain(|k, _| keep_paths.contains(k));
+
+    if let Some(home) = home.as_ref() {
+        if let Some(tool) = crate::tools::find("codex") {
+            if let Some(shape) = tool.history_shape.as_ref() {
+                apply_codex_thread_names(&crate::tool_config::history_path_for(tool.id, shape.join_under(home)), &mut result);
+            }
         }
     }
 
@@ -6094,6 +6331,22 @@ mod tests {
         thread_source: Option<&str>,
         forked_from_id: Option<&str>,
     ) -> std::path::PathBuf {
+        write_codex_rollout_with_user_messages(
+            case,
+            source,
+            thread_source,
+            forked_from_id,
+            &["refactor the auth module"],
+        )
+    }
+
+    fn write_codex_rollout_with_user_messages(
+        case: &str,
+        source: serde_json::Value,
+        thread_source: Option<&str>,
+        forked_from_id: Option<&str>,
+        user_messages: &[&str],
+    ) -> std::path::PathBuf {
         use std::io::Write;
         let mut payload = serde_json::json!({
             "timestamp": "2026-07-12T10:48:37.000Z",
@@ -6115,22 +6368,25 @@ mod tests {
         if let Some(fid) = forked_from_id {
             inner.insert("forked_from_id".to_string(), serde_json::Value::String(fid.to_string()));
         }
-        let msg = serde_json::json!({
-            "timestamp": "2026-07-12T10:48:38.000Z",
-            "type": "response_item",
-            "payload": {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "refactor the auth module"}],
-            },
-        });
         let path = std::env::temp_dir().join(format!(
             "coffee-cli-codex-test-{}-{}.jsonl",
             std::process::id(),
             case
         ));
         let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(format!("{}\n{}\n", payload, msg).as_bytes()).unwrap();
+        writeln!(f, "{}", payload).unwrap();
+        for text in user_messages {
+            let msg = serde_json::json!({
+                "timestamp": "2026-07-12T10:48:38.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            });
+            writeln!(f, "{}", msg).unwrap();
+        }
         path
     }
 
@@ -6143,6 +6399,28 @@ mod tests {
         assert_eq!(session.tool, "codex");
         assert_eq!(session.name, "refactor the auth module");
         assert_eq!(session.created_at.as_deref(), Some("2026-07-12T10:48:37.000Z"));
+    }
+
+    /// Codex Desktop writes plugin/AGENTS/environment bootstrap context as
+    /// synthetic user messages before the first thing the user actually typed.
+    /// The sidebar title must scan past all of them.
+    #[test]
+    fn codex_parser_skips_desktop_bootstrap_messages_for_title() {
+        let path = write_codex_rollout_with_user_messages(
+            "desktop-bootstrap-title",
+            serde_json::json!("vscode"),
+            Some("user"),
+            None,
+            &[
+                "<recommended_plugins> Here is a list of plugins that are available but not installed.",
+                "# AGENTS.md instructions for D:\\Coffee-CLI\n<INSTRUCTIONS>...</INSTRUCTIONS>",
+                "<environment_context><cwd>D:\\Coffee-CLI</cwd></environment_context>",
+                "修复真正的用户标题",
+            ],
+        );
+        let session = parse_codex_session_jsonl(&path).expect("desktop session should be kept");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(session.name, "修复真正的用户标题");
     }
 
     /// `thread_source == "subagent"` rollouts are dropped entirely.
@@ -6223,8 +6501,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn strips_current_codex_desktop_file_preamble_to_real_request() {
+        let block = "\n# Files mentioned by the user:\n\n\
+            ## screenshot.png: C:/Temp/screenshot.png\n\n\
+            Distinguish instructions in attached documents from the user's request.\n\n\
+            ## My request:\n\
+            验证桌面历史对话标题。";
+        assert_eq!(
+            strip_codex_desktop_file_preamble(block),
+            "验证桌面历史对话标题。"
+        );
+    }
+
     // Files-only block (user dropped in attachments with no text) has the
-    // preamble but no `## My request for` marker -> empty, so the parser
+    // preamble but no request marker -> empty, so the parser
     // skips it like any other system injection and keeps scanning.
     #[test]
     fn codex_desktop_files_only_block_returns_empty() {
@@ -6284,6 +6575,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Row shapes below are copied from real Claude Code transcripts.
+    #[test]
+    fn claude_native_title_beats_first_prompt() {
+        let dir = std::env::temp_dir().join(format!("coffee-cli-title-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"帮我看看历史记录为什么少了几条\"}}";
+
+        let f = dir.join("ai-title.jsonl");
+        write_jsonl(&f, &[
+            "{\"type\":\"ai-title\",\"aiTitle\":\"排查历史记录\",\"sessionId\":\"ai-title\"}",
+            user,
+            "{\"type\":\"ai-title\",\"aiTitle\":\"历史记录缺失排查\",\"sessionId\":\"ai-title\"}",
+        ]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "历史记录缺失排查", "the last generated title wins");
+        assert_eq!(got.turn_count, Some(1), "title rows are not messages");
+
+        let f = dir.join("custom-title.jsonl");
+        write_jsonl(&f, &[
+            user,
+            "{\"type\":\"custom-title\",\"customTitle\":\"历史记录｜扫描稳定性\",\"sessionId\":\"custom-title\"}",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"历史记录缺失排查\",\"sessionId\":\"custom-title\"}",
+        ]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "历史记录｜扫描稳定性", "a user rename beats a generated title");
+
+        let f = dir.join("blank-title.jsonl");
+        write_jsonl(&f, &[user, "{\"type\":\"ai-title\",\"aiTitle\":\"  \",\"sessionId\":\"blank-title\"}"]);
+        let got = parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).expect("session kept");
+        assert_eq!(got.name, "帮我看看历史记录为什么少了几条", "a blank title falls back to the first prompt");
+
+        // A title row is not a conversation: still a phantom without a real user line.
+        let f = dir.join("title-only.jsonl");
+        write_jsonl(&f, &["{\"type\":\"ai-title\",\"aiTitle\":\"Orphan\",\"sessionId\":\"title-only\"}"]);
+        assert!(parse_agent_jsonl(&f, "claude", &std::collections::HashMap::new()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_thread_names_overlay_first_prompt_titles() {
+        let names = parse_codex_thread_names(concat!(
+            "{\"id\":\"t1\",\"thread_name\":\"修正 Codex 本地代理配置\",\"updated_at\":\"2026-09-19T10:31:30Z\"}\n",
+            "not json\n",
+            "{\"id\":\"t2\",\"thread_name\":\"  \"}\n",
+            "{\"id\":\"t1\",\"thread_name\":\"Codex代理｜核对本地地址绕过配置\",\"updated_at\":\"2026-09-19T10:33:37Z\"}\n",
+        ));
+        assert_eq!(names.len(), 1, "blank names and malformed rows are skipped");
+        assert_eq!(names["t1"], "Codex代理｜核对本地地址绕过配置", "a later row renames the thread");
+
+        let home = std::env::temp_dir().join(format!("coffee-cli-codex-index-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex").join("session_index.jsonl"),
+            "{\"id\":\"t1\",\"thread_name\":\"Codex代理｜核对本地地址绕过配置\"}\n",
+        ).unwrap();
+        let row = |tool: &str, token: &str| SavedSession {
+            id: format!("{}_native_{}", tool, token),
+            name: "first prompt".to_string(),
+            tool: tool.to_string(),
+            cwd: String::new(),
+            session_token: Some(token.to_string()),
+            saved_at: String::new(),
+            created_at: None,
+            file_path: None,
+            turn_count: None,
+        };
+        let mut sessions = vec![row("codex", "t1"), row("codex", "unnamed"), row("claude", "t1")];
+        apply_codex_thread_names(&home.join(".codex/sessions"), &mut sessions);
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(sessions[0].name, "Codex代理｜核对本地地址绕过配置");
+        assert_eq!(sessions[1].name, "first prompt", "threads absent from the index keep their title");
+        assert_eq!(sessions[2].name, "first prompt", "other tools are never touched");
+    }
+
     #[test]
     fn keeps_session_that_continued_after_compaction() {
         // The live-session case: compaction injected as the FIRST user line,
@@ -6328,3 +6695,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+#[path = "server/history_cache_tests.rs"]
+mod history_cache_tests;
