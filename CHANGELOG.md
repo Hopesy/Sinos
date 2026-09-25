@@ -9,6 +9,34 @@ and `git tag --list "v*"`.
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-09-25
+
+### Added
+- Android companion app with QR pairing, securely stored pairing credentials,
+  a foreground connection service and automatic reconnection.
+- Adaptive light, dark and system appearance with twelve color families across
+  desktop, mobile and Android, including terminal and editor theme support.
+- Oh-My-Pi history, resume and native status; CodeBuddy launch, configuration,
+  history, resume and desktop/mobile conversation rendering.
+- Desktop interaction cards for supported Claude, Codex and Kimi terminal menus,
+  with current-screen validation and duplicate-response protection.
+- Workspace-bounded copy, rename and delete operations on symbolic links.
+
+### Improved
+- Terminal resizing, renderer lifecycle, background phone subscriptions, live
+  diffs, conversation scroll retention and navigation centering.
+- History caching and native Claude/Codex session names.
+- Kimi screen status and completion-chime debounce around permission prompts.
+- Legacy Orca cleanup preserves user sessions, authentication, mixed hooks,
+  JSONC comments and unrelated configuration.
+- Android SDK setup and cross-platform regression checks.
+
+### Compatibility
+- Existing mobile relay, editor, Grok and Antigravity features remain available.
+- Existing appearance preferences migrate automatically. Android connections
+  require the desktop instance to remain running and online; OS background
+  restrictions can interrupt the connection until the app reconnects.
+
 ## [3.2.9] — 2026-07-31
 
 ### Fixed

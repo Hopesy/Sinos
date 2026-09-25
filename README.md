@@ -176,8 +176,15 @@ Or download directly from [Releases](https://github.com/Hopesy/sinos/releases).
 |---|---|
 | Windows x64 | `.exe` setup |
 | macOS Apple Silicon (M1+) | `.dmg` |
+| macOS Intel | `.dmg` |
 | Linux Debian/Ubuntu | `.deb` |
 | Linux universal | `.AppImage` |
+| Android 7.0+ | `Sinos-<version>-android-release.apk` |
+
+The Android companion connects to a running desktop instance. Pair once from
+**Settings → Mobile → Connect new device**, then scan the QR in the app.
+Pairing is stored securely and subsequent launches reconnect automatically.
+See [Android setup and build instructions](src-ui/android/README.md).
 
 ### Build from Source
 
@@ -242,6 +249,10 @@ curl -fsSL https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.s
 ```
 
 也可以直接从 [Releases](https://github.com/Hopesy/sinos/releases) 下载对应平台的安装包。
+
+Android 请下载 `Sinos-<版本>-android-release.apk`。电脑打开「设置 → 移动端 → 连接新设备」，
+再用 App 扫码配对；以后打开自动重连。连接期间电脑需要运行且在线。
+详见 [Android 使用与打包说明](src-ui/android/README.md)。
 
 ---
 
