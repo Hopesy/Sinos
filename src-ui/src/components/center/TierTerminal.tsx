@@ -21,6 +21,11 @@ import * as outputScheduler from '../../lib/terminal-output-scheduler';
 import { registerTerminalFocus } from '../../lib/focus-registry';
 import { installTerminalLinks } from '../../lib/terminal-links';
 import { registerTabActions, getTabActions } from '../../lib/tab-actions';
+import {
+  clearTerminalInteraction, getTerminalInteraction, hasTerminalInteraction,
+  parseTerminalInteraction, readTerminalScreen, setTerminalInteraction, supportsTerminalInteraction,
+} from '../../lib/terminal-interaction';
+import { createTerminalInteractionResponder } from '../../lib/terminal-interaction-response';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
 import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
@@ -477,6 +482,8 @@ function TierTerminalImpl({
   const outputBytesRef = useRef(0);
   const lastOutputAtRef = useRef(0);
   const [processExited, setProcessExited] = useState(false);
+  const processExitedRef = useRef(false);
+  const interactionSuppressionRef = useRef<string | null>(null);
   const [startFailed, setStartFailed] = useState(false);
   // Rolling buffer for agent-to-agent marker scanning. PTY chunks can split
   // `[COFFEE-TELL:...]` / `[COFFEE-DONE:...]` across boundaries; the buffer
@@ -1175,6 +1182,43 @@ function TierTerminalImpl({
     unlisteners.push(() => writeParsedSub.dispose());
     const usesNativeStatus = supportsNativeAgentStatus(tool);
 
+    // Inspect completed xterm frames, including hidden tabs watched by a phone.
+    // Briefly retain a card across a partial TUI repaint, but never submit from
+    // that retained snapshot: the response path re-reads the live screen.
+    if (supportsTerminalInteraction(tool)) {
+      let clearTimer: ReturnType<typeof setTimeout> | undefined;
+      const scanInteraction = () => {
+        if (!mounted || processExitedRef.current) return;
+        const interaction = parseTerminalInteraction(readTerminalScreen(term), tool);
+        if (interaction) {
+          clearTimeout(clearTimer);
+          clearTimer = undefined;
+          if (interaction.fingerprint === interactionSuppressionRef.current) return;
+          interactionSuppressionRef.current = null;
+          setTerminalInteraction(sessionId, interaction);
+        } else if (clearTimer === undefined) {
+          clearTimer = setTimeout(() => {
+            clearTimer = undefined;
+            if (!mounted || processExitedRef.current) return;
+            if (parseTerminalInteraction(readTerminalScreen(term), tool)) scanInteraction();
+            else {
+              interactionSuppressionRef.current = null;
+              clearTerminalInteraction(sessionId);
+            }
+          }, 100);
+        }
+      };
+      const interactionSub = term.onWriteParsed(scanInteraction);
+      unlisteners.push(() => {
+        interactionSub.dispose();
+        clearTimeout(clearTimer);
+        interactionSuppressionRef.current = null;
+        clearTerminalInteraction(sessionId);
+      });
+    }
+    let nativeActionTimer: ReturnType<typeof setTimeout> | undefined;
+    unlisteners.push(() => clearTimeout(nativeActionTimer));
+
     let lastNativeAction = { fingerprint: '', switchedAt: 0 };
     const requestTerminalForNativeAction = (fingerprint: string) => {
       const session = appStateRef.current.terminals.find(item => item.id === sessionId);
@@ -1185,8 +1229,16 @@ function TierTerminalImpl({
       if (lastNativeAction.fingerprint === fingerprint && now - lastNativeAction.switchedAt < 30_000) {
         return;
       }
-      lastNativeAction = { fingerprint, switchedAt: now };
-      dispatch({ type: 'SET_SESSION_VIEW', id: sessionId, viewMode: 'terminal' });
+      if (nativeActionTimer !== undefined) return;
+      // OSC titles can precede the menu frame in the same output batch.
+      nativeActionTimer = setTimeout(() => {
+        nativeActionTimer = undefined;
+        if (!mounted || processExitedRef.current || hasTerminalInteraction(sessionId) || interactionSuppressionRef.current) return;
+        const current = appStateRef.current.terminals.find(item => item.id === sessionId);
+        if (current?.viewMode !== 'chat') return;
+        lastNativeAction = { fingerprint, switchedAt: Date.now() };
+        dispatch({ type: 'SET_SESSION_VIEW', id: sessionId, viewMode: 'terminal' });
+      }, 180);
     };
 
     // Tool sets its own tab title via OSC 0/2 (e.g. Claude Code's conversation
@@ -1220,6 +1272,9 @@ function TierTerminalImpl({
         dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: parsed.status });
         if (parsed.status === 'wait_input') {
           requestTerminalForNativeAction('native:codex:action-required');
+        } else {
+          clearTimeout(nativeActionTimer);
+          nativeActionTimer = undefined;
         }
       } else if (tool === 'grok') {
         const parsed = parseGrokTerminalTitle(title);
@@ -1395,6 +1450,8 @@ function TierTerminalImpl({
         onStatus: (running) => {
           if (!mounted || running) return;
           sizeSync.markPtyStopped();
+          processExitedRef.current = true;
+          clearTerminalInteraction(sessionId);
           setProcessExited(true);
           if (usesNativeStatus) {
             dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
@@ -1412,6 +1469,8 @@ function TierTerminalImpl({
           // already speaks for itself.
           if (!mounted) return;
           sizeSync.markPtyStopped();
+          processExitedRef.current = true;
+          clearTerminalInteraction(sessionId);
           setProcessExited(true);
           if (usesNativeStatus) {
             dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
@@ -1663,7 +1722,30 @@ function TierTerminalImpl({
   // TierTerminal tree, so it can't access xtermRef directly — it looks up
   // the active tab's actions in the registry instead.
   useEffect(() => {
+    let actionTarget = xtermRef.current;
+    const responder = createTerminalInteractionResponder({
+      isLive: () => {
+        actionTarget ??= xtermRef.current;
+        return Boolean(actionTarget && actionTarget === xtermRef.current && !processExitedRef.current);
+      },
+      read: () => {
+        const term = xtermRef.current;
+        if (!term) return null;
+        const interaction = parseTerminalInteraction(readTerminalScreen(term), tool);
+        return interaction?.fingerprint === interactionSuppressionRef.current ? null : interaction;
+      },
+      applicationCursor: () => Boolean(xtermRef.current?.modes.applicationCursorKeysMode),
+      bracketedPaste: () => Boolean(xtermRef.current?.modes.bracketedPasteMode),
+      // User responses go through desktop_input so mobile activity stays in sync.
+      write: data => commands.tierTerminalInput(sessionId, data),
+      submitted: fingerprint => {
+        interactionSuppressionRef.current = fingerprint;
+        if (getTerminalInteraction(sessionId)?.fingerprint === fingerprint) clearTerminalInteraction(sessionId);
+        markNotifySoundPromptSubmitted(sessionId, tool);
+      },
+    });
     const unregister = registerTabActions(sessionId, {
+      respondToInteraction: responder.respond,
       paste: (text: string): boolean => {
         const term = xtermRef.current;
         // If the xterm isn't mounted yet (tab still loading, PTY spawn in
@@ -1725,7 +1807,7 @@ function TierTerminalImpl({
         };
       },
     });
-    return unregister;
+    return () => { responder.dispose(); unregister(); };
   }, [sessionId, tool]);
 
   // ── File-drop target ────────────────────────────────────────────────────

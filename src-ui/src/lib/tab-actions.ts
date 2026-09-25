@@ -8,7 +8,10 @@
 // Same pattern as focus-registry.ts: each TierTerminal registers on mount
 // and unregisters on unmount, so the map always reflects live tabs.
 
+import type { TerminalInteractionResponse } from './terminal-interaction-response';
+
 export interface TabActions {
+  respondToInteraction: (response: TerminalInteractionResponse) => Promise<boolean>;
   /** Paste text into the tab's xterm (handles bracketed paste framing) and
    *  submit with CR, as if the user typed the whole message in-place.
    *  Returns `true` if the text was successfully written to the xterm,
