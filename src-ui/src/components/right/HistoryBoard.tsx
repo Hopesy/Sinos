@@ -564,41 +564,64 @@ export function HistoryBoard() {
             }}
           >
             <div className="history-card-content">
-              {isRenaming ? (
-                <input
-                  className="history-card-rename-input"
-                  autoFocus
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  // Keep the card's click-to-resume and right-click menu off
-                  // the editing field.
-                  onClick={(e) => e.stopPropagation()}
-                  onContextMenu={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
+              <div className="history-card-title-row">
+                {isRenaming ? (
+                  <input
+                    className="history-card-rename-input"
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    // Keep the card's click-to-resume and right-click menu off
+                    // the editing field.
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        cancelRenameRef.current = false;
+                        setCustomName(session.tool ?? '', session.id, renameValue);
+                        setRenamingKey(null);
+                      } else if (e.key === 'Escape') {
+                        // Discard: flag the blur handler to skip the save, then
+                        // unmount (blur fires on the way out).
+                        cancelRenameRef.current = true;
+                        setRenamingKey(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!cancelRenameRef.current) {
+                        setCustomName(session.tool ?? '', session.id, renameValue);
+                      }
                       cancelRenameRef.current = false;
-                      setCustomName(session.tool ?? '', session.id, renameValue);
                       setRenamingKey(null);
-                    } else if (e.key === 'Escape') {
-                      // Discard: flag the blur handler to skip the save, then
-                      // unmount (blur fires on the way out).
-                      cancelRenameRef.current = true;
-                      setRenamingKey(null);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (!cancelRenameRef.current) {
-                      setCustomName(session.tool ?? '', session.id, renameValue);
-                    }
-                    cancelRenameRef.current = false;
-                    setRenamingKey(null);
-                  }}
-                  onFocus={(e) => e.target.select()}
-                />
-              ) : (
-                <span className="history-card-title">{displayName}</span>
-              )}
+                    }}
+                    onFocus={(e) => e.target.select()}
+                  />
+                ) : (
+                  <>
+                    <span className="history-card-title">{displayName}</span>
+                    {/* One-click soft-delete (hide), revealed in the title row.
+                        stopPropagation keeps it from resuming the session. */}
+                    <button
+                      type="button"
+                      className="history-card-delete-btn"
+                      aria-label={t('menu.delete')}
+                      title={t('menu.delete')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        hideSession(session.tool ?? '', session.id);
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="m19 6-.867 13.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 6"/>
+                        <path d="M10 11v6"/><path d="M14 11v6"/>
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                      </svg>
+                    </button>
+                  </>
+                )}
+              </div>
               <div className="history-card-meta">
                 <span className="history-card-tool-wrap">
                   {getToolIcon(session.tool)}
@@ -606,24 +629,6 @@ export function HistoryBoard() {
                 </span>
               </div>
             </div>
-            {/* One-click soft-delete (hide), hover-revealed. stopPropagation so
-                it doesn't trigger the card's click-to-resume. Same localStorage
-                soft-delete the right-click menu uses — no real removal. */}
-            <button
-              type="button"
-              className="history-card-delete-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                hideSession(session.tool ?? '', session.id);
-              }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="m19 6-.867 13.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 6"/>
-                <path d="M10 11v6"/><path d="M14 11v6"/>
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-            </button>
           </div>
         );
       })}

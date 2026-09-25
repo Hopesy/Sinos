@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Check, ChevronRight, Coffee, FileCode2, Folder, GitBranch, Menu, MessageSquare, Monitor, Moon, MoreHorizontal, Plus, Settings2, SquarePen, Sun, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight, Coffee, FileCode2, Folder, GitBranch, Menu, MessageSquare, Monitor, MoreHorizontal, Plus, Settings2, SquarePen, Trash2, X } from 'lucide-react';
 import { RemoteClient, errorMessage, projectName, storageRead, storageWrite } from './client';
 import { useConnection } from './useConnection';
 import { ChatView } from './ChatView';
@@ -9,6 +9,8 @@ import { LaunchSheet } from './LaunchSheet';
 import { Sheet } from './Sheet';
 import { RelayClient, forgetDevice } from './pair/RelayClient';
 import { isAndroidApp } from './native/bridge';
+import { usePhoneAppearance } from './usePhoneAppearance';
+import { PhoneAppearanceSettings } from './PhoneAppearanceSettings';
 import './RemoteApp.css';
 import './PhoneWorkspace.css';
 import './ConversationPresentation.css';
@@ -21,7 +23,8 @@ export function PhoneWorkspace({ client }: { client: RemoteClient }) {
   const [surface, setSurface] = useState<Surface>('chat');
   const [visited, setVisited] = useState<Set<Surface>>(() => new Set(['chat']));
   const [panel, setPanel] = useState<'sessions' | 'new' | 'tools' | 'settings' | null>(null);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => storageRead('theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') === 'dark' ? 'dark' : 'light');
+  const appearance = usePhoneAppearance();
+  const { theme } = appearance;
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
   const [insert, setInsert] = useState('');
@@ -37,10 +40,7 @@ export function PhoneWorkspace({ client }: { client: RemoteClient }) {
   const setTitle = useCallback((title: string) => { if (selected) setTitles(values => values[selected.id] === title ? values : { ...values, [selected.id]: title }); }, [selected]);
   const inserted = useCallback(() => setInsert(''), []);
   const prompt = (text: string) => { setInsert(text); show('chat'); };
-  useEffect(() => {
-    storageWrite('theme', theme); document.documentElement.style.colorScheme = theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#191919' : '#fafafa');
-  }, [theme]);
+
   useEffect(() => {
     if (!pendingLaunch) return;
     if (pendingReady) { setPendingLaunch(null); return; }
@@ -66,7 +66,7 @@ export function PhoneWorkspace({ client }: { client: RemoteClient }) {
     try { await forgetDevice(); if (client instanceof RelayClient) client.dispose(); location.reload(); }
     catch { setNotice('无法清除配对记录，请重试。'); }
   }
-  return <div className="remote-app phone-workspace" data-mobile-theme={theme}>
+  return <div className="remote-app phone-workspace" data-mobile-theme={theme} style={appearance.style}>
     <div className="phone-shell" inert={panel === 'sessions'}>
       <header className="phone-header">
         <button className="icon-button" aria-label="打开会话列表" onClick={() => setPanel('sessions')}><Menu size={20} /></button>
@@ -89,6 +89,6 @@ export function PhoneWorkspace({ client }: { client: RemoteClient }) {
     {panel === 'sessions' && <div className="drawer-backdrop" onClick={() => setPanel(null)}><aside className="session-drawer" role="dialog" aria-modal="true" aria-label="会话列表" onClick={e => e.stopPropagation()}><div className="drawer-brand"><Coffee size={22} /><strong>Sinos</strong><button className="icon-button" aria-label="关闭会话列表" autoFocus onClick={() => setPanel(null)}><X size={18} /></button></div><button className="drawer-new" disabled={!online} onClick={() => setPanel('new')}><SquarePen size={17} />新建会话</button><div className="drawer-sessions">{[...new Set(state.sessions.map(s => s.cwd))].map(cwd => <div className="drawer-group" key={cwd}><p><Folder size={13} />{projectName(cwd)}</p>{state.sessions.filter(s => s.cwd === cwd).map(session => <button key={session.id} className={`drawer-session ${session.id === selected?.id ? 'active' : ''}`} onClick={() => choose(session.id)}><MessageSquare size={15} /><span>{titles[session.id] || name(session.tool)}<small>{session.paused ? '已暂停' : session.activity?.state === 'working' ? '正在生成' : session.activity?.state === 'waiting' ? '等待回答' : session.activity?.state === 'idle' ? '就绪' : session.activity?.state === 'failed' ? '本轮已停止' : '会话已连接'}{session.queued_count ? ' · 待发送 ' + session.queued_count : ''} · {session.id.slice(0, 6)}</small></span>{session.id === selected?.id && <Check size={14} />}</button>)}</div>)}{!state.sessions.length && <p className="drawer-empty">还没有会话</p>}</div><button className="drawer-device" onClick={() => setPanel('settings')}><Monitor size={18} /><span>{state.device_name || '我的电脑'}<small>{online ? '已连接' : '等待连接'}</small></span><Settings2 size={17} /></button></aside></div>}
     {panel === 'new' && <LaunchSheet client={client} tools={tools} sessions={state.sessions} cwd={selected?.cwd || ''} onClose={() => setPanel(null)} onLaunched={id => { choose(id); setPendingLaunch(id); refresh(); }} />}
     {panel === 'tools' && selected && <Sheet title="会话工具" onClose={() => setPanel(null)}><div className="action-list">{([{ id: 'files', label: '项目文件', text: '浏览、编辑和保存', icon: FileCode2 }, { id: 'changes', label: '代码变更', text: '查看当前 Git 差异', icon: GitBranch }] as const).map(item => <button key={item.id} onClick={() => show(item.id)}><item.icon size={19} /><span>{item.label}<small>{item.text}</small></span><ChevronRight size={16} /></button>)}<button disabled={!online || busy} onClick={() => void action('interrupt')}>停止当前生成 <small>发送 Ctrl+C</small></button><button disabled={!online || busy} onClick={() => void action('pause')}>{selected.paused ? '恢复进程' : '暂停进程'}</button><button className="danger-action" disabled={!online || busy} onClick={() => { if (confirmKill) void action('kill'); else setConfirmKill(true); }}><Trash2 size={18} />{confirmKill ? '确认结束此会话' : '结束会话'}</button></div></Sheet>}
-    {panel === 'settings' && <Sheet title="连接与显示" onClose={() => setPanel(null)}><div className="connection-card"><Monitor size={25} /><div><strong>{state.device_name || '我的电脑'}</strong><p>{online ? '已连接' : '等待连接'}</p></div></div><dl className="connection-details"><div><dt>连接方式</dt><dd>{client instanceof RelayClient ? 'Cloudflare · 端到端加密' : '本地网络'}</dd></div><div><dt>活动会话</dt><dd>{state.sessions.length}</dd></div></dl><div className="setting-row"><span>外观</span><div className="segmented-control"><button aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun size={16} />浅色</button><button aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon size={16} />深色</button></div></div>{isAndroidApp && client instanceof RelayClient && <div className="setting-row"><span>后台连接<small>{connection === 'paused' ? '已暂停，配对仍保留' : '由 Android 服务维持，断网后自动重连'}</small></span><button className="text-button" onClick={() => { if (connection === 'paused') client.resumeHere(); else client.pauseConnection(); refresh(); }}>{connection === 'paused' ? '恢复' : '暂停'}</button></div>}<p className="sheet-footnote">{isAndroidApp ? '保持电脑上的 Sinos 运行。重开 App 会自动连接，无需再次扫码。系统强制停止或省电限制可能中断后台连接，返回 App 后会恢复。' : '保持电脑上的 Sinos 运行。可通过浏览器菜单添加到主屏幕，以独立窗口打开。'}</p>{client instanceof RelayClient && <button className="danger-button full-width" onClick={() => { if (!confirmForget) { setConfirmForget(true); return; } void forget(); }}>{confirmForget ? '确认移除本机配对记录' : '断开并忘记这台电脑'}</button>}<a className="license-link" href={isAndroidApp ? "/third-party/android.html" : "/third-party/EnsoCode-LICENSE.txt"} target={isAndroidApp ? undefined : "_blank"} rel="noreferrer">开源许可</a></Sheet>}
+    {panel === 'settings' && <Sheet title="连接与显示" onClose={() => setPanel(null)}><div className="connection-card"><Monitor size={25} /><div><strong>{state.device_name || '我的电脑'}</strong><p>{online ? '已连接' : '等待连接'}</p></div></div><dl className="connection-details"><div><dt>连接方式</dt><dd>{client instanceof RelayClient ? 'Cloudflare · 端到端加密' : '本地网络'}</dd></div><div><dt>活动会话</dt><dd>{state.sessions.length}</dd></div></dl><PhoneAppearanceSettings appearance={appearance} />{isAndroidApp && client instanceof RelayClient && <div className="setting-row"><span>后台连接<small>{connection === 'paused' ? '已暂停，配对仍保留' : '由 Android 服务维持，断网后自动重连'}</small></span><button className="text-button" onClick={() => { if (connection === 'paused') client.resumeHere(); else client.pauseConnection(); refresh(); }}>{connection === 'paused' ? '恢复' : '暂停'}</button></div>}<p className="sheet-footnote">{isAndroidApp ? '保持电脑上的 Sinos 运行。重开 App 会自动连接，无需再次扫码。系统强制停止或省电限制可能中断后台连接，返回 App 后会恢复。' : '保持电脑上的 Sinos 运行。可通过浏览器菜单添加到主屏幕，以独立窗口打开。'}</p>{client instanceof RelayClient && <button className="danger-button full-width" onClick={() => { if (!confirmForget) { setConfirmForget(true); return; } void forget(); }}>{confirmForget ? '确认移除本机配对记录' : '断开并忘记这台电脑'}</button>}<a className="license-link" href={isAndroidApp ? "/third-party/android.html" : "/third-party/EnsoCode-LICENSE.txt"} target={isAndroidApp ? undefined : "_blank"} rel="noreferrer">开源许可</a></Sheet>}
   </div>;
 }

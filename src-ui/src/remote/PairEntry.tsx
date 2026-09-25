@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { LockKeyhole, ScanLine, Smartphone } from 'lucide-react';
 import { RemoteApp } from './RemoteApp';
 import { RemoteClient, readPairingToken } from './client';
@@ -6,8 +6,14 @@ import { claimDevice, RelayClient, savedDevice } from './pair/RelayClient';
 import { validateInvite } from './pair/deviceStorage';
 import { isAndroidApp, SinosMobile } from './native/bridge';
 import { useMobileViewport } from './useMobileViewport';
+import { usePhoneAppearance } from './usePhoneAppearance';
 import './RemoteApp.css';
 import './PhoneWorkspace.css';
+
+function PairScreen({ children }: { children: ReactNode }) {
+  const appearance = usePhoneAppearance();
+  return <div className="remote-app pair-screen" data-mobile-theme={appearance.theme} style={appearance.style}>{children}</div>;
+}
 
 export function PairEntry() {
   useMobileViewport();
@@ -60,7 +66,7 @@ export function PairEntry() {
     setInvite(''); setError('');
   }
   if (client && !invite) return <RemoteApp client={client} />;
-  return <div className="remote-app pair-screen" data-mobile-theme={matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'}>
+  return <PairScreen>
     <div className="pair-card">
       <Smartphone size={32} strokeWidth={1.5} />
       <h1>{invite ? '连接你的电脑' : '连接到 Sinos'}</h1>
@@ -86,5 +92,5 @@ export function PairEntry() {
       {error && <p className="inline-error" role="alert">{error}</p>}
       <a className="license-link" href={isAndroidApp ? "/third-party/android.html" : "/third-party/EnsoCode-LICENSE.txt"}>开源许可</a>
     </div>
-  </div>;
+  </PairScreen>;
 }

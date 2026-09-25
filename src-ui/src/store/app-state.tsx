@@ -30,13 +30,19 @@ export function supportsAgentStatus(tool: ToolType): boolean {
   return supportsNativeAgentStatus(tool) || tool === 'kimicode';
 }
 
-// Theme: color palette (orthogonal to shape)
+// Theme: color palette family (orthogonal to shape and to mode).
+// 6 hues × 2 depths. The mid-depth row that shipped in v3.5.4 was dropped
+// again — it read as a duplicate of its soft/deep neighbours (see
+// RETIRED_THEMES for where a saved pick from that row lands now).
 export type ThemeColor =
-  | 'dark' | 'light' | 'cappuccino' | 'sakura' | 'lavender' | 'mint'
-  | 'obsidian' | 'cobalt' | 'moss'
-  // Vibrant batch — saturated accents on tinted-dark bases (crimson is the
-  // Spider-Man hero, intended to pair with the carbon shape).
-  | 'crimson' | 'sunset' | 'amber' | 'emerald' | 'teal' | 'indigo' | 'fuchsia';
+  | 'dark' | 'light' | 'sakura' | 'lavender' | 'mint'
+  | 'obsidian' | 'moss'
+  | 'amber' | 'teal' | 'indigo'
+  | 'glacier' | 'slate';
+// Theme: which half of that family's palette to paint. 'system' follows the OS
+// light/dark preference live (App.tsx watches prefers-color-scheme), so the
+// centre tabs in Settings ▸ Appearance is purely a view of this value.
+export type ThemeMode = 'light' | 'dark' | 'system';
 // Theme: shape form (orthogonal to color)
 // Frost reuses the full glass chrome; only the frosted backdrop layer differs
 // (see isFrostShape + [data-frost] CSS). App.tsx normalizes it to
@@ -182,6 +188,7 @@ export interface TerminalSession {
 export interface AppState {
   // UI
   currentTheme: ThemeColor;
+  themeMode: ThemeMode;
   currentShape: ThemeShape;
   currentLang: string;
   iconTheme: IconTheme;
@@ -359,6 +366,7 @@ type Action =
   | { type: 'SET_TERMINAL_CWD'; id: string; path: string }
   | { type: 'CLEAR_FOLDER' }
   | { type: 'SET_THEME'; theme: ThemeColor }
+  | { type: 'SET_THEME_MODE'; mode: ThemeMode }
   | { type: 'SET_SHAPE'; shape: ThemeShape }
   | { type: 'SET_ICON_THEME'; theme: IconTheme }
   | { type: 'SET_LANG'; lang: string }
@@ -461,6 +469,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, terminals: state.terminals.map(t => t.id === action.id ? { ...t, toolTitle: action.title } : t) };
     case 'SET_THEME':
       return { ...state, currentTheme: action.theme };
+    case 'SET_THEME_MODE':
+      return { ...state, themeMode: action.mode };
     case 'SET_SHAPE':
       return { ...state, currentShape: action.shape };
     case 'SET_ICON_THEME':
@@ -807,10 +817,24 @@ function reducer(state: AppState, action: Action): AppState {
 // ─── Initial State ────────────────────────────────────────────────────────────
 
 const VALID_THEMES: ThemeColor[] = [
-  'dark', 'light', 'cappuccino', 'sakura', 'lavender', 'mint',
-  'obsidian', 'cobalt', 'moss',
-  'crimson', 'sunset', 'amber', 'emerald', 'teal', 'indigo', 'fuchsia',
+  'dark', 'light', 'sakura', 'lavender', 'mint',
+  'obsidian', 'moss',
+  'amber', 'teal', 'indigo',
+  'glacier', 'slate',
 ];
+// Palettes the picker no longer offers because their row was redundant. A
+// saved pick from that row moves to its own column's deep neighbour, which
+// keeps the hue the user chose (代码夜 → 黑曜石, 钴蓝 → 靛蓝, …) instead of
+// dumping them on the default theme.
+const RETIRED_THEMES: Record<string, ThemeColor> = {
+  cappuccino: 'obsidian',
+  crimson: 'slate',
+  sunset: 'dark',
+  emerald: 'moss',
+  cobalt: 'indigo',
+  fuchsia: 'teal',
+};
+const VALID_THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
 const VALID_SHAPES: ThemeShape[] = [
   'soft', 'slab', 'sharp', 'glass',
   'frost',
@@ -824,7 +848,7 @@ const VALID_ICON_THEMES: IconTheme[] = [
 function getInitialState(): AppState {
   // Default 'obsidian' + 'panel' — the "严谨高级简约" out-of-box. Carbon's
   // hex-mesh + translucent chrome is polarizing (love-it-or-hate-it); obsidian
-  // (#0a0a0a near-black, neutral, no hue tint) + panel (sharp 0-radius corners,
+  // (near-black with a neutral accent) + panel (sharp 0-radius corners,
   // strong 2px borders) reads as a flat, restrained developer-tool aesthetic
   // that a broader 70% find acceptable vs carbon's 50/50 split. Panel is also
   // simpler than carbon (no mask/backdrop-filter/:not() nuclear rule), so less
@@ -832,6 +856,7 @@ function getInitialState(): AppState {
   // sync with these two values or first paint flashes (obsidian/panel → React
   // hydrate). Existing users keep their saved theme/shape (localStorage wins).
   let theme: ThemeColor = 'obsidian';
+  let themeMode: ThemeMode = 'dark';
   let shape: ThemeShape = 'panel';
   let iconTheme: IconTheme = 'devicon';
   let lang = 'zh-CN';
@@ -839,8 +864,24 @@ function getInitialState(): AppState {
   let gitTrackingDisabledPaths: string[] = [];
 
   try {
-    const savedTheme = localStorage.getItem('cc-theme') as ThemeColor | null;
-    if (savedTheme && VALID_THEMES.includes(savedTheme)) theme = savedTheme;
+    const savedTheme = localStorage.getItem('cc-theme');
+    if (savedTheme && VALID_THEMES.includes(savedTheme as ThemeColor)) {
+      theme = savedTheme as ThemeColor;
+    } else if (savedTheme && RETIRED_THEMES[savedTheme]) {
+      theme = RETIRED_THEMES[savedTheme];
+      localStorage.setItem('cc-theme', theme);
+    }
+  } catch { /* Best-effort operation; failure is non-fatal. */ }
+
+  // Mode is new in v3.5.4. Users who predate it are migrated from their saved
+  // theme: the one light palette we used to ship ('light') means they were on
+  // the day half of that family, everyone else was on a night palette. Reading
+  // 'cc-theme' before 'cc-mode' matters here — without the migration a saved
+  // 'light' pick would silently turn into the new night-only 石墨 palette.
+  try {
+    const savedMode = localStorage.getItem('cc-mode') as ThemeMode | null;
+    if (savedMode && VALID_THEME_MODES.includes(savedMode)) themeMode = savedMode;
+    else themeMode = theme === 'light' ? 'light' : 'dark';
   } catch { /* Best-effort operation; failure is non-fatal. */ }
 
   try {
@@ -986,6 +1027,7 @@ function getInitialState(): AppState {
 
   return {
     currentTheme: theme,
+    themeMode,
     currentShape: shape,
     iconTheme,
     currentLang: lang,

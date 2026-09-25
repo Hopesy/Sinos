@@ -20,7 +20,7 @@
   --heatmap-level-4: #39d353;
 }
 
-[data-theme="light"] .heatmap-card {
+[data-mode="light"] .heatmap-card {
   --heatmap-empty: #ebedf0;
   --heatmap-level-1: #9be9a8;
   --heatmap-level-2: #40c463;

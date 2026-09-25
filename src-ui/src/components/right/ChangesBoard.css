@@ -159,7 +159,7 @@
   /* Faint lift so this reads as the repo "bar" anchored at the top, with the
    * Unstaged/Staged/Untracked group labels below it as lighter sub-headers —
    * a clear two-level hierarchy instead of two competing header rows.
-   * No border-bottom: on themes whose --border is solid (cappuccino #333,
+   * No border-bottom: on themes whose --border is solid (obsidian #282828,
    * light rgba(0,0,0,0.1)) the 1px line read as an abrupt extra separator
    * stacked under this wash; the wash alone carries the hierarchy, and
    * the enlarged branch name (below) makes the bar read without a hard rule. */

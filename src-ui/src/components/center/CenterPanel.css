@@ -512,7 +512,7 @@
 .launchpad-has-bg .launchpad-card-group:hover {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
-[data-theme="light"] .launchpad-has-bg .launchpad-card-group {
+[data-mode="light"] .launchpad-has-bg .launchpad-card-group {
   background: rgba(255, 255, 255, 0.48);
 }
 
@@ -1262,7 +1262,7 @@
 
 .remote-proto-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--bg-app);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
@@ -1335,7 +1335,7 @@
   padding: 12px;
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--bg-app);
   background: var(--accent);
   border: none;
   border-radius: var(--radius-sm);
@@ -1372,12 +1372,17 @@
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  background: var(--border, #3a3a3a);
+  /* Track fill, not a hairline. In the shapes that draw chrome from --border
+     (Panel), a theme-accent border colour would fill this pill too and make the
+     OFF state read as ON, so the deep-row light themes hand it a neutral track
+     via --switch-track; every other theme keeps the --border fill. */
+  background: var(--switch-track, var(--border, #3a3a3a));
   position: relative;
   transition: background-color 0.18s ease;
   margin-left: 8px;
 }
-.library-toggle.on { background: var(--accent); }
+/* Keep the on state recognizable even in themes with a gray accent. */
+.library-toggle.on { background: #007aff; }
 .library-toggle-knob {
   position: absolute;
   top: 2px;

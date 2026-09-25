@@ -19,13 +19,47 @@
   background: var(--bg-hover);
 }
 
+/* Light palettes keep session rows flush with the rail until hover, then lift
+   the active row onto the brighter workspace surface. This restores the same
+   clear block feedback as night mode without bringing back permanent cards. */
+[data-mode="light"] .history-card:hover {
+  background: var(--bg-app);
+}
+
+/* Panel intentionally collapses app/panel/card to one surface, so switching
+   surface tokens cannot produce a hover state. Use the same overlay feedback
+   as night mode for this shape. */
+[data-mode="light"][data-shape="panel"] .history-card:hover {
+  background: var(--bg-hover);
+}
+
+/* Transparent material shapes strip descendant div backgrounds globally.
+   Restore only the hovered session row, using a translucent form of the same
+   light workspace surface so Glass/Frost keeps showing its backdrop. */
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-left .history-card:hover {
+  background: var(--bg-hover) !important;
+}
+
+[data-mode="light"]:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-left .history-card:hover {
+  background: color-mix(in oklab, var(--bg-app) 78%, transparent) !important;
+}
+
 .history-card-content {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
+.history-card-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .history-card-title {
+  display: block;
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--text-1);
   font-family: var(--font, system-ui);
@@ -34,6 +68,14 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-size: calc(100% + 24px) 100%;
+  mask-size: calc(100% + 24px) 100%;
+  -webkit-mask-position: left center;
+  mask-position: left center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
 .history-card-meta {
@@ -288,39 +330,43 @@
 }
 
 /* ─── Card delete button + inline rename ─── */
-/* No permanent action gutter: the title uses the card's full width. The delete
-   action keeps only an opaque panel-coloured backing so covered text cannot
-   show through; hover feedback is limited to a subtle fill + icon lift. */
+/* No permanent action gutter: the button occupies the title row on hover,
+   shrinking the title while its trailing mask fades the text into the action. */
 .history-card-delete-btn {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 0;
+  width: 0;
+  height: 22px;
+  margin-left: 0;
   padding: 0;
-  background-color: var(--bg-app);
-  background-image: linear-gradient(var(--bg-panel), var(--bg-panel));
+  overflow: hidden;
+  background: transparent;
   border: none;
   border-radius: var(--shape-radius-btn, var(--radius-sm));
   color: var(--text-2);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease, color 0.15s ease;
 }
 .history-card:hover .history-card-delete-btn,
+.history-card:focus-within .history-card-delete-btn,
 .history-card-delete-btn:focus-visible {
+  flex-basis: 22px;
+  width: 22px;
+  margin-left: 6px;
   opacity: 1;
   pointer-events: auto;
 }
+.history-card:hover .history-card-title,
+.history-card:focus-within .history-card-title {
+  text-overflow: clip;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
 .history-card-delete-btn:hover {
-  background-image:
-    linear-gradient(var(--bg-hover), var(--bg-hover)),
-    linear-gradient(var(--bg-panel), var(--bg-panel));
+  background: var(--bg-hover);
   color: var(--text-1);
 }
 

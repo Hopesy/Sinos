@@ -8,7 +8,7 @@ const fixtures = vi.hoisted(() => ({ sessions: [{ id: 'old', tool: 'claude', cwd
 vi.mock('./useConnection', () => ({ useConnection: () => ({ state: { sessions: fixtures.sessions, device_name: 'test' }, tools: [], connection: 'online', refresh: () => {} }) }));
 vi.mock('./ChatView', () => ({ ChatView: ({ session }: { session: { id: string } }) => <input aria-label={`composer-${session.id}`} /> }));
 vi.mock('./LaunchSheet', () => ({ LaunchSheet: ({ onLaunched }: { onLaunched: (id: string) => void }) => <button onClick={() => onLaunched('new')}>Confirm launch</button> }));
-beforeEach(() => { localStorage.clear(); vi.stubGlobal('matchMedia', () => ({ matches: false })); });
+beforeEach(() => { localStorage.clear(); vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('never sends a new-session prompt into the previously selected terminal while startup is pending', async () => {
   const client = new RemoteClient('http://localhost', '');

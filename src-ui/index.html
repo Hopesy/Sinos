@@ -23,10 +23,33 @@
     <script>
       (function() {
         var theme = 'obsidian';
+        var mode = 'dark';
         var shape = 'panel';
         try { theme = localStorage.getItem('cc-theme') || 'obsidian'; } catch(e) {}
+        // Palettes retired in v3.5.4 (the redundant mid row) — mirror of
+        // RETIRED_THEMES in src/store/app-state.tsx. A retired code has no
+        // [data-theme] block left to match, so without this the pre-paint parks
+        // an unknown attribute on <html> and the window paints with no palette
+        // at all until React migrates the value.
+        var retired = {
+          cappuccino: 'obsidian', crimson: 'slate', sunset: 'dark',
+          emerald: 'moss', cobalt: 'indigo', fuchsia: 'teal',
+        };
+        if (retired[theme]) theme = retired[theme];
+        // cc-mode is new in v3.5.4; a saved 'light' theme from before it means
+        // the user was on the day half of that family (mirrors app-state.tsx).
+        try {
+          mode = localStorage.getItem('cc-mode') || '';
+          if (mode !== 'light' && mode !== 'dark' && mode !== 'system') {
+            mode = theme === 'light' ? 'light' : 'dark';
+          }
+        } catch(e) {}
+        if (mode === 'system') {
+          mode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
         try { shape = localStorage.getItem('cc-shape') || 'panel'; } catch(e) {}
         document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-mode', mode);
         // Frost renders as glass chrome + a data-frost backdrop variant
         // (mirrors App.tsx's shape effect) — pre-paint so no first-render flash.
         if (shape === 'frost') {

@@ -5,31 +5,55 @@
 // tables + small pure helpers live here — all dispatch/persistence wiring stays
 // in the components.
 
-import type { ThemeColor, ThemeShape, IconTheme } from '../store/app-state';
+import type { ThemeColor, ThemeMode, ThemeShape, IconTheme } from '../store/app-state';
 import type { I18nKey } from '../i18n/en';
 
 // ─── Theme colours (swatch grid) ─────────────────────────────────────────────
-export const THEME_COLORS: { code: ThemeColor; labelKey: I18nKey; swatch: string; ring: string }[] = [
-  { code: 'light',      labelKey: 'theme.color.light',      swatch: '#FAFAF7', ring: '#c4956a' },
-  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#1a1917', ring: '#c4956a' },
-  { code: 'cappuccino', labelKey: 'theme.color.cappuccino', swatch: '#1a1a1a', ring: '#4a4a4a' },
-  { code: 'sakura',     labelKey: 'theme.color.sakura',     swatch: '#221b28', ring: '#f8b4c8' },
-  { code: 'lavender',   labelKey: 'theme.color.lavender',   swatch: '#221f2e', ring: '#c8b6ff' },
-  { code: 'mint',       labelKey: 'theme.color.mint',       swatch: '#142623', ring: '#7ae8c8' },
-  // Natural-material palette — independent of shape and terminal font color.
-  // Near-black with a faint hue, not "colored theme".
-  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#5a5a5a' },
-  { code: 'cobalt',     labelKey: 'theme.color.cobalt',     swatch: '#0a1020', ring: '#5a85b8' },
-  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#0b1612', ring: '#6a9878' },
-  // Spider-Man hero (pairs with the carbon shape).
-  { code: 'crimson',    labelKey: 'theme.color.crimson',    swatch: '#2a0d10', ring: '#e23b42' },
-  { code: 'sunset',     labelKey: 'theme.color.sunset',     swatch: '#241408', ring: '#f5803b' },
-  { code: 'amber',      labelKey: 'theme.color.amber',      swatch: '#20180a', ring: '#e8a72c' },
-  { code: 'emerald',    labelKey: 'theme.color.emerald',    swatch: '#0a1c12', ring: '#24c281' },
-  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#0a2125', ring: '#2bc4c4' },
-  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#12142e', ring: '#6172f0' },
-  { code: 'fuchsia',    labelKey: 'theme.color.fuchsia',    swatch: '#210f1d', ring: '#d94aa0' },
+// One entry per colour family. Every family carries both halves of its palette:
+// the night values (applied when data-mode="dark") and the day values (applied
+// when data-mode="light", see the [data-mode="light"] blocks in global.css), so
+// the appearance grid can render any of the three modes from one table and
+// follow-system just swaps which half is on screen. Swatch = the palette's
+// --bg-app, ring = its --accent; keep both in sync with the CSS.
+//
+// labelKey is the family's one name: the card reads the same in all three
+// mode tabs (a name per half would double the grid's text and still describe
+// only one hue).
+export const THEME_COLORS: {
+  code: ThemeColor; labelKey: I18nKey;
+  swatch: string; ring: string; daySwatch: string; dayRing: string;
+}[] = [
+  // Columns: neutral, rose, orange, green, blue, violet; rows: soft, deep.
+  // Stable codes preserve saved preferences when a palette is renamed.
+  { code: 'light',      labelKey: 'theme.color.light',      swatch: '#24221f', ring: '#9aa0a6', daySwatch: '#f6f4ef', dayRing: '#5c6267' },
+  { code: 'sakura',     labelKey: 'theme.color.sakura',     swatch: '#262024', ring: '#dab2be', daySwatch: '#f9f8f8', dayRing: '#773b4d' },
+  { code: 'amber',      labelKey: 'theme.color.amber',      swatch: '#272219', ring: '#d2b28e', daySwatch: '#faf9f7', dayRing: '#7f5c34' },
+  { code: 'mint',       labelKey: 'theme.color.mint',       swatch: '#1f2723', ring: '#b0c9bc', daySwatch: '#f8f9f9', dayRing: '#437059' },
+  { code: 'glacier',    labelKey: 'theme.color.glacier',    swatch: '#20252d', ring: '#adc3dd', daySwatch: '#f8f9fa', dayRing: '#34567f' },
+  { code: 'lavender',   labelKey: 'theme.color.lavender',   swatch: '#25212b', ring: '#c7b3d4', daySwatch: '#f9f8f9', dayRing: '#5f3d75' },
+
+  { code: 'obsidian',   labelKey: 'theme.color.obsidian',   swatch: '#0a0a0a', ring: '#858585', daySwatch: '#eaecee', dayRing: '#3c4a5d' },
+  { code: 'slate',      labelKey: 'theme.color.slate',      swatch: '#130f11', ring: '#ad7480', daySwatch: '#efe9ea', dayRing: '#65343f' },
+  { code: 'dark',       labelKey: 'theme.color.dark',       swatch: '#15110e', ring: '#a97d5c', daySwatch: '#f0ebe8', dayRing: '#6b482e' },
+  { code: 'moss',       labelKey: 'theme.color.moss',       swatch: '#101812', ring: '#6d9d82', daySwatch: '#e9eeec', dayRing: '#39604a' },
+  { code: 'indigo',     labelKey: 'theme.color.indigo',     swatch: '#101620', ring: '#6789b6', daySwatch: '#e8ebf0', dayRing: '#2c486d' },
+  { code: 'teal',       labelKey: 'theme.color.teal',       swatch: '#15101b', ring: '#9a78ae', daySwatch: '#ede9ef', dayRing: '#523663' },
 ];
+
+// ─── Theme mode (light / night / follow the OS) ──────────────────────────────
+// The tab row beside the "Colors" label. A mode picks which half of every
+// colour family above gets applied; `system` follows the OS light/dark
+// preference live (App.tsx listens to prefers-color-scheme).
+export const THEME_MODES: { code: ThemeMode; labelKey: I18nKey }[] = [
+  { code: 'light',  labelKey: 'theme.mode.light'  },
+  { code: 'dark',   labelKey: 'theme.mode.dark'   },
+  { code: 'system', labelKey: 'theme.mode.system' },
+];
+
+/** The half of the palette to paint: `system` defers to the OS preference. */
+export function resolveThemeMode(mode: ThemeMode, systemDark: boolean): 'light' | 'dark' {
+  return mode === 'system' ? (systemDark ? 'dark' : 'light') : mode;
+}
 
 // ─── Theme shapes (corner/surface treatment) ─────────────────────────────────
 // Frost shares Glass's full chrome; only the frosted backdrop differs (a

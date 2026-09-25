@@ -154,10 +154,50 @@
 }
 .settings-section-label:first-child { margin-top: 0; }
 
+/* Section header with a control on the right (theme mode tabs). The label
+   keeps its own margins for the plain sections above/below it. */
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 11px;
+}
+.settings-section-head:first-child { margin-top: 0; }
+.settings-section-head .settings-section-label { margin: 0; }
+
+/* Light / Night / Follow-system. Same segmented strip as the side panels'
+   "工作区 | 会话记录" rows: no container, no pill, no shadow — the active
+   segment is simply the brighter label. Panel shape draws the bordered box
+   around it from the shared rule in global.css, so the modal tab row and the
+   panel tab rows stay one look. */
+.settings-mode-tabs {
+  display: flex;
+  flex-shrink: 0;
+}
+.settings-mode-tab {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-2, rgba(255, 255, 255, 0.7));
+  font-family: var(--font, system-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.settings-mode-tab:hover:not(.active) { color: var(--text-1, #fff); }
+.settings-mode-tab.active {
+  background: transparent;
+  color: var(--text-1, #fff);
+}
+
 /* ── Two-tone theme cards (surface band + accent band, label below) ────── */
 .settings-theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 11px;
 }
 .settings-theme-card {
@@ -172,15 +212,28 @@
 .settings-theme-preview {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 46px;
   border-radius: var(--radius-sm, 9px);
   overflow: hidden;
   border: 2px solid transparent;
   transition: border-color 0.14s ease, transform 0.14s ease;
 }
+/* One half of the palette. Single-mode tabs render one half across the full
+   card; the follow-system tab paints the day half beside the night half, the
+   pair the family would swap between. */
+.settings-theme-half {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
 .settings-theme-card:hover .settings-theme-preview { transform: translateY(-1px); }
-.settings-theme-card.active .settings-theme-preview { border-color: var(--ring, var(--accent)); }
+.settings-theme-card.active .settings-theme-preview {
+  border-color: var(--ring, var(--accent));
+  /* Cover antialiasing seams between the border and clipped color bands. */
+  background: var(--ring, var(--accent));
+}
 .settings-theme-band-bg { flex: 1; }
 .settings-theme-band-accent { height: 14px; }
 .settings-theme-check {

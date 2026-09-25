@@ -8,3 +8,8 @@ const CHAT_TOOLS = new Set<ToolType>([
 export function supportsConversationTool(tool: ToolType | null | undefined): boolean {
   return Boolean(tool && CHAT_TOOLS.has(tool));
 }
+
+/** Only these verified TUIs need cursor suppression while repainting. */
+export function usesSelfRenderedCaret(tool: ToolType | null | undefined): boolean {
+  return tool === 'claude' || tool === 'codex' || tool === 'kimicode';
+}

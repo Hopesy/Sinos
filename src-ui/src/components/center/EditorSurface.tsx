@@ -6,6 +6,7 @@ import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker
 import { commands } from '../../tauri';
 import type { EditorFileSnapshot } from '../../tauri';
 import { useAppState } from '../../store/app-state';
+import { useDataAttr } from '../../lib/use-data-attr';
 import { useT } from '../../i18n/useT';
 import './EditorSurface.css';
 
@@ -119,6 +120,7 @@ function formatError(error: unknown, t: ReturnType<typeof useT>): string {
 
 export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSurfaceProps) {
   const { state, dispatch } = useAppState();
+  const resolvedMode = useDataAttr('data-mode');
   const t = useT();
   const tab = state.editorTabs.find(item => item.id === tabId);
   const [loading, setLoading] = useState(true);
@@ -390,7 +392,7 @@ export function EditorSurface({ tabId, path, workspaceRoot, isActive }: EditorSu
       </div>
       <div className="editor-body">
         <Editor
-          theme={state.currentTheme === 'light' ? 'vs' : 'vs-dark'}
+          theme={resolvedMode === 'light' ? 'vs' : 'vs-dark'}
           defaultLanguage="plaintext"
           defaultValue=""
           onMount={handleMount}

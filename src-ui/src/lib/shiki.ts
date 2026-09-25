@@ -51,12 +51,12 @@ function detectLanguage(filePath: string): string | null {
 
 export type LineTokens = ThemedToken[];
 
-/** Theme for the syntax tokens, picked by the app's `data-theme` attribute.
- *  Coffee CLI has 9 ThemeColor values (dark/light/cappuccino/sakura/...)
- *  but only `light` is a true light palette; the rest are dark accent
- *  variants — so a binary light/dark split is the right mapping. */
-export function getShikiTheme(dataTheme: string | null): 'github-light-default' | 'github-dark-default' {
-  return dataTheme === 'light' ? 'github-light-default' : 'github-dark-default';
+/** Theme for the syntax tokens, picked by the app's `data-mode` attribute.
+ *  Every colour family ships a night and a day palette, and data-mode already
+ *  resolves follow-system down to one of the two — so a binary light/dark
+ *  split is the right mapping. */
+export function getShikiTheme(dataMode: string | null): 'github-light-default' | 'github-dark-default' {
+  return dataMode === 'light' ? 'github-light-default' : 'github-dark-default';
 }
 
 /** Tokenize `text` for syntax-highlighted rendering. Returns one

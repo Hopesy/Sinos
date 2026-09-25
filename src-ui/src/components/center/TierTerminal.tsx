@@ -25,6 +25,7 @@ import {
   clearTerminalInteraction, getTerminalInteraction, hasTerminalInteraction,
   parseTerminalAgentStatus, parseTerminalInteraction, readTerminalScreen, setTerminalInteraction, supportsTerminalInteraction,
 } from '../../lib/terminal-interaction';
+import { usesSelfRenderedCaret } from '../../lib/chat-tools';
 import { createTerminalAgentStatus } from '../../lib/terminal-agent-status';
 import { createTerminalInteractionResponder } from '../../lib/terminal-interaction-response';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
@@ -39,6 +40,8 @@ import { commands } from '../../tauri';
 import { supportsAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, type ToolType, type ThemeColor } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { getToolDisplayName } from '../../lib/tool-info';
+import { THEME_COLORS } from '../../lib/personalization';
+import { useDataAttr } from '../../lib/use-data-attr';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
 import '@xterm/xterm/css/xterm.css';
 import './TierTerminal.css';
@@ -74,54 +77,15 @@ export const TERM_COLOR_SCHEMES: TermColorScheme[] = [
 // Mirror of `--bg-terminal` from global.css. Kept in JS so the terminal can
 // pick the right background synchronously on theme prop change — reading the
 // CSS variable lags by one switch (child effects fire before App.tsx writes
-// `data-theme`). Must stay in sync with each [data-theme] block in global.css.
-// Dark themes follow "terminal bg == bg-app" for a continuous surface.
-// Light theme deliberately uses a softer cream than --bg-app: pure ivory
-// #FAFAF7 is too bright for CLI mid-tone palettes (Claude Code's RGB tan
-// branding, ANSI bright-black), and going too gray makes those same colors
-// vanish. #eeebe2 keeps the daytime feel while giving dark + gray text
-// 5–12:1 contrast so primary/secondary copy stays legible.
-const THEME_TERMINAL_BG: Record<string, string> = {
-  dark:       '#1a1917',
-  light:      '#eeebe2',
-  cappuccino: '#1a1a1a',
-  sakura:     '#1a1520',
-  lavender:   '#1a1826',
-  mint:       '#0f1e1c',
-  obsidian:   '#0a0a0a',
-  cobalt:     '#0a1020',
-  moss:       '#0b1612',
-  crimson:    '#2a0d10',
-  sunset:     '#241408',
-  amber:      '#20180a',
-  emerald:    '#0a1c12',
-  teal:       '#0a2125',
-  indigo:     '#12142e',
-  fuchsia:    '#210f1d',
-};
-
-// Per-theme selection accent. Picked so each theme's selection highlight
-// reads as a deeper variant of that theme's signature hue rather than the
-// brand coffee for every theme. deriveSelectionBg further darkens these
-// and applies alpha before they reach xterm.
-const THEME_SELECTION_ACCENT: Record<string, string> = {
-  dark:       '#c4956a',
-  light:      '#c4956a',
-  cappuccino: '#c4956a',
-  sakura:     '#e08aa8',
-  lavender:   '#a896d8',
-  mint:       '#7ec4a8',
-  obsidian:   '#9ca8b8',
-  cobalt:     '#5a8cd0',
-  moss:       '#88b87a',
-  crimson:    '#e23b42',
-  sunset:     '#f5803b',
-  amber:      '#e8a72c',
-  emerald:    '#24c281',
-  teal:       '#2bc4c4',
-  indigo:     '#6172f0',
-  fuchsia:    '#d94aa0',
-};
+// `data-theme`). All families follow "terminal bg == bg-app" for a continuous
+// surface. The background + selection accent come straight from THEME_COLORS
+// (the same table the appearance grid paints), so a palette can never drift
+// between the swatch the user picked and the terminal they get. Each family
+// carries a night and a day value; `isDark` selects the half on screen — which
+// also keeps OSC 11 (Claude Code's /theme auto) honest in every palette.
+function themePair(themeName: string) {
+  return THEME_COLORS.find(c => c.code === themeName);
+}
 
 // Collapse any mix of CRLF / bare CR into plain LF before handing text to
 // xterm.paste. Windows puts CRLF into the clipboard and most TUIs on the
@@ -178,10 +142,11 @@ function buildXtermTheme(
   schemeId?: string,
   rawShell = false,
   cursorVisible = true,
+  isDark = true,
 ) {
-  const isDark = themeName !== 'light';
   const scheme = schemeId ? TERM_COLOR_SCHEMES.find(s => s.id === schemeId) : undefined;
-  const bgOpaque = THEME_TERMINAL_BG[themeName] || (isDark ? '#0c0c0c' : '#eeebe2');
+  const pair = themePair(themeName);
+  const bgOpaque = (isDark ? pair?.swatch : pair?.daySwatch) ?? (isDark ? '#0a0a0a' : '#eeece6');
   const bg = hasBg ? 'rgba(0,0,0,0)' : bgOpaque;
 
   // Build the default warm palette first (full 16 ANSI colors), then let
@@ -189,9 +154,9 @@ function buildXtermTheme(
   const defaultFg = isDark ? '#e8e4de' : '#2d2c2a';
   const fg = scheme?.fg ?? defaultFg;
   // Selection priority: terminal-color-scheme chip (if set) → app theme accent
-  // → coffee. So picking sakura/cobalt/mint etc. recolors the highlight even
+  // → coffee. So picking sakura/indigo/mint etc. recolors the highlight even
   // without choosing a per-terminal fg chip.
-  const selectionAccent = scheme?.fg ?? THEME_SELECTION_ACCENT[themeName] ?? '#c4956a';
+  const selectionAccent = scheme?.fg ?? (isDark ? pair?.ring : pair?.dayRing) ?? '#c4956a';
   const selectionBackground = deriveSelectionBg(selectionAccent, isDark);
 
   const base = isDark ? {
@@ -419,14 +384,17 @@ function TierTerminalImpl({
   sessionId, tool, toolName, theme, lang, isActive, conversationActive = false,
   toolData, folderPath, resumeToken, hasBg, bgUrl, bgType, termColorScheme, termFont,
 }: TierTerminalProps) {
-  // Raw shells (local terminal / remote SSH) have no TUI painting its own
-  // caret — the xterm cursor is the only input-position indicator, so these
-  // tabs keep it visible (issue #95). Drives the theme + CSS below.
-  const isRawShell = tool === 'terminal' || tool === 'remote';
+  // Tools without a verified self-rendered caret rely on the xterm cursor
+  // for their input position. Raw shells and remote SSH always retain it.
+  // Drives the cursor theme and CSS below (issue #95).
+  const keepXtermCursor = !usesSelfRenderedCaret(tool);
+  // Which half of the colour family is on screen (App.tsx owns the attribute;
+  // follow-system flips it live, so the terminal re-tints with the app).
+  const isDarkTheme = useDataAttr('data-mode') !== 'light';
   // Keep the latest theme arguments available to the one-shot xterm init
   // effect without re-creating the PTY when the user changes appearance.
-  const terminalThemeArgsRef = useRef({ theme, hasBg, termColorScheme, isRawShell });
-  terminalThemeArgsRef.current = { theme, hasBg, termColorScheme, isRawShell };
+  const terminalThemeArgsRef = useRef({ theme, hasBg, termColorScheme, keepXtermCursor, isDarkTheme });
+  terminalThemeArgsRef.current = { theme, hasBg, termColorScheme, keepXtermCursor, isDarkTheme };
   // Agent cursor suppression is renderer-independent: changing the xterm
   // theme hides the WebGL rectangle and the DOM decoration without touching
   // the cursor cell or the PTY byte stream. Start visible so a CLI that has
@@ -579,21 +547,23 @@ function TierTerminalImpl({
         theme,
         hasBg,
         termColorScheme,
-        isRawShell,
+        keepXtermCursor,
         agentCursorVisibleRef.current,
+        isDarkTheme,
       ),
     });
 
     const setAgentCursorVisible = (visible: boolean) => {
-      if (isRawShell || agentCursorVisibleRef.current === visible) return;
+      if (keepXtermCursor || agentCursorVisibleRef.current === visible) return;
       agentCursorVisibleRef.current = visible;
       const current = terminalThemeArgsRef.current;
       term.options.theme = buildXtermTheme(
         current.theme,
         current.hasBg,
         current.termColorScheme,
-        current.isRawShell,
+        current.keepXtermCursor,
         visible,
+        current.isDarkTheme,
       );
       // Theme changes schedule a renderer refresh. Refresh the full viewport
       // as well so a WebGL cursor rectangle from the temporary anchor cannot
@@ -617,7 +587,7 @@ function TierTerminalImpl({
     };
 
     const suspendAgentCursor = () => {
-      if (isRawShell) return;
+      if (keepXtermCursor) return;
       setAgentCursorVisible(false);
       // This is a fallback for a queued write that has not reached xterm yet;
       // the onWriteParsed listener below replaces it with a parser-relative
@@ -1186,7 +1156,7 @@ function TierTerminalImpl({
     // caret relative to `onWriteParsed`, not only relative to PTY receipt, so
     // the cursor is revealed at the final position of a completed TUI frame.
     const writeParsedSub = term.onWriteParsed(() => {
-      if (!isRawShell && !agentCursorVisibleRef.current) {
+      if (!keepXtermCursor && !agentCursorVisibleRef.current) {
         scheduleAgentCursorRestore();
       }
     });
@@ -1668,10 +1638,11 @@ function TierTerminalImpl({
       theme,
       hasBg,
       termColorScheme,
-      isRawShell,
+      keepXtermCursor,
       agentCursorVisibleRef.current,
+      isDarkTheme,
     );
-  }, [theme, termColorScheme, hasBg, isRawShell]);
+  }, [theme, termColorScheme, hasBg, keepXtermCursor, isDarkTheme]);
 
   // ── Terminal font sync (live, no PTY restart) ────────────────────────────
   useEffect(() => {
@@ -2061,7 +2032,8 @@ function TierTerminalImpl({
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  const solidBg = THEME_TERMINAL_BG[theme] || (theme === 'light' ? '#eeebe2' : '#0c0c0c');
+  const solidBg = (isDarkTheme ? themePair(theme)?.swatch : themePair(theme)?.daySwatch)
+    ?? (isDarkTheme ? '#0a0a0a' : '#eeece6');
   const terminalBg = hasBg ? 'transparent' : solidBg;
 
   return (
@@ -2197,7 +2169,7 @@ function TierTerminalImpl({
       >
         {/* Raw shells get the `raw-shell` class so the cursor-decoration rule
             skips them (issue #95 — see TierTerminal.css). */}
-        <div ref={termRef} className={`tier-xterm${isRawShell ? ' raw-shell' : ''}`} />
+        <div ref={termRef} className={`tier-xterm${keepXtermCursor ? ' raw-shell' : ''}`} />
       </div>
 
       {/* Terminal right-click context menu */}

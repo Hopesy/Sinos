@@ -57,7 +57,6 @@ export const vi = {
   'tab.new': 'Chọn công cụ',
 
 
-
   // Task Board
   'task.notes_placeholder': 'Thêm ghi chú...',
   'task.section.working': 'Đang tiến hành',
@@ -169,22 +168,22 @@ Xóa tờ ghi chú này khi bạn sẵn sàng và bắt đầu tác vụ đầu 
   'theme.section.color': 'Màu sắc',
   'theme.section.shape': 'Hình dạng',
   'theme.section.icons': 'Biểu tượng',
-  'theme.color.light': 'Sáng',
-  'theme.color.dark': 'Tối',
-  'theme.color.cappuccino': 'Code Dark',
+  // Chế độ giao diện (bên phải mục "Màu sắc")
+  'theme.mode.light': 'Sáng',
+  'theme.mode.dark': 'Ban đêm',
+  'theme.mode.system': 'Theo hệ thống',
+  'theme.color.light': 'Sương mù',
+  'theme.color.dark': 'Latte',
   'theme.color.sakura': 'Sakura',
   'theme.color.lavender': 'Oải hương',
   'theme.color.mint': 'Bạc hà',
-  'theme.color.obsidian': 'Obsidian',
-  'theme.color.cobalt': 'Cobalt',
+  'theme.color.obsidian': 'Than chì',
   'theme.color.moss': 'Rêu',
-  'theme.color.crimson': 'Đỏ thẫm',
-  'theme.color.sunset': 'Hoàng hôn',
   'theme.color.amber': 'Hổ phách',
-  'theme.color.emerald': 'Lục bảo',
-  'theme.color.teal': 'Mòng két',
+  'theme.color.teal': 'Tím nho',
   'theme.color.indigo': 'Chàm',
-  'theme.color.fuchsia': 'Hồng sen',
+  'theme.color.glacier': 'Xanh băng',
+  'theme.color.slate': 'Hoa hồng',
 
   // Gambit · Nước cờ
   'gambit.title': 'Nước cờ',
