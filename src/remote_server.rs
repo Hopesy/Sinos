@@ -1087,16 +1087,8 @@ fn resize_session(
         .map(|s| s._master.clone())
         .ok_or("session not found")?;
     let guard = master.lock().map_err(|e| e.to_string())?;
-    guard
-        .as_ref()
-        .ok_or("terminal closed")?
-        .resize(portable_pty::PtySize {
-            cols,
-            rows,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())
+    let master = guard.as_ref().ok_or("terminal closed")?;
+    crate::server::resize_terminal_pty(master.as_ref(), cols, rows)
 }
 
 fn set_paused(

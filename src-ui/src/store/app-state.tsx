@@ -1,7 +1,7 @@
 // Sinos CLI — Global App State (React Context)
 
-import { createContext, useContext, useReducer } from 'react';
-import type { ReactNode } from 'react';
+import { createContext, useContext, useLayoutEffect, useReducer, useRef } from 'react';
+import type { ReactNode, RefObject } from 'react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -351,6 +351,7 @@ export function resolveDiffContext(session: TerminalSession | null | undefined):
 
 type Action =
   | { type: 'SET_FOLDER'; path: string }
+  | { type: 'SET_TERMINAL_CWD'; id: string; path: string }
   | { type: 'CLEAR_FOLDER' }
   | { type: 'SET_THEME'; theme: ThemeColor }
   | { type: 'SET_SHAPE'; shape: ThemeShape }
@@ -407,6 +408,31 @@ type Action =
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case 'SET_TERMINAL_CWD': {
+      let changed = false;
+      const terminals = state.terminals.map(t => {
+        if (t.id === action.id && t.folderPath !== action.path) {
+          changed = true;
+          return { ...t, folderPath: action.path };
+        }
+        if (!t.multiAgent) return t;
+        const panes = t.multiAgent.panes.map(p => {
+          if ((paneSessionId(t.id, p.paneIdx, 'split') === action.id
+            || paneSessionId(t.id, p.paneIdx, 'pane') === action.id) && p.folderPath !== action.path) {
+            changed = true;
+            return { ...p, folderPath: action.path };
+          }
+          return p;
+        });
+        return panes.some((p, i) => p !== t.multiAgent!.panes[i])
+          ? { ...t, multiAgent: { ...t.multiAgent, panes } } : t;
+      });
+      if (!changed) return state;
+      if (action.id === state.activeTerminalId) {
+        try { localStorage.setItem('cc-folder', action.path); } catch { /* Best-effort operation; failure is non-fatal. */ }
+      }
+      return { ...state, terminals };
+    }
     case 'SET_FOLDER':
       // Persist as the "last folder" so a fresh launch lands here instead
       // of the C-drive default. Read back in getInitialState().
@@ -987,11 +1013,11 @@ function getInitialState(): AppState {
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 //
-// Two separate contexts so components that only need to dispatch (not read
-// state) don't get re-rendered on every state change. This is what lets the
-// React.memo'd TierTerminal skip re-renders when unrelated state updates fire.
+// Keep dispatch, event-time state reads, and translations independent of the
+// full state subscription so hidden terminals and conversations can stay memoized.
 
-const StateContext = createContext<AppState | null>(null);
+const StateRefContext = createContext<RefObject<AppState> | null>(null);
+const LanguageContext = createContext<string | null>(null);
 const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
 
 // Kept for backward compatibility with existing consumers that read both
@@ -1004,17 +1030,21 @@ const AppContext = createContext<{
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, getInitialState);
+  const stateRef = useRef(state);
+  useLayoutEffect(() => { stateRef.current = state; }, [state]);
   // The combined-context value has to be recomputed whenever state changes,
   // so keeping the split contexts lets hot components subscribe only to the
   // half they care about.
   const combined = { state, dispatch };
   return (
     <DispatchContext.Provider value={dispatch}>
-      <StateContext.Provider value={state}>
-        <AppContext.Provider value={combined}>
-          {children}
-        </AppContext.Provider>
-      </StateContext.Provider>
+      <StateRefContext.Provider value={stateRef}>
+        <LanguageContext.Provider value={state.currentLang}>
+          <AppContext.Provider value={combined}>
+            {children}
+          </AppContext.Provider>
+        </LanguageContext.Provider>
+      </StateRefContext.Provider>
     </DispatchContext.Provider>
   );
 }
@@ -1023,6 +1053,19 @@ export function useAppState() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error('useAppState must be inside AppProvider');
   return ctx;
+}
+
+/** Latest committed state for event handlers; does not subscribe to renders. */
+export function useAppStateRef(): RefObject<AppState> {
+  const ref = useContext(StateRefContext);
+  if (!ref) throw new Error('useAppStateRef must be inside AppProvider');
+  return ref;
+}
+
+export function useAppLanguage(): string {
+  const lang = useContext(LanguageContext);
+  if (lang === null) throw new Error('useAppLanguage must be inside AppProvider');
+  return lang;
 }
 
 /**

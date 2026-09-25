@@ -985,19 +985,22 @@ export function CenterPanel() {
   // process invoked as `launch …` — the running instance never restarts).
   useEffect(() => {
     if (!isTauri) return;
+    let cancelled = false;
     commands.takePendingLaunch()
-      .then(req => { if (req) applyLaunchRequest(req.tool as ToolType, req.cwd); })
+      .then(req => { if (!cancelled && req) applyLaunchRequest(req.tool as ToolType, req.cwd); })
       .catch(() => {});
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen<{ tool: string; cwd?: string; sessionId?: string }>('launch-request', e => {
-          applyLaunchRequest(e.payload.tool as ToolType, e.payload.cwd, e.payload.sessionId);
+        if (cancelled) return;
+        const handle = await listen<{ tool: string; cwd?: string; sessionId?: string }>('launch-request', e => {
+          if (!cancelled) applyLaunchRequest(e.payload.tool as ToolType, e.payload.cwd, e.payload.sessionId);
         });
+        if (cancelled) handle(); else unlisten = handle;
       } catch { /* event bridge unavailable (e.g. browser dev) — ignore */ }
     })();
-    return () => { if (unlisten) unlisten(); };
+    return () => { cancelled = true; unlisten?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1582,7 +1585,7 @@ export function CenterPanel() {
                       theme={state.currentTheme}
                       lang={state.currentLang}
                        isActive={t.id === activeTerminalId && !diffTabActive && !editorTabActive && t.viewMode !== 'chat'}
-                       conversationActive={t.id === activeTerminalId && !diffTabActive && !editorTabActive && t.viewMode === 'chat'}
+                       conversationActive={mobileWatching.has(t.id) || (t.id === activeTerminalId && !diffTabActive && !editorTabActive && t.viewMode === 'chat')}
                       toolData={t.toolData}
                       folderPath={t.folderPath}
                       resumeToken={t.resumeToken}
@@ -1594,7 +1597,7 @@ export function CenterPanel() {
                     />
                   </ErrorBoundary>
                 </div>
-                {supportsConversationTool(t.tool) && (t.viewMode === 'chat' || t.chatPending || mobileWatching.has(t.id)) && (
+                {supportsConversationTool(t.tool) && (
                   <div
                     className="conversation-mode-surface"
                     style={{ display: t.viewMode === 'chat' ? 'flex' : 'none' }}
@@ -1609,7 +1612,7 @@ export function CenterPanel() {
                         startedAt={t.startedAt}
                         pending={t.chatPending}
                         agentStatus={t.agentStatus}
-                        isActive={mobileWatching.has(t.id) || (t.id === activeTerminalId && !diffTabActive && !editorTabActive)}
+                        isActive={mobileWatching.has(t.id) || (t.id === activeTerminalId && !diffTabActive && !editorTabActive && (t.viewMode === 'chat' || Boolean(t.chatPending)))}
                         isVisible={t.viewMode === 'chat'}
                         onPendingResolved={() => dispatch({ type: 'SET_CHAT_PENDING', id: t.id })}
                         onPasteToDraft={(text) => dispatch({ type: 'APPEND_GAMBIT_DRAFT', id: t.id, text })}

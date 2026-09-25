@@ -1741,21 +1741,28 @@ fn tier_terminal_resize(
     rows: u16,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use portable_pty::PtySize;
     let map = state.terminal_session.lock().unwrap();
-    if let Some(session) = map.get(&session_id) {
-        let master_guard = session._master.lock().unwrap();
-        if let Some(ref master) = *master_guard {
-            let size = PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            };
-            master.resize(size).map_err(|e| format!("Resize failed: {}", e))?;
-        }
+    let session = map
+        .get(&session_id)
+        .ok_or_else(|| format!("No active terminal session for id: {session_id}"))?;
+    let master_guard = session._master.lock().unwrap();
+    let master = master_guard
+        .as_ref()
+        .ok_or_else(|| format!("Terminal session has no PTY master: {session_id}"))?;
+    resize_terminal_pty(master.as_ref(), cols, rows)
+}
+
+pub(crate) fn resize_terminal_pty(master: &dyn portable_pty::MasterPty, cols: u16, rows: u16) -> Result<(), String> {
+    if cols == 0 || rows == 0 {
+        return Err("Resize requires a non-zero PTY size".to_string());
     }
-    Ok(())
+    // get_size reads kernel state on Unix and ConPTY's applied size on Windows.
+    // In particular, a Unix child can change winsize itself (e.g. stty).
+    if master.get_size().is_ok_and(|size| size.cols == cols && size.rows == rows) {
+        return Ok(());
+    }
+    master.resize(portable_pty::PtySize { cols, rows, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| format!("Resize failed: {e}"))
 }
 
 #[tauri::command]
@@ -6699,3 +6706,7 @@ mod tests {
 #[cfg(test)]
 #[path = "server/history_cache_tests.rs"]
 mod history_cache_tests;
+
+#[cfg(test)]
+#[path = "server/pty_resize_tests.rs"]
+mod pty_resize_tests;

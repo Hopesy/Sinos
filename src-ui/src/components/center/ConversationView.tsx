@@ -166,7 +166,10 @@ async function loadConversationHistory(force = false): Promise<SavedSession[]> {
 }
 
 function normalizedPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  let normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  // Windows drive/UNC paths are case-insensitive. Preserve case on Unix,
+  // including case-sensitive macOS volumes and paths from remote sessions.
+  if (/^(?:[a-z]:(?:\/|$)|\/\/)/i.test(normalized)) normalized = normalized.toLowerCase();
   const worktreeMarker = normalized.indexOf('/.claude/worktrees/');
   return worktreeMarker >= 0 ? normalized.slice(0, worktreeMarker) : normalized;
 }
@@ -596,7 +599,17 @@ const ConversationNavigation = memo(function ConversationNavigation({
   );
 });
 
-function ConversationViewImpl({
+function ConversationViewImpl(props: ConversationViewProps) {
+  // A hidden desktop conversation can still supply the phone's native history.
+  const requested = props.isVisible || props.isActive || Boolean(props.pending);
+  const [opened, setOpened] = useState(requested);
+  if (requested && !opened) setOpened(true);
+  // Mount on first use, then retain the scroll owner and virtual row measurements
+  // when switching to terminal mode. The session key still resets both on restart.
+  return requested || opened ? <ConversationContent {...props} /> : null;
+}
+
+function ConversationContent({
   sessionId, tool, folderPath, resumeToken, startedAt, pending, agentStatus, isActive, isVisible,
   onPendingResolved, onPasteToDraft, hasBg, bgUrl, bgType, competingBindings = [],
 }: ConversationViewProps) {
@@ -1017,6 +1030,7 @@ function ConversationViewImpl({
     const element = scrollRef.current;
     if (!element) return;
     const onScroll = (event: Event) => {
+      if (element.clientHeight === 0) return;
       pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
       if (event.isTrusted && element.scrollTop < 520) loadOlderRef.current();
     };
@@ -1031,13 +1045,13 @@ function ConversationViewImpl({
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const element = scrollRef.current;
-      if (source && hasOlderRef.current && element &&
+      if (source && hasOlderRef.current && element && element.clientHeight > 0 &&
           element.scrollHeight <= element.clientHeight + 80) {
         loadOlderRef.current();
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, source]);
+  }, [messages.length, source, isActive, isVisible]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -1060,7 +1074,7 @@ function ConversationViewImpl({
       if (!pinnedRef.current || frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        if (pinnedRef.current) element.scrollTop = element.scrollHeight;
+        if (pinnedRef.current && element.clientHeight > 0) element.scrollTop = element.scrollHeight;
       });
     });
     observer.observe(element);
@@ -1208,7 +1222,7 @@ function ConversationViewImpl({
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (!element) return;
+    if (!element || element.clientHeight === 0) return;
     const prependAnchor = prependAnchorRef.current;
     if (prependAnchor) {
       prependAnchorRef.current = null;
@@ -1217,7 +1231,7 @@ function ConversationViewImpl({
       return;
     }
     if (pinnedRef.current) element.scrollTop = element.scrollHeight;
-  }, [messages, pending, activityLabel, virtual.total]);
+  }, [messages, pending, activityLabel, virtual.total, isActive, isVisible]);
 
   useLayoutEffect(() => {
     const target = pendingNavigationJumpRef.current;
