@@ -17,7 +17,8 @@ jobs:
   # the EchoBird pattern — a separate push-triggered CI is what makes every
   # release look like "a big pile of CI"). Here the gate runs ONLY on tag
   # push / workflow_dispatch, gated behind `needs:`, so a normal
-  # commit-to-main push pays zero CI cost.
+  # commit-to-main push never starts this release matrix. Review and Android
+  # workflows provide independent checks without publishing a release.
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -51,6 +52,9 @@ jobs:
 
       - name: Frontend regression tests
         run: npm test --prefix src-ui
+
+      - name: Upstream integration regressions
+        run: npm run test:regressions --prefix src-ui
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -33,6 +33,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci --prefix src-ui
       - run: npm test --prefix src-ui
+      - run: npm run test:regressions --prefix src-ui
       - run: chmod +x src-ui/android/gradlew
       - run: npm run android:apk --prefix src-ui
       - uses: actions/upload-artifact@v4

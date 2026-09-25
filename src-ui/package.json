@@ -15,7 +15,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:regressions": "node scripts/run-shiki-test.mjs && node scripts/run-history-cache-test.mjs && node scripts/run-tab-renderer-test.mjs && node scripts/run-conversation-virtualizer-test.mjs && node scripts/run-review-regressions.mjs && node scripts/run-mobile-host-regressions.mjs"
   },
   "dependencies": {
     "@capacitor/android": "8.5.2",
