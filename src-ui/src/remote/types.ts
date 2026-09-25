@@ -10,7 +10,7 @@ export interface RemoteTool { id: string; displayName: string }
 export interface RemoteState { sessions: RemoteSession[]; device_name: string; capabilities?: string[] }
 export type Connection = 'connecting' | 'online' | 'offline' | 'unauthorized' | 'replaced' | 'paused';
 export type StreamState = 'connecting' | 'live' | 'reconnecting' | 'ended';
-export type ServerMessage = { type: 'reset' } | { type: 'output'; session_id: string; data: string; sequence?: number } | { type: 'status'; session_id: string; running: boolean; paused: boolean } | { type: 'error'; message: string };
+export type ServerMessage = { type: 'reset' } | { type: 'codex' | 'claude'; session_id: string; page: import('./CodexEventStream').CodexPage } | { type: 'output'; session_id: string; data: string; sequence?: number } | { type: 'status'; session_id: string; running: boolean; paused: boolean } | { type: 'error'; message: string };
 export interface FileEntry { name: string; path: string; is_dir: boolean; size: number }
 export interface FileSnapshot { content: string; revision: string; line_ending: string; has_utf8_bom: boolean; size: number }
 export interface ChangeFile { path: string; status: string; added: number; deleted: number }

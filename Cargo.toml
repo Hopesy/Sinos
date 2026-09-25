@@ -19,13 +19,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # Tier Terminal — PTY (portable-pty, WezTerm's cross-platform PTY library)
 portable-pty = "0.9"
-# Only `task::spawn_blocking` is used by the system-font scanner. The old
-# loopback hook server and its network/runtime features have been removed.
-tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros"] }
+# Remote transport, owned Codex engine and background filesystem/font tasks.
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros", "process"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
 aes-gcm = "0.10"
 crypto_box = "0.9"
+sha2 = "0.10"
 url = "2"
 tower = { version = "0.5", features = ["util"] }
 

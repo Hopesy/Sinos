@@ -1,11 +1,17 @@
 import type { ChatMessage } from '../lib/chat-transcript';
 import { claudeChrome, type TerminalStatus } from './claudeChrome';
+import { codexToolMatches, projectCodex } from './codexProjection';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
 
 export interface ConversationEvent {
   id: string;
   kind: 'user' | 'assistant' | 'activity' | 'error';
   text: string;
   status?: 'running' | 'done' | 'failed';
+  terminal?: boolean;
+  notice?: 'info' | 'warning';
 }
 export interface ConversationChoice { label: string; input: string; checked?: boolean }
 export interface ConversationQuestion { id: string; text: string; choices: ConversationChoice[]; kind?: 'choice' | 'multi' | 'text'; cursor?: number }
@@ -27,7 +33,7 @@ function codeLines(lines: string[]) {
 }
 const chrome = /^(?:[\s─━═┄┈╭╮╰╯┌┐└┘├┤┬┴┼│┃+-]{3,}|[›❯>]\s*|(?:\? for shortcuts|\/help for help|esc to interrupt|press esc to interrupt|ctrl\+c to interrupt).*|(?:Claude Code|OpenAI Codex|Codex CLI)\s+v?\d.*)$/i;
 const questionStart = /(?:do you (?:want|trust)|would you like|allow .*(?:\?|:)|(?:proceed|continue)\?\s*$|是否(?:允许|继续|执行|信任)|要继续吗|允许.*[？?])/i;
-const menuHint = /^(?:(?:press\s+)?(?:enter|return)\b|esc\b|use (?:the )?(?:arrow|↑|↓)|[↑↓↵]|按|使用.*(?:选择|方向键))/i;
+const menuHint = /^(?:(?:press\s+)?(?:enter|return)\b|esc\b|tab to\b|use (?:the )?(?:arrow|↑|↓)|[↑↓←→↵]|按|使用.*(?:选择|方向键))/i;
 const menuConfirm = /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit)\b|(?:回车|Enter).*(?:确认|选择|继续|提交)/i;
 const menuMarker = /^( {0,3})([›❯>])( +)(\S.*)$/;
 type Interaction = { question: ConversationQuestion; start: number; end: number };
@@ -85,6 +91,7 @@ function findArrowMenu(lines: string[], cursorLine: number, code: Set<number>, t
     start--;
   }
   if (start < Math.max(0, first - 25)) return null;
+  if (/^\s*Question \d+\/\d+\b/.test(lines[start - 1] || '')) start--;
   // Claude's trust prompt places the directory immediately above its safety
   // explanation. Keep it in the card so consent retains its actual scope.
   let directory = start - 1;
@@ -102,12 +109,24 @@ function findArrowMenu(lines: string[], cursorLine: number, code: Set<number>, t
 }
 // Only turn an actual interactive prompt into controls. Numbered prose and
 // quoted examples must remain prose. Keep the original request and command.
-function findQuestion(lines: string[], cursorLine: number): Interaction | null {
+function findQuestion(lines: string[], cursorLine: number, tool?: string | null, renderedCode: ReadonlySet<number> = new Set()): Interaction | null {
   let start = -1;
   const code = codeLines(lines);
+  renderedCode.forEach(index => code.add(index));
   let tailIndex = lines.length - 1;
   while (tailIndex >= 0 && !lines[tailIndex].trim()) tailIndex--;
   const hint = lines[tailIndex]?.trim() || '';
+  if (tool === 'codex' && menuConfirm.test(hint) && /esc.*interrupt/i.test(hint) && !code.has(tailIndex)) {
+    const input = lines.findLastIndex((line, index) => index < tailIndex && !code.has(index) && /^\s{0,3}› Type your answer\b/i.test(line));
+    if (input >= 0 && cursorLine >= input) {
+      let first = input - 1;
+      while (first >= Math.max(0, input - 12) && !/^\s*Question \d+\/\d+\b/.test(lines[first])) first--;
+      if (first >= Math.max(0, input - 12)) {
+        const text = lines.slice(first, input).join('\n').trim();
+        return { question: { id: JSON.stringify(['codex-text', text]), kind: 'text', text, choices: [] }, start: first, end: lines.length };
+      }
+    }
+  }
   if (!code.has(tailIndex) && cursorLine >= tailIndex && /^(?:Type (?:your )?(?:answer|response)|Enter (?:your )?(?:answer|response)|请输入(?:你的)?(?:回答|答案)|输入(?:你的)?(?:回答|答案))/i.test(hint)) {
     for (let i = tailIndex - 1; i >= Math.max(0, tailIndex - 20); i--) {
       if (!code.has(i) && (/[?？]\s*$/.test(lines[i]) || questionStart.test(lines[i]))) {
@@ -190,19 +209,23 @@ export function multiChoiceInput(question: ConversationQuestion, selected: numbe
   return input + '\r';
 }
 
-export function projectConversation(lines: string[], cursorLine = lines.length - 1, toolName?: string | null): ConversationProjection {
+export function projectConversation(lines: string[], cursorLine = lines.length - 1, toolName?: string | null, richLines = lines, renderedCode: ReadonlySet<number> = new Set()): ConversationProjection {
   // Preserve code indentation, Markdown tables and literal box characters.
   // VT already removed the terminal control sequences; stripping borders here
   // can silently change source code and command output.
   const cleaned = lines.map(line => line.trimEnd());
   const code = codeLines(cleaned);
   const terminalChrome = toolName === 'claude' ? claudeChrome(cleaned, code) : null;
-  const interaction = findQuestion(cleaned, cursorLine);
+  const interaction = findQuestion(cleaned, cursorLine, toolName, renderedCode);
+  if (toolName === 'codex') {
+    const end = interaction?.start ?? cleaned.length;
+    return { ...projectCodex(cleaned.slice(0, end), richLines.slice(0, end), cursorLine, renderedCode), question: interaction?.question ?? null };
+  }
   const events: ConversationEvent[] = [];
   let paragraph: string[] = [], paragraphKind: 'assistant' | 'user' = 'assistant';
   const flush = () => {
     const text = paragraph.join('\n').replace(/^\n+|\n+$/g, '').trimEnd(); paragraph = [];
-    if (text.trim()) events.push({ id: `output-${events.length}`, kind: paragraphKind, text });
+    if (text.trim()) events.push({ id: `output-${events.length}`, kind: paragraphKind, text, ...(toolName === 'claude' ? { terminal: true } : {}) });
     paragraphKind = 'assistant';
   };
   for (let i = 0; i < cleaned.length; i++) {
@@ -210,7 +233,8 @@ export function projectConversation(lines: string[], cursorLine = lines.length -
     if (terminalChrome?.hidden.has(i)) { flush(); continue; }
     const line = cleaned[i], trimmed = line.trim();
     if (code.has(i)) { paragraph.push(line); continue; }
-    if (!trimmed || chrome.test(trimmed)) { flush(); continue; }
+    if (!trimmed) { if (toolName === 'claude' && paragraphKind === 'assistant' && paragraph.length) paragraph.push(''); else flush(); continue; }
+    if (chrome.test(trimmed)) { flush(); continue; }
     const user = /^[›❯]\s+(.+)$/.exec(trimmed);
     if (user) { flush(); paragraphKind = 'user'; paragraph.push(user[1]); continue; }
     // Claude's native spinner also contains `·` and ASCII `*`. If either
@@ -228,7 +252,10 @@ export function projectConversation(lines: string[], cursorLine = lines.length -
     } else if (/^(?:error\b|failed\b|错误[:：]|失败[:：])/i.test(trimmed)) {
       flush(); events.push({ id: `output-${events.length}`, kind: 'error', text: trimmed, status: 'failed' });
     } else {
-      paragraph.push(line.replace(/^[●]\s+/, '').replace(/^\s*⎿\s?/, ''));
+      if (toolName === 'claude' && /^●\s+/.test(line)) flush();
+      const source = toolName === 'claude' ? richLines[i] || line : line;
+      const text = source.replace(/^[●]\s+/, '').replace(/^\s*⎿\s?/, '');
+      paragraph.push(toolName === 'claude' ? text.replace(/^(\s*)•\s+/, '$1- ') : text);
     }
   }
   flush();
@@ -236,28 +263,64 @@ export function projectConversation(lines: string[], cursorLine = lines.length -
 }
 
 const normalize = (value: string) => value.replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
-export type ConversationRow = { source: 'message'; message: ChatMessage } | { source: 'projection'; event: ConversationEvent };
+export type ConversationRow = { source: 'message'; message: ChatMessage; key?: string } | { source: 'projection'; event: ConversationEvent };
+
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
+interface MarkdownNode { type: string; value?: string; url?: string; identifier?: string; alt?: string | null; children?: MarkdownNode[] }
+function visibleMarkdown(value: string) {
+  const tree = markdownParser.parse(value);
+  const definitions = new Map(tree.children.flatMap(node => node.type === 'definition' ? [[node.identifier, node.url] as const] : []));
+  function read(node: MarkdownNode): string {
+    // A soft wrap between CJK characters is layout, not a space in the
+    // source. Do this only to prose nodes, never code or inline code.
+    if (node.type === 'text') return (node.value || '').replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}，。！？、；：])[ \t]*\n[ \t]*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}，。！？、；：])/gu, '$1');
+    if (node.type === 'code' || node.type === 'inlineCode' || node.type === 'html') return node.value || '';
+    if (node.type === 'definition' || node.type === 'thematicBreak') return '';
+    if (node.type === 'break') return '\n';
+    if (node.type === 'image') return `${node.alt || ''} (${node.url || ''})`;
+    const block = ['root', 'list', 'listItem', 'blockquote', 'table', 'tableRow'].includes(node.type);
+    const content = (node.children || []).map(read).join(block ? '\n' : '');
+    if (node.type === 'link' || node.type === 'linkReference') {
+      const url = node.url || definitions.get(node.identifier || '');
+      return url && url !== content ? `${content} (${url})` : content;
+    }
+    return content;
+  }
+  return normalize(read(tree));
+}
+
+const textCache = new WeakMap<ChatMessage, { content: string; normalized: string; visible?: string }>();
+function messageText(message: ChatMessage, terminal: boolean) {
+  let cached = textCache.get(message);
+  if (!cached || cached.content !== message.content) {
+    cached = { content: message.content, normalized: normalize(message.content) }; textCache.set(message, cached);
+  }
+  if (terminal) return cached.visible ??= visibleMarkdown(message.content);
+  return cached.normalized;
+}
 
 /** Match fragments in reading order, consuming each occurrence once. Roles,
  * punctuation and case matter: a reply is not an echo of a user's prompt, and
  * `x += 1` must never replace `x = 1`. Unmatched output stays at its observed
  * position between the authoritative messages instead of moving to the tail. */
-export function mergeConversationTimeline(projection: ConversationProjection, native: ChatMessage[]): ConversationRow[] {
-  const normalized = native.map(message => normalize(message.content));
+export function mergeConversationTimeline(projection: ConversationProjection, native: ChatMessage[], keys?: Map<string, string>): ConversationRow[] {
+  const normalized = native.map(message => messageText(message, false));
+  const visible = projection.events.some(event => event.terminal) ? native.map(message => messageText(message, true)) : normalized;
   const offsets = new Map<number, number>();
   const outputOffsets = new Map<number, number>();
   const before = new Map<number, ConversationEvent[]>();
+  const liveTools = new Map<number, ChatMessage>();
   const waiting: ConversationEvent[] = [];
   let cursor = 0, anchor = -1;
   function insert(index: number) {
     before.set(index, [...(before.get(index) || []), ...waiting.splice(0)]);
   }
   for (const event of projection.events) {
-    const text = normalize(event.text);
+    const text = event.terminal ? visibleMarkdown(event.text) : normalize(event.text);
     if (!text) continue;
     let match = -1, consumed = 0;
     for (let i = cursor; i < native.length; i++) {
-      const message = native[i], offset = offsets.get(i) || 0, content = normalized[i];
+      const message = native[i], offset = offsets.get(i) || 0, content = event.terminal ? visible[i] : normalized[i];
       if (event.kind === message.role && (event.kind === 'user' || event.kind === 'assistant')) {
         const position = content.indexOf(text, offset);
         const wholeLine = message.content.split('\n').some(line => normalize(line) === text);
@@ -272,18 +335,29 @@ export function mergeConversationTimeline(projection: ConversationProjection, na
         }
       }
       const tool = /^(\w+)\((.+)\)$/.exec(event.text);
+      if (event.terminal && event.kind === 'activity' && message.role === 'tool' && !offset && codexToolMatches(event.text, message)) {
+        // The call often reaches JSONL before its output does. Folding the VT
+        // card into that empty native call must not hide the live tool output.
+        const body = event.text.split('\n').slice(1).map(line => line.replace(/^\s*[└│]\s?/, '')).join('\n').trim();
+        if (body && (!message.output || message.toolStatus === 'running')) liveTools.set(i, { ...message, output: body, ...(message.toolStatus === 'running' && event.status === 'failed' ? { toolStatus: 'failed' } : {}) });
+        match = i; consumed = content.length || 1; break;
+      }
       if (event.kind === 'activity' && tool && message.role === 'tool' && !offset && message.toolName?.toLowerCase() === tool[1].toLowerCase() && content.includes(normalize(tool[2]))) {
         match = i; consumed = content.length || 1; break;
       }
     }
     if (match < 0) waiting.push(event);
-    else { insert(match); cursor = match; anchor = match; if (consumed >= 0) offsets.set(match, consumed); }
+    else {
+      insert(match); cursor = match; anchor = match;
+      if (event.terminal && !keys?.has(native[match].id)) keys?.set(native[match].id, event.id);
+      if (consumed >= 0) offsets.set(match, consumed);
+    }
   }
   insert(anchor < 0 ? native.length : anchor + 1);
   const rows: ConversationRow[] = [];
   for (let i = 0; i <= native.length; i++) {
     for (const event of before.get(i) || []) rows.push({ source: 'projection', event });
-    if (i < native.length) rows.push({ source: 'message', message: native[i] });
+    if (i < native.length) rows.push({ source: 'message', message: liveTools.get(i) || native[i], ...(keys?.has(native[i].id) ? { key: keys.get(native[i].id) } : {}) });
   }
   return rows;
 }

@@ -21,6 +21,36 @@ beforeEach(() => {
 });
 afterEach(() => { client.dispose(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+it('carries Claude cursors independently and restarts its replay after reconnect', async () => {
+  const page = { epoch: 'claude-epoch', cursor: 9, reset: true, online: true, complete: true, has_more: false, thread_id: 'session', events: [] };
+  const rpc = vi.spyOn(client, 'rpc').mockResolvedValue({ data: '', offset: 2, running: true, paused: false, reset: false, claude: page });
+  const socket = client.socket('terminal'), receive = vi.fn(); socket.onmessage = receive;
+  await vi.advanceTimersByTimeAsync(1);
+  expect(receive.mock.calls.map(([frame]) => JSON.parse(frame.data).type)).toContain('claude');
+  await vi.advanceTimersByTimeAsync(1600);
+  expect(rpc).toHaveBeenLastCalledWith('terminal.read', 'terminal', expect.objectContaining({ claudeEpoch: 'claude-epoch', claudeCursor: 9 }));
+  socket.close();
+  const reconnect = client.socket('terminal'); await vi.advanceTimersByTimeAsync(1);
+  expect(rpc).toHaveBeenLastCalledWith('terminal.read', 'terminal', { offset: 0, codexEpoch: undefined, codexCursor: 0 });
+  reconnect.close();
+});
+
+it('carries incremental Codex cursors through the existing relay and starts a reconnect from a clean snapshot', async () => {
+  const page = { epoch: 'epoch', cursor: 7, reset: true, online: true, complete: true, thread_id: 'root', events: [] };
+  const rpc = vi.spyOn(client, 'rpc').mockResolvedValue({ data: '', offset: 10, running: true, paused: false, reset: false, codex: page });
+  const socket = client.socket('terminal');
+  const receive = vi.fn(); socket.onmessage = receive;
+  await vi.advanceTimersByTimeAsync(1);
+  expect(receive.mock.calls.map(([frame]) => JSON.parse(frame.data).type)).toContain('codex');
+  await vi.advanceTimersByTimeAsync(1600);
+  expect(rpc).toHaveBeenLastCalledWith('terminal.read', 'terminal', { offset: 10, codexEpoch: 'epoch', codexCursor: 7 });
+  socket.close();
+  const reconnected = client.socket('terminal');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(rpc).toHaveBeenLastCalledWith('terminal.read', 'terminal', { offset: 0, codexEpoch: undefined, codexCursor: 0 });
+  reconnected.close();
+});
+
 it('does not fight another tab for the same connection, and resumes only on request', async () => {
   FakeSocket.instances[0].open();
   FakeSocket.instances[0].close(1000, 'replaced');

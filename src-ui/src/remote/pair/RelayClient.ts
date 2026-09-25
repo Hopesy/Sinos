@@ -169,6 +169,10 @@ class RelayTerminalSocket implements RemoteSocket {
   onclose: RemoteSocket['onclose'] = null;
   onerror: RemoteSocket['onerror'] = null;
   private offset = 0;
+  private codexEpoch?: string;
+  private codexCursor = 0;
+  private claudeEpoch?: string;
+  private claudeCursor = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private client: RelayClient;
   private id: string;
@@ -176,12 +180,14 @@ class RelayTerminalSocket implements RemoteSocket {
   private async poll() {
     if (this.readyState > 1) return;
     try {
-      const result = await this.client.rpc<{ data: string; offset: number; running: boolean; paused: boolean; reset: boolean }>('terminal.read', this.id, { offset: this.offset });
+      const result = await this.client.rpc<{ data: string; offset: number; running: boolean; paused: boolean; reset: boolean; codex?: import('../CodexEventStream').CodexPage; claude?: import('../CodexEventStream').CodexPage }>('terminal.read', this.id, { offset: this.offset, codexEpoch: this.codexEpoch, codexCursor: this.codexCursor, ...(this.claudeEpoch ? { claudeEpoch: this.claudeEpoch, claudeCursor: this.claudeCursor } : {}) });
       if (this.readyState > 1) return;
       if (this.readyState === 0) { this.readyState = 1; this.onopen?.(new Event('open')); }
       this.offset = result.offset;
       if (result.reset) this.emit({ type: 'reset' });
       if (result.data) this.emit({ type: 'output', session_id: this.id, data: result.data, sequence: result.offset });
+      if (result.codex) { this.codexEpoch = result.codex.epoch; this.codexCursor = result.codex.cursor; this.emit({ type: 'codex', session_id: this.id, page: result.codex }); }
+      if (result.claude) { this.claudeEpoch = result.claude.epoch; this.claudeCursor = result.claude.cursor; this.emit({ type: 'claude', session_id: this.id, page: result.claude }); }
       this.emit({ type: 'status', session_id: this.id, running: result.running, paused: result.paused });
       this.timer = setTimeout(() => void this.poll(), document.hidden ? 1500 : 200);
     } catch { this.onerror?.(new Event('error')); this.close(); }

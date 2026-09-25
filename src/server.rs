@@ -1661,7 +1661,7 @@ fn tier_terminal_pause(
     paused: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (pid, paused_state) = {
+    let (pid, engine, paused_state) = {
         let map = state.terminal_session.lock().map_err(|e| e.to_string())?;
         let session = map
             .get(&session_id)
@@ -1669,10 +1669,11 @@ fn tier_terminal_pause(
         (
             session.process_id
                 .ok_or_else(|| format!("No active process for terminal session: {session_id}"))?,
+            session.codex_bridge.as_ref().and_then(|b| b.process_id.lock().ok().and_then(|p| *p)),
             session.paused.clone(),
         )
     };
-    crate::terminal::set_process_paused(pid, paused)?;
+    crate::terminal::pause_processes(pid, engine, paused)?;
     paused_state.store(paused, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
@@ -1798,6 +1799,12 @@ pub(crate) struct SavedSession {
     turn_count: Option<u32>,
 }
 
+impl SavedSession {
+    pub(crate) fn matches_token(&self, token: &str) -> bool {
+        self.session_token.as_deref() == Some(token)
+    }
+}
+
 #[tauri::command]
 fn get_terminal_session_token(
     session_id: String,
@@ -1807,10 +1814,7 @@ fn get_terminal_session_token(
     let Some(session) = map.get(&session_id) else {
         return Ok(None);
     };
-    let token = session.session_token.lock()
-        .map(|token| token.clone())
-        .map_err(|e| e.to_string())?;
-    Ok(token)
+    Ok(session.current_token())
 }
 
 fn file_created_epoch_ms(path: &std::path::Path) -> Option<String> {

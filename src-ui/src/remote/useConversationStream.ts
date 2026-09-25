@@ -3,6 +3,8 @@ import { RemoteClient, RemoteError, type RemoteSocket } from './client';
 import { multiChoiceInput, type ConversationProjection } from './conversationProjection';
 import type { RemoteSession, ServerMessage, StreamState } from './types';
 import type { TerminalConversation } from './TerminalConversation';
+import { CodexEventStream, type CodexLive } from './CodexEventStream';
+import { ClaudeEventStream, type ClaudeLive } from './ClaudeEventStream';
 
 const empty: ConversationProjection = { events: [], question: null };
 export function useConversationStream(client: RemoteClient, session: RemoteSession, online: boolean) {
@@ -12,6 +14,8 @@ export function useConversationStream(client: RemoteClient, session: RemoteSessi
   const [answered, setAnswered] = useState<string | null>(null);
   const [canAnswer, setCanAnswer] = useState(false);
   const [answerUnsupported, setAnswerUnsupported] = useState(false);
+  const [codex, setCodex] = useState<CodexLive>({ available: false, messages: [] });
+  const [claude, setClaude] = useState<ClaudeLive>({ available: false, turns: [] });
   const decoder = useRef<TerminalConversation | null>(null);
   const current = useRef({ projection: empty, sequence: undefined as number | undefined });
   const sessionRef = useRef(session);
@@ -21,10 +25,12 @@ export function useConversationStream(client: RemoteClient, session: RemoteSessi
 
   useEffect(() => {
     if (!online) return;
-    let disposed = false, ended = false, attempt = 0, generation = 0, lastFrame = Date.now();
+    let disposed = false, ended = false, attempt = 0, generation = 0, received = 0, rendered = 0, lastFrame = Date.now();
     let socket: RemoteSocket | null = null;
     let reconnect: ReturnType<typeof setTimeout>;
     let model: TerminalConversation | null = null;
+    let events = new CodexEventStream();
+    let claudeEvents = new ClaudeEventStream();
     function connect() {
       if (disposed || ended || document.hidden || (socket && socket.readyState <= 1)) return;
       clearTimeout(reconnect);
@@ -38,29 +44,47 @@ export function useConversationStream(client: RemoteClient, session: RemoteSessi
         current.current.sequence = undefined;
         setCanAnswer(false);
         generation++; attempt = 0; lastFrame = Date.now(); setStream('live');
+        events = new CodexEventStream(); setCodex(previous => ({ ...previous, available: false, retained: previous.available || previous.retained }));
+        claudeEvents = new ClaudeEventStream(); setClaude(previous => ({ ...previous, available: false, retained: previous.available || previous.retained }));
       };
       ws.onmessage = event => {
         if (disposed || socket !== ws) return;
         lastFrame = Date.now();
         try {
           const message = JSON.parse(event.data) as ServerMessage;
-          if (message.type === 'output' && model) {
-            const version = ++generation;
+          if (message.type === 'codex' && sessionRef.current.tool === 'codex') {
+            const next = events.apply(message.page);
+            setCodex(previous => {
+              // Keep the last complete Markdown while reconnect pages catch up,
+              // instead of flashing back to terminal-derived text.
+              if (message.page.has_more && previous.retained && next.threadId === previous.threadId) return previous;
+              return !message.page.online && message.page.complete ? { ...next, retained: next.messages.length > 0 } : next;
+            });
+          } else if (message.type === 'claude' && sessionRef.current.tool === 'claude') {
+            const next = claudeEvents.apply(message.page);
+            setClaude(previous => message.page.has_more && previous.retained && next.threadId === previous.threadId ? previous : next);
+          } else if (message.type === 'output' && model) {
+            // A later frame invalidates input, not already decoded output.
+            // Otherwise sustained PTY traffic starves rendering until it stops.
+            const epoch = generation, version = ++received;
             current.current.sequence = undefined;
             setCanAnswer(false);
             void model.write(message.data).then(next => {
-              if (disposed || socket !== ws || generation !== version) return;
-              current.current = { projection: next, sequence: ended ? undefined : message.sequence };
+              if (disposed || socket !== ws || generation !== epoch || version <= rendered) return;
+              rendered = version;
+              const sequence = !ended && version === received ? message.sequence : undefined;
+              current.current = { projection: next, sequence };
               setProjection(next);
-              setCanAnswer(!ended && Boolean(next.question) && message.sequence !== undefined);
+              setCanAnswer(Boolean(next.question) && sequence !== undefined);
               setAnswerUnsupported(message.sequence === undefined);
               if (answeredRef.current !== next.question?.id) answeredRef.current = null;
               setAnswered(previous => previous === next.question?.id ? previous : null);
-            });
+            }).catch(() => { if (!disposed && socket === ws && generation === epoch) ws.close(); });
           } else if (message.type === 'reset') {
             generation++; model?.dispose();
             model = decoder.current = new Decoder(sessionRef.current.cols || 120, sessionRef.current.rows || 30, sessionRef.current.tool);
-            current.current.sequence = undefined;
+            current.current = { projection: empty, sequence: undefined };
+            setProjection(empty); answeredRef.current = null; setAnswered(null);
             setCanAnswer(false);
           } else if (message.type === 'status' && !message.running) {
             ended = true; current.current.sequence = undefined; setCanAnswer(false); setStream('ended');
@@ -70,6 +94,8 @@ export function useConversationStream(client: RemoteClient, session: RemoteSessi
       ws.onclose = () => {
         if (disposed || ended || socket !== ws) return;
         generation++; current.current.sequence = undefined; setCanAnswer(false); setStream('reconnecting');
+        setCodex(previous => ({ ...previous, available: false, retained: previous.available || previous.retained }));
+        setClaude(previous => ({ ...previous, available: false, retained: previous.available || previous.retained }));
         reconnect = setTimeout(connect, Math.min(1000 * 2 ** attempt++, 15000));
       };
       ws.onerror = () => ws.close();
@@ -107,5 +133,5 @@ export function useConversationStream(client: RemoteClient, session: RemoteSessi
     }
     finally { answerBusy.current = false; setAnswering(false); }
   }
-  return { projection, stream, answer, answering, answered, answerUnsupported, canAnswer: online && canAnswer };
+  return { projection, codex, claude, stream, answer, answering, answered, answerUnsupported, canAnswer: online && canAnswer };
 }

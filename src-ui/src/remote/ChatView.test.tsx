@@ -5,15 +5,94 @@ import { ChatView } from './ChatView';
 import { RemoteClient, type ChatRead } from './client';
 import { projectConversation, type ConversationProjection } from './conversationProjection';
 import { trustMenu } from './fixtures/terminalMenus';
+import { CodexEventStream, type CodexLive } from './CodexEventStream';
+import { ClaudeEventStream, type ClaudeLive } from './ClaudeEventStream';
 
-const live = vi.hoisted(() => ({ projection: { events: [], question: null } as ConversationProjection, stream: 'live', answer: vi.fn(), answering: false, answered: null }));
+const live = vi.hoisted(() => ({ projection: { events: [], question: null } as ConversationProjection, codex: { available: false, messages: [] } as CodexLive, claude: { available: false, turns: [] } as ClaudeLive, stream: 'live', answer: vi.fn(), answering: false, answered: null }));
 vi.mock('./useConversationStream', () => ({ useConversationStream: () => live }));
 const client = { chat: vi.fn(), prompt: vi.fn(), input: vi.fn(), queue: vi.fn(), queueAction: vi.fn() } as unknown as RemoteClient;
 const session = { id: 'chat-test', tool: 'claude', cwd: '/project', running: true, paused: false, cols: 80, rows: 24, output_chunks: 0 };
 function read(data = '', revision = '1'): ChatRead { return { bound: true, data, revision, sourceId: 'native-one', cursor: data.length, history_cursor: 0, has_older: false, append: false, prepend: false, unchanged: false }; }
 function mount() { return render(<ChatView client={client} session={session} online toolName="Claude Code" onTitle={vi.fn()} insert="" onInserted={vi.fn()} />); }
-beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); live.projection = { events: [], question: null }; live.answer.mockReset().mockResolvedValue(undefined); vi.mocked(client.chat).mockReset().mockResolvedValue(read()); vi.mocked(client.prompt).mockReset().mockResolvedValue(undefined); vi.mocked(client.input).mockReset().mockResolvedValue(undefined); });
+beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); live.codex = { available: false, messages: [] }; live.claude = { available: false, turns: [] }; live.projection = { events: [], question: null }; live.answer.mockReset().mockResolvedValue(undefined); vi.mocked(client.chat).mockReset().mockResolvedValue(read()); vi.mocked(client.prompt).mockReset().mockResolvedValue(undefined); vi.mocked(client.input).mockReset().mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+it('renders Claude original Markdown once during streaming and native handoff while retaining approval controls', async () => {
+  live.claude = new ClaudeEventStream().apply({ epoch: 'c', cursor: 3, reset: true, online: true, complete: true, has_more: false, thread_id: 'claude-session', events: [
+    { sequence: 1, message: { kind: 'session', session: 'claude-session', model: 'Opus', percent: 18 } },
+    { sequence: 2, message: { kind: 'start', turn: 'turn', text: 'hello' } },
+    { sequence: 3, message: { kind: 'text', turn: 'turn', step: 0, index: 0, text: '1. **First**\n2. Second' } },
+  ] });
+  live.projection = { events: [{ id: 'vt', kind: 'assistant', text: 'unformatted echo' }], question: { id: 'approval', text: 'Allow tool?', choices: [{ label: 'Yes', input: '\r' }] } };
+  const view = mount(); await act(async () => {});
+  const article = view.container.querySelector('article.assistant');
+  expect(article?.querySelectorAll('li')).toHaveLength(2);
+  expect(screen.queryByText('unformatted echo')).toBeNull();
+  expect(screen.getByLabelText('会话状态').textContent).toContain('Opus');
+  expect(screen.getByLabelText('会话状态').textContent).toContain('18%');
+  expect(screen.getByText('Allow tool?')).toBeTruthy(); expect(live.answer).not.toHaveBeenCalled();
+  const data = [
+    { uuid: 'native-user', message: { role: 'user', content: 'hello' } },
+    { uuid: 'native-assistant', message: { role: 'assistant', content: '1. **First**\n2. Second' } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n';
+  vi.mocked(client.chat).mockResolvedValue({ ...read(data), sourceId: 'claude_native_claude-session' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
+  expect(view.container.querySelectorAll('article.assistant')).toHaveLength(1);
+  expect(view.container.querySelector('article.assistant')).toBe(article);
+});
+it('renders structured deltas immediately, suppresses the terminal echo, and keeps approvals/footer intact', async () => {
+  const events = new CodexEventStream();
+  const delta = (sequence: number, method: string, params: Record<string, unknown>) => ({ sequence, message: { method, params: { threadId: 'root', ...params } } });
+  live.codex = events.apply({ epoch: 'epoch', cursor: 3, reset: true, online: true, complete: true, thread_id: 'root', events: [
+    delta(1, 'sinos/thread', { model: 'gpt-live', effort: 'high', cwd: '/project' }),
+    delta(2, 'turn/started', { turn: { id: 'turn', status: 'inProgress' } }),
+    delta(3, 'item/agentMessage/delta', { itemId: 'reply', delta: '**Live**\n\n- One\n- Two' }),
+  ] });
+  live.projection = { events: [{ id: 'vt', kind: 'assistant', text: 'Unformatted terminal echo' }], question: { id: 'approval', text: 'Allow command?', choices: [{ label: 'Yes', input: '\r' }] } };
+  const props = { client, session: { ...session, tool: 'codex' }, online: true, toolName: 'Codex', onTitle: vi.fn(), insert: '', onInserted: vi.fn() };
+  const view = render(<ChatView {...props} />); await act(async () => {});
+  const article = view.container.querySelector('article');
+  expect(article?.querySelectorAll('li')).toHaveLength(2);
+  expect(screen.queryByText('Unformatted terminal echo')).toBeNull();
+  expect(screen.getByLabelText('会话状态').textContent).toContain('gpt-live high');
+  expect(screen.getByText('Allow command?')).toBeTruthy();
+  expect(live.answer).not.toHaveBeenCalled();
+  live.codex = events.apply({ epoch: 'epoch', cursor: 4, reset: false, online: true, complete: true, thread_id: 'root', events: [delta(4, 'item/agentMessage/delta', { itemId: 'reply', delta: '\n- Three' })] });
+  view.rerender(<ChatView {...props} />);
+  expect(view.container.querySelector('article')).toBe(article);
+  expect(article?.querySelectorAll('li')).toHaveLength(3);
+  vi.mocked(client.chat).mockResolvedValue({ ...read(JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { id: 'reply', type: 'AgentMessage', content: [{ type: 'Text', text: '**Live**\n\n- One\n- Two\n- Three' }] } } }) + '\n'), sourceId: 'codex_native_root' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
+  expect(view.container.querySelectorAll('article')).toHaveLength(1);
+  expect(view.container.querySelector('article')).toBe(article);
+});
+it('keeps the Codex footer outside history and shows native model/context even with an active question', async () => {
+  const data = [
+    { type: 'turn_context', payload: { model: 'gpt-5.4', effort: 'xhigh', cwd: '/new-project' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: { model_context_window: 112000, last_token_usage: { total_tokens: 32000 } } } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n';
+  vi.mocked(client.chat).mockResolvedValue(read(data));
+  const props = { client, session: { ...session, tool: 'codex' }, online: true, toolName: 'Codex', onTitle: vi.fn(), insert: '', onInserted: vi.fn() };
+  const view = render(<ChatView {...props} />); await act(async () => {});
+  const status = screen.getByLabelText('会话状态');
+  expect(status.textContent).toContain('gpt-5.4 xhigh');
+  expect(status.textContent).toContain('上下文剩余 80%');
+  expect(status.textContent).toContain('/new-project');
+  expect(status.closest('.chat-scroll')).toBeNull();
+  live.projection = { events: [], question: { id: 'q', text: 'Continue?', choices: [{ label: 'Yes', input: '\r' }] } };
+  view.rerender(<ChatView {...props} />);
+  expect(screen.getByLabelText('会话状态')).toBe(status);
+});
+
+it('keeps the same message element when Codex native Markdown replaces the live projection', async () => {
+  live.projection = projectConversation(['• **Changes**', '', '  • First', '  • Second'], 3, 'codex');
+  const view = render(<ChatView client={client} session={{ ...session, tool: 'codex' }} online toolName="Codex" onTitle={vi.fn()} insert="" onInserted={vi.fn()} />);
+  await act(async () => {});
+  const article = view.container.querySelector('article');
+  vi.mocked(client.chat).mockResolvedValue(read(JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '**Changes**\n\n- First\n- Second' }] } }) + '\n', '2'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
+  expect(view.container.querySelectorAll('article')).toHaveLength(1);
+  expect(view.container.querySelector('article')).toBe(article);
+});
 it('sends one multiline prompt and removes its optimistic copy when native history arrives', async () => {
   mount(); await act(async () => {});
   const text = '第一行\n第二行';

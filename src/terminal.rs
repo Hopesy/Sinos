@@ -28,7 +28,7 @@ pub static BACKGROUND_MODE: AtomicBool = AtomicBool::new(false);
 // and held the session lock under `~/.claude/`, so the next launch's Claude
 // Code tab failed to start (issue #28).
 #[cfg(target_os = "windows")]
-mod windows_job {
+pub(crate) mod windows_job {
     use std::sync::OnceLock;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::JobObjects::{
@@ -46,6 +46,23 @@ mod windows_job {
     unsafe impl Sync for JobHandle {}
 
     static JOB: OnceLock<Option<JobHandle>> = OnceLock::new();
+
+    pub(crate) struct SessionJob(JobHandle);
+    impl Drop for SessionJob { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.0.0); } } }
+    pub(crate) fn session_job(pid: u32) -> Option<SessionJob> {
+        unsafe {
+            let handle = CreateJobObjectW(None, None).ok()?;
+            let job = SessionJob(JobHandle(handle));
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(handle, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32).ok()?;
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid).ok()?;
+            let assigned = AssignProcessToJobObject(handle, process);
+            let _ = CloseHandle(process);
+            assigned.ok()?;
+            Some(job)
+        }
+    }
 
     fn get_or_create_job() -> Option<HANDLE> {
         JOB.get_or_init(|| unsafe {
@@ -465,6 +482,8 @@ pub fn find_preset(tool_name: &str) -> Option<&'static AgentPreset> {
 // ─── Shared Session State ─────────────────────────────────
 
 pub struct TerminalSession {
+    pub codex_bridge: Option<crate::codex_stream::Bridge>,
+    pub claude_bridge: Option<crate::claude_stream::Bridge>,
     pub mobile_runtime: Arc<Mutex<crate::remote_runtime::Runtime>>,
     /// Stable workspace shared with the mobile file browser.
     pub cwd: String,
@@ -516,6 +535,32 @@ pub struct TerminalSession {
 }
 
 pub type SharedSession = Arc<Mutex<std::collections::HashMap<String, TerminalSession>>>;
+
+impl TerminalSession {
+    pub fn current_token(&self) -> Option<String> {
+        self.codex_bridge.as_ref().and_then(|bridge| bridge.journal.lock().ok().and_then(|journal| journal.thread_id()))
+            .or_else(|| self.claude_bridge.as_ref().and_then(|bridge| bridge.journal.lock().ok().and_then(|journal| journal.session_id())))
+            .or_else(|| self.session_token.lock().ok().and_then(|token| token.clone()))
+    }
+
+    pub fn current_chat_source(&self) -> Option<crate::server::SavedSession> {
+        let token = self.current_token();
+        self.chat_source.lock().ok().and_then(|source| source.clone())
+            .filter(|source| (self.codex_bridge.is_none() && self.claude_bridge.is_none()) || token.as_ref().is_none_or(|token| source.matches_token(token)))
+    }
+}
+
+/// Pause both the UI and its owned engine. Roll back the UI pause if the
+/// second process cannot be paused, instead of reporting a half-paused session.
+pub fn pause_processes(pid: u32, engine: Option<u32>, paused: bool) -> Result<(), String> {
+    set_process_paused(pid, paused)?;
+    if let Some(engine) = engine {
+        if let Err(error) = set_process_paused(engine, paused) {
+            let _ = set_process_paused(pid, !paused); return Err(error);
+        }
+    }
+    Ok(())
+}
 
 /// Suspend or resume the complete process tree attached to a PTY. This keeps
 /// the CLI's current prompt and conversation state intact, unlike Ctrl+C,
@@ -678,6 +723,38 @@ pub fn spawn(
         "[Tier Terminal] Size: {}x{}",
         initial_size.cols, initial_size.rows
     );
+
+    let mobile_runtime = Arc::new(Mutex::new(crate::remote_runtime::Runtime::new()));
+    let codex_bridge = if tool_name.as_deref() == Some("codex") && crate::codex_stream::supported(&program, &args, &extra_env) {
+        match crate::codex_stream::start(&program, &args, cwd.as_deref(), &extra_env, mobile_runtime.clone()) {
+            Ok(bridge) => Some(bridge),
+            Err(error) => { eprintln!("[Codex] Structured bridge unavailable: {error}"); None }
+        }
+    } else { None };
+    // CLI args (model, approval policy, resume ID, etc.) still reach the
+    // official TUI, which sends the normal thread/start or thread/resume RPC.
+    let args = if let Some(bridge) = &codex_bridge {
+        let mut forwarded = vec!["--remote".to_string(), bridge.endpoint.clone(), "--remote-auth-token-env".into(), crate::codex_stream::AUTH_ENV.into()];
+        // Explicit --cd also preserves Codex's remote directory-trust check.
+        if !args.iter().any(|arg| matches!(arg.as_str(), "--cd" | "-C") || arg.starts_with("--cd=") || arg.starts_with("-C")) {
+            if let Some(cwd) = &cwd { forwarded.extend(["--cd".into(), cwd.clone()]); }
+        }
+        forwarded.extend(args); forwarded
+    } else { args };
+    let codex_stop = codex_bridge.as_ref().map(|b| b.stop_handle());
+    let claude_bridge = if tool_name.as_deref() == Some("claude") && crate::claude_stream::eligible(&program, &args, &extra_env) {
+        match crate::claude_stream::start(&program, &extra_env) {
+            Ok(bridge) => Some(bridge),
+            Err(error) => { eprintln!("[Claude] Structured bridge unavailable: {error}"); None }
+        }
+    } else { None };
+    let args = if let Some(bridge) = &claude_bridge {
+        // --plugin-dir is variadic: put it last so it cannot swallow a
+        // positional startup prompt or a resume target already in args.
+        let mut forwarded = args;
+        forwarded.extend(["--plugin-dir".into(), bridge.plugin.to_string_lossy().into_owned()]); forwarded
+    } else { args };
+    let claude_stop = claude_bridge.as_ref().map(|b| b.stop_handle());
 
     // ── Build command ──────────────────────────────────────────────────────
     // On Windows: npm-installed tools are .cmd scripts, not real .exe files.
@@ -902,6 +979,12 @@ pub fn spawn(
     for (k, v) in &extra_env {
         cmd.env(k, v);
     }
+    if let Some(bridge) = &codex_bridge { cmd.env(crate::codex_stream::AUTH_ENV, &bridge.auth_token); }
+    if let Some(bridge) = &claude_bridge {
+        cmd.env(crate::claude_stream::HOOKS_ENV, "1");
+        cmd.env(crate::claude_stream::URL_ENV, &bridge.endpoint);
+        cmd.env(crate::claude_stream::TOKEN_ENV, &bridge.token);
+    }
 
     // ── Open PTY pair ──────────────────────────────────────────────────────
     let pty_system = native_pty_system();
@@ -948,8 +1031,12 @@ pub fn spawn(
 
     // ── Kill thread: drop PTY master on signal → reader gets EOF → cleanup runs
     let master_for_kill = master_arc.clone();
+    let codex_stop_for_kill = codex_stop.clone();
+    let claude_stop_for_kill = claude_stop.clone();
     std::thread::spawn(move || {
         let _ = kill_rx.recv(); // block until kill_tx.send(()) or sender dropped
+        if let Some(stop) = codex_stop_for_kill { stop.store(true, Ordering::Release); }
+        if let Some(stop) = claude_stop_for_kill { stop.store(true, Ordering::Release); }
         if let Ok(mut guard) = master_for_kill.lock() {
             *guard = None; // drop PTY master → pipe closes
         }
@@ -990,6 +1077,8 @@ pub fn spawn(
                 -1
             }
         };
+        if let Some(stop) = codex_stop { stop.store(true, Ordering::Release); }
+        if let Some(stop) = claude_stop { stop.store(true, Ordering::Release); }
         let _ = app_for_watcher.emit(
             "tier-terminal-exit",
             TerminalExitEvent {
@@ -1018,7 +1107,6 @@ pub fn spawn(
     // Store session with shared writer reference and master kept alive.
     let output_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let output_sequence: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-    let mobile_runtime = Arc::new(Mutex::new(crate::remote_runtime::Runtime::new()));
     {
         let writer_clone = writer.clone();
         let master_clone = master_arc.clone();
@@ -1027,6 +1115,8 @@ pub fn spawn(
         map.insert(
             session_id.clone(),
             TerminalSession {
+                codex_bridge,
+                claude_bridge,
                 mobile_runtime: mobile_runtime.clone(),
                 chat_source: Mutex::new(None),
                 cwd: cwd.as_ref().filter(|dir| std::path::Path::new(dir).is_dir()).cloned()

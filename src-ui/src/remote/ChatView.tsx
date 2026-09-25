@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, CircleCheck, CircleDashed, ListPlus, Sparkles, Square, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleCheck, CircleDashed, Info, ListPlus, Sparkles, Square, TriangleAlert, X } from 'lucide-react';
 import { RemoteClient, RemoteError, errorMessage, storageRead, storageWrite, type ChatRead } from './client';
 import { updateChatTranscript, normalizePrompt, type ChatTranscriptState } from '../lib/chat-transcript';
+import { ConversationAttachments } from './ConversationAttachments';
 import type { RemoteSession } from './types';
 import { mergeConversationTimeline } from './conversationProjection';
 import { useConversationStream } from './useConversationStream';
@@ -17,6 +18,8 @@ import type { QueuedPrompt } from './types';
 import { useImageAttachments } from './useImageAttachments';
 import { DraftImages, ImagePicker, MessageImages } from './ImageAttachments';
 import { imageError, imageMessage, imagePrompt, imageProjection } from './images';
+import { mergeCodexMessages } from './CodexEventStream';
+import { mergeClaudeMessages } from './ClaudeEventStream';
 
 interface SentPrompt { id: number; text: string; seen: Set<string> }
 function remainingPrompts(prompts: SentPrompt[], transcript: ChatTranscriptState) {
@@ -47,6 +50,22 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
   const [pending, setPending] = useState<SentPrompt[]>([]);
   const [stopping, setStopping] = useState(false);
   const live = useConversationStream(client, session, online);
+  const claude = session.tool === 'claude' ? live.claude : undefined;
+  const nativeStream = session.tool === 'codex' ? live.codex : claude;
+  const claudeAnchors = useRef(new Map<string, string>());
+  const structured = nativeStream?.available || nativeStream?.retained;
+  const codex = session.tool === 'codex' ? { ...transcript.codexStatus, ...(structured ? live.codex.status : {}) } : undefined;
+  const conversationMessages = useMemo(() => {
+    const native = structured && read?.sourceId && !read.sourceId.endsWith(nativeStream?.threadId || '') ? [] : transcript.messages;
+    return structured ? claude ? mergeClaudeMessages(native, claude.turns, claudeAnchors.current) : mergeCodexMessages(native, live.codex.messages) : native;
+  }, [structured, read?.sourceId, transcript.messages, live.codex, claude, nativeStream?.threadId]);
+  const terminalStatus = session.tool === 'codex' ? {
+    model: codex?.model ? [codex.model, codex.effort].filter(Boolean).join(' ') : live.projection.terminalStatus?.model || 'Codex',
+    lines: codex?.contextRemaining !== undefined ? [`上下文剩余 ${codex.contextRemaining}%`] : live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [codex?.cwd || session.cwd],
+  } : session.tool === 'claude' ? {
+    model: claude?.status?.model || live.projection.terminalStatus?.model || 'Claude Code',
+    lines: claude?.status?.lines.length ? claude.status.lines : live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [claude?.cwd || session.cwd],
+  } : live.projection.terminalStatus;
   const queueEnabled = capabilities.includes('message_queue');
   const autoQueueSupported = session.tool === 'claude' || session.tool === 'codex';
   const queue = useMessageQueue(client, session.id, queueEnabled, online);
@@ -54,17 +73,20 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
   const images = useImageAttachments(client, session.id, imageEnabled, online);
   const hasContent = Boolean(draft.trim() || images.items.length);
   const preparingImages = images.preparing || (imageEnabled && !images.loaded);
+  const messageKeys = useRef(new Map<string, string>());
   const knownImages = useMemo(() => [...new Map([...images.known, ...(queue.snapshot?.messages.flatMap(item => item.attachments || []) || [])].map(image => [image.id, image])).values()], [images.known, queue.snapshot]);
   const timeline = useMemo(() => {
-    const messages = [...transcript.messages, ...pending.map(prompt => ({ id: `pending-${prompt.id}`, role: 'user' as const, content: prompt.text }))];
-    return mergeConversationTimeline(imageProjection(live.projection, messages.filter(message => message.role === 'user').map(message => message.content), knownImages), messages);
-  }, [live.projection, transcript.messages, pending, knownImages]);
+    const visiblePending = structured ? remainingPrompts(pending, { ...transcript, messages: conversationMessages }) : pending;
+    const messages = [...conversationMessages, ...visiblePending.map(prompt => ({ id: `pending-${prompt.id}`, role: 'user' as const, content: prompt.text }))];
+    const projection = structured ? { ...live.projection, events: [] } : live.projection;
+    return mergeConversationTimeline(imageProjection(projection, messages.filter(message => message.role === 'user').map(message => message.content), knownImages), messages, messageKeys.current);
+  }, [structured, live.projection, transcript, conversationMessages, pending, knownImages]);
   const displayTimeline = useMemo(() => groupConversation(timeline), [timeline]);
-  const lastSpoken = transcript.messages.reduce((last, message, index) => message.role === 'user' || message.role === 'assistant' ? index : last, -1);
-  const activeTools = new Set(transcript.messages.slice(lastSpoken + 1).map(message => message.id));
+  const lastSpoken = conversationMessages.reduce((last, message, index) => message.role === 'user' || message.role === 'assistant' ? index : last, -1);
+  const activeTools = new Set(conversationMessages.slice(lastSpoken + 1).map(message => message.id));
   const question = session.running && live.stream !== 'ended' ? live.projection.question : null;
   const nativeActivity = queue.snapshot && queue.snapshot.activity.revision >= (session.activity?.revision ?? 0) ? queue.snapshot.activity : session.activity;
-  const observedPhase = nativeActivity?.source === 'unknown' ? live.projection.activity || nativeActivity.state : nativeActivity?.state || live.projection.activity || 'unknown';
+  const observedPhase = claude && nativeActivity?.state === 'waiting' ? 'waiting' : nativeStream?.available && nativeStream.activity ? nativeStream.activity : nativeActivity?.source === 'unknown' ? live.projection.activity || nativeActivity.state : nativeActivity?.state || live.projection.activity || 'unknown';
   const phase = question ? 'waiting' : !session.running || live.stream === 'ended' ? 'ended' : session.paused ? 'paused' : observedPhase;
   const working = phase === 'working';
   const phaseLabel = { working: '正在生成', waiting: '等待回答', idle: '就绪', paused: '已暂停', ended: '已结束', failed: '本轮已停止', unknown: '状态同步中' }[phase];
@@ -114,12 +136,17 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
         if (next.title) titleRef.current(next.title);
         if (next.bound && !next.unchanged) {
           const changedSource = previous?.sourceId && previous.sourceId !== next.sourceId;
+          if (changedSource) messageKeys.current.clear();
           const append = next.append && !changedSource;
           raw.current = append ? raw.current + next.data : next.data;
           const parsed = updateChatTranscript(next.data, append ? transcriptRef.current : undefined);
           transcriptRef.current = parsed; setTranscript(parsed);
           // A new native snapshot is the source of truth after submission.
           updatePending(remainingPrompts(pendingRef.current, parsed));
+        } else if (previous?.bound && !next.bound) {
+          raw.current = ''; messageKeys.current.clear();
+          const parsed = updateChatTranscript('');
+          transcriptRef.current = parsed; setTranscript(parsed);
         }
         setSyncError('');
       } catch (cause) { if (!disposed) setSyncError(errorMessage(cause)); }
@@ -166,7 +193,7 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
     if (!hasContent || preparingImages || sending || !online || session.paused || !session.running || ((question || phase === 'waiting') && !enqueue)) return;
     const text = draft;
     const selected = images.items.map(image => image.id);
-    const seen = new Set(transcriptRef.current.messages.map(message => message.id));
+    const seen = new Set([...transcriptRef.current.messages, ...conversationMessages].map(message => message.id));
     let uploading = selected.length > 0;
     setSending(true); setError('');
     try {
@@ -211,16 +238,18 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
           if (row.source === 'message' && (row.message.role === 'tool' || row.message.role === 'reasoning')) return <ConversationTool key={`native-${row.message.id}`} message={row.message} cwd={session.cwd} active={online && (working || phase === 'unknown') && activeTools.has(row.message.id)} />;
           if (row.source === 'projection' && (row.event.kind === 'activity' || row.event.kind === 'error')) {
             const event = row.event, running = event.status === 'running' && online && (working || phase === 'unknown') && live.stream === 'live';
-            return <div className={`conversation-activity ${event.status || ''}`} key={event.id}>{event.status === 'running' ? <CircleDashed size={16} className={running ? 'spin' : ''} /> : event.status === 'failed' ? <X size={16} /> : <CircleCheck size={16} />}<span>{event.text}</span></div>;
+            const icon = event.notice === 'warning' ? <TriangleAlert size={16} /> : event.notice === 'info' ? <Info size={16} /> : event.status === 'running' ? <CircleDashed size={16} className={running ? 'spin' : ''} /> : event.status === 'failed' ? <X size={16} /> : <CircleCheck size={16} />;
+            const newline = event.text.indexOf('\n');
+            return <div className={`conversation-activity ${event.notice || event.status || ''}`} key={event.id}>{icon}{newline < 0 ? <span>{event.text}</span> : <details className="conversation-activity-details"><summary>{event.text.slice(0, newline)}</summary><pre>{event.text.slice(newline + 1)}</pre></details>}</div>;
           }
           const role = row.source === 'message' ? row.message.role : row.event.kind;
           const text = row.source === 'message' ? row.message.content : row.event.text;
-          const key = row.source === 'message' ? `native-${row.message.id}` : row.event.id;
+          const key = row.source === 'message' ? row.key || `native-${row.message.id}` : row.event.id;
           const sent = row.source === 'message' && row.message.id.startsWith('pending-');
           const message = role === 'user' ? imageMessage(text, knownImages) : null;
           const previous = displayTimeline[index - 1];
           const start = !previous || (previous.source === 'message' ? previous.message.role === 'user' : previous.source === 'projection' && previous.event.kind === 'user');
-          return <article className={`chat-message ${role}`} key={key}>{message ? <div className="user-bubble">{message.text}<MessageImages client={client} session={session.id} images={message.images} />{sent && <small>已发送</small>}</div> : <>{start && <div className="assistant-label"><Sparkles size={14} /><span>{toolName}</span></div>}<ConversationMarkdown text={text} /></>}</article>;
+          return <article className={`chat-message ${role}`} key={key}>{message ? <div className="user-bubble">{message.text}<MessageImages client={client} session={session.id} images={message.images} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}{sent && <small>已发送</small>}</div> : <>{start && <div className="assistant-label"><Sparkles size={14} /><span>{toolName}</span></div>}<ConversationMarkdown text={text} terminal={row.source === 'projection' && row.event.terminal} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}</>}</article>;
         })}
         {online && live.stream === 'reconnecting' && <p className="conversation-sync" role="status">正在恢复会话同步…</p>}
       </div>
@@ -233,7 +262,7 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
       {queueEnabled && <MessageQueue messages={queue.snapshot?.messages || []} disabled={!online || queue.busy} canSend={!question && !working && phase !== 'waiting' && !session.paused && session.running} held={Boolean(queue.snapshot?.held)} onAction={queueAction} />}
       {question && <ConversationQuestion key={question.id} question={question} disabled={!online || live.stream !== 'live' || live.canAnswer === false || session.paused} unsupported={live.answerUnsupported || (question.kind === 'text' && !capabilities.includes('answer_text')) || (question.kind === 'multi' && !capabilities.includes('answer_multiselect'))} answering={live.answering} answered={live.answered === question.id} disconnected={!online || live.stream !== 'live'} onAnswer={async value => { setError(''); try { await live.answer(question.id, value); } catch (cause) { setError(errorMessage(cause)); throw cause; } }} />}
       </div><div className="chat-compose">
-      {live.projection.terminalStatus && !question && <ConversationStatus status={live.projection.terminalStatus} cwd={session.cwd} />}
+      {terminalStatus && <ConversationStatus status={terminalStatus} cwd={codex?.cwd || claude?.cwd || session.cwd} />}
       {images.items.length > 0 && <DraftImages items={images.items} disabled={sending || images.preparing} onRemove={images.remove} />}
       {(images.progress || images.preparing) && <div className="image-upload-status" role="status"><span>{images.progress || '正在处理图片…'}</span>{images.progress && <button onClick={images.cancel}>取消上传</button>}</div>}
       {images.notice && images.items.length > 0 && <p className="image-draft-notice">{images.notice}</p>}

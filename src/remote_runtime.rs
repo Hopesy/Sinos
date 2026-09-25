@@ -53,11 +53,12 @@ pub(crate) struct Runtime {
     submitted_at: Option<Instant>,
     submitted_epoch: u64,
     log_remainder: String,
+    structured: bool,
 }
 
 impl Runtime {
     pub fn new() -> Self {
-        Self { images: crate::remote_images::ImageStore::default(), activity: ActivitySnapshot { state: Activity::Unknown, source: "unknown", revision: 0, auto_send_ready: false }, queue: VecDeque::new(), cursor: None, source_id: None, log_revision: None, input_revision: 0, watching_until: Instant::now(), osc: String::new(), collecting: false, escaped: false, discard_osc: false, receipts: VecDeque::new(), changed_at: Instant::now(), held: false, submitted_at: None, submitted_epoch: 0, log_remainder: String::new() }
+        Self { images: crate::remote_images::ImageStore::default(), activity: ActivitySnapshot { state: Activity::Unknown, source: "unknown", revision: 0, auto_send_ready: false }, queue: VecDeque::new(), cursor: None, source_id: None, log_revision: None, input_revision: 0, watching_until: Instant::now(), osc: String::new(), collecting: false, escaped: false, discard_osc: false, receipts: VecDeque::new(), changed_at: Instant::now(), held: false, submitted_at: None, submitted_epoch: 0, log_remainder: String::new(), structured: false }
     }
     fn set(&mut self, state: Activity, source: &'static str, ready: bool) {
         let ready = ready && !self.held;
@@ -86,6 +87,7 @@ impl Runtime {
         else if !data.is_empty() { self.held = true; self.activity.auto_send_ready = false; }
     }
     pub fn observe_output(&mut self, data: &str, tool: &str) {
+        if tool == "codex" && self.structured { return; }
         // Stateful OSC 0/2 decoding handles split UTF-8-safe PTY batches and
         // either BEL or ST terminators. Bound memory for malformed sequences.
         for ch in data.chars() {
@@ -136,6 +138,7 @@ impl Runtime {
         self.set(state, "native_title", ready);
     }
     pub fn observe_log(&mut self, data: &str, seed: bool) {
+        if self.structured { return; }
         // Disk appends can end in the middle of one JSONL record. Keep a
         // bounded tail, otherwise its completion signal would be lost forever.
         if seed { self.log_remainder.clear(); }
@@ -177,6 +180,33 @@ impl Runtime {
             self.set(state, "native_log", state == Activity::Idle && !seed);
         }
     }
+    pub fn observe_codex(&mut self, method: &str, params: &serde_json::Value) {
+        self.structured = true;
+        match method {
+            "sinos/thread" | "thread/status/changed" => {
+                let status = &params["status"];
+                let waiting = status["activeFlags"].as_array().is_some_and(|flags| flags.iter().any(|flag| flag == "waitingOnApproval" || flag == "waitingOnUserInput"));
+                let state = match status["type"].as_str() {
+                    Some("idle") => Activity::Idle,
+                    Some("active") if waiting => Activity::Waiting,
+                    Some("active") => Activity::Working,
+                    Some("systemError") => Activity::Failed,
+                    _ => Activity::Unknown,
+                };
+                let ready = method != "sinos/thread" && state == Activity::Idle && self.activity.state == Activity::Idle && self.activity.auto_send_ready;
+                self.set(state, "codex_event", ready);
+            },
+            "turn/started" | "serverRequest/resolved" => self.set(Activity::Working, "codex_event", false),
+            "turn/completed" => {
+                let succeeded = params["turn"]["status"] == "completed";
+                self.set(if succeeded { Activity::Idle } else { Activity::Failed }, "codex_event", succeeded);
+            },
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" | "item/tool/requestUserInput" => self.set(Activity::Waiting, "codex_event", false),
+            "error" if params["willRetry"] != true => self.set(Activity::Failed, "codex_event", false),
+            _ => {},
+        }
+    }
+    pub fn codex_disconnected(&mut self) { self.structured = false; self.set(Activity::Unknown, "codex_disconnected", false); }
     pub fn enqueue(&mut self, request: &QueueRequest) -> Result<(), &'static str> {
         if request.id.is_empty() || request.id.len() > 80 || !request.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { return Err("INVALID_MESSAGE"); }
         // Idempotent even after delivery: a timed-out client cannot duplicate
@@ -261,6 +291,25 @@ fn record_epoch(value: &serde_json::Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn codex_events_control_activity_without_old_logs_unlocking_the_queue() {
+        let mut runtime = Runtime::new();
+        runtime.enqueue(&request("queued", "next")).unwrap();
+        runtime.observe_codex("sinos/thread", &serde_json::json!({"status":{"type":"idle"}}));
+        assert!(!runtime.activity.auto_send_ready);
+        runtime.observe_codex("turn/started", &serde_json::json!({}));
+        runtime.observe_log(r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#, false);
+        runtime.observe_output("\x1b]0;project\x07", "codex");
+        assert_eq!(runtime.activity.state, Activity::Working);
+        runtime.observe_codex("thread/status/changed", &serde_json::json!({"status":{"type":"active","activeFlags":["waitingOnApproval"]}}));
+        assert_eq!(runtime.activity.state, Activity::Waiting);
+        runtime.observe_codex("turn/completed", &serde_json::json!({"turn":{"status":"completed"}}));
+        runtime.observe_codex("thread/status/changed", &serde_json::json!({"status":{"type":"idle"}}));
+        runtime.changed_at = Instant::now() - Duration::from_secs(1);
+        assert!(runtime.ready());
+        runtime.codex_disconnected();
+        assert!(!runtime.ready());
+    }
     #[test]
     fn omp_titles_and_current_claude_frames_do_not_authorize_auto_send() {
         let mut runtime = Runtime::new();

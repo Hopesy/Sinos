@@ -6,6 +6,7 @@ export interface TermContextMenuState {
   x: number;
   y: number;
   hasSelection: boolean;
+  text?: string;
 }
 
 /** Shared read-only surface menu used by both xterm and ConversationView. */
@@ -48,6 +49,7 @@ export function TermContextMenu({ menu, onClose, onCopy, onPaste, onSelectAll }:
       <button
         type="button"
         className={`term-ctx-item${menu.hasSelection ? '' : ' disabled'}`}
+        disabled={!menu.hasSelection}
         onMouseDown={(event) => {
           event.preventDefault();
           if (menu.hasSelection) onCopy();

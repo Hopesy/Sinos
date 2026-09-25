@@ -1,3 +1,6 @@
+import { codexOtherItem, codexRowId, codexStatus, codexToolFailed, codexTurnItem, type CodexStatus } from './codex-rollout';
+import { chatContent, type ChatAttachment } from './chat-content';
+
 export type ChatRole = 'user' | 'assistant' | 'reasoning' | 'tool';
 
 export interface ChatMessage {
@@ -7,12 +10,16 @@ export interface ChatMessage {
   toolName?: string;
   toolStatus?: 'running' | 'done' | 'failed';
   output?: string;
+  codexOrigin?: number;
+  attachments?: ChatAttachment[];
+  changes?: Record<string, unknown>;
 }
 
 export interface ChatTranscriptState {
   messages: ChatMessage[];
   remainder: string;
   nextLineIndex: number;
+  codexStatus?: CodexStatus;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -65,10 +72,10 @@ function stringValue(value: unknown): string {
 function push(
   out: ChatMessage[], message: ChatMessage, previousCount: number, owned: Set<number>,
 ) {
-  if (!message.content.trim()) return;
+  if (!message.content.trim() && !message.attachments?.length) return;
   const previousIndex = out.length - 1;
   let previous = out[previousIndex];
-  if (previous && previous.role === message.role && message.role !== 'tool' &&
+  if (previous && !previous.codexOrigin && previous.role === message.role && message.role !== 'tool' &&
       previous.id.split(':')[0] === message.id.split(':')[0]) {
     if (previousIndex < previousCount && !owned.has(previousIndex)) {
       previous = { ...previous };
@@ -76,6 +83,7 @@ function push(
       owned.add(previousIndex);
     }
     previous.content += `\n\n${message.content}`;
+    if (message.attachments?.length) previous.attachments = [...(previous.attachments || []), ...message.attachments];
     return;
   }
   out.push(message);
@@ -97,9 +105,12 @@ function parseBlocks(
     if (['text', 'input_text', 'output_text'].includes(type) || (!block.type && block.text)) {
       const text = stringValue(block.text ?? block.content);
       if (!isInjected(text)) push(out, { id: `${rowId}:${index}`, role, content: text }, previousCount, owned);
+    } else if (/^(?:input_?image|image|local_image|input_?audio|audio|local_audio)$/i.test(type)) {
+      const media = chatContent(block);
+      push(out, { id: `${rowId}:${index}`, role, content: media.text, attachments: media.attachments }, previousCount, owned);
     } else if (type === 'thinking' || type === 'reasoning') {
       push(out, { id: `${rowId}:${index}`, role: 'reasoning', content: stringValue(block.thinking ?? block.text ?? block.summary) }, previousCount, owned);
-    } else if (type === 'tool_use' || type === 'function_call' || type === 'custom_tool_call') {
+    } else if (type === 'tool_use' || type === 'function_call' || type === 'custom_tool_call' || type === 'tool_search_call') {
       // Codex emits both an item `id` and a `call_id`; its corresponding
       // function_call_output references call_id. Claude only has `id`, so
       // preferring call_id links both formats correctly. CodeBuddy camel-cases
@@ -109,35 +120,43 @@ function parseBlocks(
       const message: ChatMessage = {
         id,
         role: 'tool',
-        toolName: String(block.name ?? block.tool_name ?? 'Tool'),
+        toolName: [typeof block.namespace === 'string' ? block.namespace : '', String(block.name ?? block.tool_name ?? (type === 'tool_search_call' ? 'tool_search' : 'Tool'))].filter(Boolean).join('.'),
         content: stringValue(block.input ?? block.arguments ?? block.command),
         toolStatus: 'running',
+        ...(isObject(block.changes) ? { changes: block.changes } : {}),
       };
-      out.push(message);
-      toolById.set(id, out.length - 1);
-    } else if (type === 'tool_result' || type === 'function_call_output' || type === 'function_call_result' || type === 'custom_tool_call_output') {
+      const existing = toolById.get(id);
+      if (existing === undefined) { out.push(message); toolById.set(id, out.length - 1); }
+      else {
+        const retain = block.preserve_input === true && out[existing].content;
+        out[existing] = { ...out[existing], toolName: retain ? out[existing].toolName : message.toolName, content: retain ? out[existing].content : message.content, ...(message.changes ? { changes: message.changes } : {}) }; owned.add(existing);
+      }
+    } else if (type === 'tool_result' || type === 'function_call_output' || type === 'function_call_result' || type === 'custom_tool_call_output' || type === 'tool_search_output') {
       const id = String(block.tool_use_id ?? block.call_id ?? block.callId ?? block.id ?? '');
       const targetIndex = toolById.get(id);
       // `status` covers CodeBuddy's function_call_result rows, which flag a
       // failed tool with status "incomplete" and carry no is_error field.
       const failed = block.is_error === true || block.error != null ||
-        block.status === 'incomplete' || block.status === 'failed';
+        block.status === 'incomplete' || block.status === 'failed' ||
+        ((type === 'function_call_output' || type === 'custom_tool_call_output') && codexToolFailed(block.output));
       if (targetIndex !== undefined) {
-        const status = failed ? 'failed' : 'done';
-        const output = stringValue(block.content ?? block.output ?? block.error);
-        if (out[targetIndex].toolStatus !== status || out[targetIndex].output !== output) {
+        const status = failed ? 'failed' : block.status === 'in_progress' ? 'running' : 'done';
+        const { text: output, attachments } = chatContent(block.content ?? block.output ?? block.tools ?? block.error);
+        if (out[targetIndex].toolStatus !== status || out[targetIndex].output !== output || attachments.length || out[targetIndex].attachments?.length) {
           if (targetIndex < previousCount && !owned.has(targetIndex)) {
             out[targetIndex] = { ...out[targetIndex] };
             owned.add(targetIndex);
           }
           out[targetIndex].toolStatus = status;
           out[targetIndex].output = output;
+          out[targetIndex].attachments = attachments.length ? attachments : undefined;
         }
       } else {
         // A paginated tail can begin with a result whose call is in an older
         // page. Keep it visible; reparsing after prepend joins it to the call.
         const resultId = id || `${rowId}:${index}`;
-        out.push({ id: resultId, role: 'tool', toolName: String(block.name ?? '工具结果'), content: '', output: stringValue(block.content ?? block.output ?? block.error), toolStatus: failed ? 'failed' : 'done' });
+        const media = chatContent(block.content ?? block.output ?? block.tools ?? block.error);
+        out.push({ id: resultId, role: 'tool', toolName: String(block.name ?? '工具结果'), content: '', output: media.text, ...(media.attachments.length ? { attachments: media.attachments } : {}), toolStatus: failed ? 'failed' : block.status === 'in_progress' ? 'running' : 'done' });
         toolById.set(resultId, out.length - 1);
       }
     }
@@ -155,7 +174,7 @@ function parseLine(
     const root = parsed;
     const message = isObject(root.message) ? root.message : null;
     const payload = isObject(root.payload) ? root.payload : null;
-    const rowId = String(root.uuid ?? root.id ?? message?.id ?? payload?.id ?? lineIndex);
+    const rowId = String(root.uuid ?? root.id ?? message?.id ?? payload?.id ?? (root.type === 'response_item' || root.type === 'event_msg' ? codexRowId(line) : lineIndex));
 
     // Hermes legacy sessions are one JSON document rather than JSONL:
     // `{ session_id, messages: [{ role, content }, ...] }`. The history
@@ -180,9 +199,36 @@ function parseLine(
 
     // Codex rollout rows place messages and tool calls under payload.
     if (payload) {
-      if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
-        parseBlocks(out, payload.content, payload.role, rowId, toolById, previousCount, owned);
-      } else if (['function_call', 'custom_tool_call', 'function_call_output', 'function_call_result', 'custom_tool_call_output', 'reasoning'].includes(String(payload.type))) {
+      if (root.type === 'event_msg' && payload.type === 'thread_rolled_back' && typeof payload.num_turns === 'number' && Number.isSafeInteger(payload.num_turns) && payload.num_turns > 0) {
+        let turns = payload.num_turns, start = out.length;
+        while (start > 0 && turns > 0) { start--; if (out[start].role === 'user') turns--; }
+        out.splice(start);
+        toolById.clear(); out.forEach((item, index) => { if (item.role === 'tool') toolById.set(item.id, index); });
+        return;
+      }
+      const item = (root.type === 'event_msg' ? codexTurnItem(payload) : null) ?? codexOtherItem(root, rowId);
+      const role = item?.role ?? payload.role;
+      if (item || payload.type === 'reasoning' || (payload.type === 'message' && (role === 'user' || role === 'assistant'))) {
+        const start = out.length;
+        parseBlocks(out, item ? item.blocks : payload.type === 'reasoning' ? payload : payload.content, role === 'user' ? 'user' : 'assistant', item?.id ?? rowId, toolById, previousCount, owned);
+        // Paginated rollouts persist both response_item and ItemCompleted.
+        // Pair mirrors once; identical replies on subsequent turns stay intact.
+        const origin = item ? 2 : 1;
+        for (let i = start; i < out.length; i++) {
+          const added = out[i];
+          if (added.role === 'tool') continue;
+          added.codexOrigin = origin;
+          for (let j = start - 1; j >= 0; j--) {
+            const candidate = out[j];
+            if (candidate.role === 'user' && added.role !== 'user') break;
+            if (candidate.role === added.role && candidate.content === added.content && JSON.stringify(candidate.attachments) === JSON.stringify(added.attachments) && candidate.codexOrigin && (candidate.id === added.id || !(candidate.codexOrigin & origin))) {
+              out[j] = { ...candidate, codexOrigin: candidate.codexOrigin | origin }; owned.add(j);
+              out.splice(i--, 1); break;
+            }
+            if (candidate.role === 'user' || candidate.role === 'assistant') break;
+          }
+        }
+      } else if (['function_call', 'custom_tool_call', 'function_call_output', 'function_call_result', 'custom_tool_call_output', 'tool_search_call', 'tool_search_output', 'reasoning'].includes(String(payload.type))) {
         parseBlocks(out, payload, 'assistant', rowId, toolById, previousCount, owned);
       }
       return;
@@ -264,12 +310,14 @@ export function updateChatTranscript(
   }
 
   let nextLineIndex = previous?.nextLineIndex ?? 0;
+  let status = previous?.codexStatus;
   lines.forEach(line => {
+    try { const row: unknown = JSON.parse(line); if (isObject(row)) status = codexStatus(row, status); } catch { /* Partial rows stay in remainder. */ }
     parseLine(out, toolById, line, nextLineIndex, previousCount, owned);
     nextLineIndex += 1;
   });
 
-  return { messages: out, remainder, nextLineIndex };
+  return { messages: out, remainder, nextLineIndex, ...(status ? { codexStatus: status } : {}) };
 }
 
 export function transcriptHasPrompt(messages: ChatMessage[], prompt: string): boolean {

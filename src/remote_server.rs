@@ -239,11 +239,13 @@ async fn chat(
     }
     let binding = state.sessions.lock().ok().and_then(|map| {
         map.get(&id).map(|s| {
+            let token = s.current_token();
+            let source = s.current_chat_source();
             (
                 s.tool_name.clone().unwrap_or_default(),
                 s.cwd.clone(),
-                s.session_token.lock().ok().and_then(|v| v.clone()),
-                s.chat_source.lock().ok().and_then(|v| v.clone()),
+                token,
+                source,
                 s.mobile_runtime.clone(),
             )
         })
@@ -296,7 +298,9 @@ pub(crate) async fn relay_request(
             for chunk in chunks.iter().rev() { if size + chunk.len() > 131_072 { break; } size += chunk.len(); kept.push(chunk); }
             let reset = kept.len() != chunks.len();
             for chunk in kept.into_iter().rev() { data.push_str(chunk); }
-            return Ok(json!({"data":data,"offset":offset,"running":running,"paused":paused,"reset":reset}));
+            let codex = codex_page(&state.sessions, id, params["codexEpoch"].as_str(), params["codexCursor"].as_u64().unwrap_or(0));
+            let claude = claude_page(&state.sessions, id, params["claudeEpoch"].as_str(), params["claudeCursor"].as_u64().unwrap_or(0));
+            return Ok(json!({"data":data,"offset":offset,"running":running,"paused":paused,"reset":reset,"codex":codex,"claude":claude}));
         }
         if action == "terminal.resize" {
             let cols = params["cols"].as_u64().filter(|n| *n <= 500).ok_or((400,"INVALID_SIZE".into()))? as u16;
@@ -532,7 +536,7 @@ async fn state_snapshot(
         device_name: std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "Sinos Desktop".into()),
-        capabilities: vec!["activity", "message_queue", "answer_text", "answer_multiselect", "image_attachments_v1"],
+        capabilities: vec!["activity", "message_queue", "answer_text", "answer_multiselect", "image_attachments_v1", "codex_events_v1", "claude_events_v1"],
     })
     .into_response()
 }
@@ -713,7 +717,7 @@ fn start_queue_worker(state: RemoteState) {
         std::thread::sleep(Duration::from_millis(500));
         let handles = state.sessions.lock().map(|map| map.iter().map(|(id, s)| (
             id.clone(), s.tool_name.clone().unwrap_or_default(), s.cwd.clone(),
-            s.session_token.lock().ok().and_then(|v| v.clone()), s.chat_source.lock().ok().and_then(|v| v.clone()),
+            s.current_token(), s.current_chat_source(),
             s.mobile_runtime.clone(), s.writer_lock.clone(), s.paused.clone(),
         )).collect::<Vec<_>>()).unwrap_or_default();
         for (id, tool, cwd, token, source, shared, writer, paused) in handles {
@@ -894,6 +898,10 @@ async fn websocket_session(
     credential: Option<String>,
 ) {
     let mut output_offset = 0u64;
+    let mut codex_epoch: Option<String> = None;
+    let mut codex_cursor = 0;
+    let mut claude_epoch: Option<String> = None;
+    let mut claude_cursor = 0;
     loop {
         if !authorized(&state, &HeaderMap::new(), credential.as_deref()) {
             let _ = socket.send(server_error("PAIRING_EXPIRED".into())).await;
@@ -941,6 +949,14 @@ async fn websocket_session(
                 if !chunks.is_empty() {
                     if socket.send(server_output(&session_id, chunks.concat(), output_offset)).await.is_err() { return; }
                 }
+                if let Some(page) = codex_page(&state.sessions, &session_id, codex_epoch.as_deref(), codex_cursor) {
+                    codex_epoch = Some(page.epoch.clone()); codex_cursor = page.cursor;
+                    if socket.send(Message::Text(serde_json::json!({"type":"codex","session_id":session_id,"page":page}).to_string())).await.is_err() { return; }
+                }
+                if let Some(page) = claude_page(&state.sessions, &session_id, claude_epoch.as_deref(), claude_cursor) {
+                    claude_epoch = Some(page.epoch.clone()); claude_cursor = page.cursor;
+                    if socket.send(Message::Text(serde_json::json!({"type":"claude","session_id":session_id,"page":page}).to_string())).await.is_err() { return; }
+                }
                 if socket.send(server_status(&session_id, running, paused)).await.is_err() { return; }
                 if !running { return; }
             }
@@ -958,6 +974,18 @@ fn server_output(session_id: &str, data: String, sequence: u64) -> Message {
         .unwrap_or_default()
         .into(),
     )
+}
+
+fn codex_page(sessions: &crate::terminal::SharedSession, id: &str, epoch: Option<&str>, cursor: u64) -> Option<crate::codex_stream::Page> {
+    let journal = sessions.lock().ok()?.get(id)?.codex_bridge.as_ref()?.journal.clone();
+    let page = journal.lock().ok()?.page(epoch, cursor);
+    Some(page)
+}
+
+fn claude_page(sessions: &crate::terminal::SharedSession, id: &str, epoch: Option<&str>, cursor: u64) -> Option<crate::codex_stream::Page> {
+    let journal = sessions.lock().ok()?.get(id)?.claude_bridge.as_ref()?.journal.clone();
+    let page = journal.lock().ok()?.page(epoch, cursor);
+    Some(page)
 }
 
 fn server_status(session_id: &str, running: bool, paused: bool) -> Message {
@@ -1096,17 +1124,18 @@ fn set_paused(
     id: &str,
     paused: bool,
 ) -> Result<(), String> {
-    let (pid, paused_state) = {
+    let (pid, engine, paused_state) = {
         let map = sessions.lock().map_err(|error| error.to_string())?;
         let session = map.get(id).ok_or_else(|| "session not found".to_string())?;
         (
             session
                 .process_id
                 .ok_or_else(|| "process is unavailable".to_string())?,
+            session.codex_bridge.as_ref().and_then(|b| b.process_id.lock().ok().and_then(|p| *p)),
             session.paused.clone(),
         )
     };
-    crate::terminal::set_process_paused(pid, paused)?;
+    crate::terminal::pause_processes(pid, engine, paused)?;
     paused_state.store(paused, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }

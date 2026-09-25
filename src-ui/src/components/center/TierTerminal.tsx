@@ -43,6 +43,7 @@ import { getToolDisplayName } from '../../lib/tool-info';
 import { THEME_COLORS } from '../../lib/personalization';
 import { useDataAttr } from '../../lib/use-data-attr';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
+import { selectedSurfaceText, useTerminalContextMenu } from './useTerminalContextMenu';
 import '@xterm/xterm/css/xterm.css';
 import './TierTerminal.css';
 
@@ -479,6 +480,7 @@ function TierTerminalImpl({
   // ── Terminal context menu ────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<TermContextMenuState | null>(null);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+  const contextMenuHandlers = useTerminalContextMenu(() => xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current), setCtxMenu);
 
   const t = useT();
 
@@ -2066,11 +2068,7 @@ function TierTerminalImpl({
         // (hasBg), or the glass tint (transparent themes), whichever applies.
         // See the activation effect above (issue #47).
         style={canvasHidden ? { opacity: 0 } : undefined}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setCtxMenu({ x: e.clientX, y: e.clientY, hasSelection: !!xtermRef.current?.hasSelection() });
-        }}
+        {...contextMenuHandlers}
         onMouseDown={(e) => {
           // Windows IME fix (issue #88), part 1 of 2: on left-click, re-anchor
           // the hidden .xterm-helper-textarea to the buffer cursor (the TUI
@@ -2178,7 +2176,7 @@ function TierTerminalImpl({
           menu={ctxMenu}
           onClose={closeCtxMenu}
           onCopy={() => {
-            const text = xtermRef.current?.getSelection();
+            const text = ctxMenu.text || xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current);
             if (text) clipboardWrite(text);
             closeCtxMenu();
           }}

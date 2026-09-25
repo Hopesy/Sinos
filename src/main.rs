@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod terminal;
+mod codex_stream;
+mod claude_stream;
 mod server;
 mod hook_installer;
 mod fonts;

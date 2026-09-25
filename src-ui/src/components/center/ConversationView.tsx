@@ -17,6 +17,7 @@ import { useTerminalInteraction } from '../../lib/terminal-interaction';
 import { TerminalInteractionCard } from './TerminalInteractionCard';
 import { MarkdownContent } from './MarkdownContent';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
+import { useTerminalContextMenu } from './useTerminalContextMenu';
 import { useConversationVirtualizer } from './conversation-virtualizer';
 import { useT } from '../../i18n/useT';
 import './ConversationView.css';
@@ -733,11 +734,7 @@ function ConversationContent({
     return proxy.value.slice(proxy.selectionStart, proxy.selectionEnd);
   };
 
-  const openContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setCtxMenu({ x: event.clientX, y: event.clientY, hasSelection: Boolean(selectionText()) });
-  };
+  const contextMenuHandlers = useTerminalContextMenu(selectionText, setCtxMenu);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -1292,7 +1289,7 @@ function ConversationContent({
   return (
     <div
       className={`conversation-view${hasBg && bgUrl ? ' conversation-view--has-bg' : ''}${navigationMessages.length > 1 ? ' conversation-view--has-navigation' : ''}`}
-      onContextMenu={openContextMenu}
+      {...contextMenuHandlers}
     >
       {hasBg && bgUrl && (
         <div className="conversation-background" aria-hidden="true">
@@ -1388,7 +1385,7 @@ function ConversationContent({
           menu={ctxMenu}
           onClose={closeCtxMenu}
           onCopy={() => {
-            const text = selectionText();
+            const text = ctxMenu.text || selectionText();
             if (text) void clipboardWrite(text);
             if (selectAllProxyRef.current) selectAllProxyRef.current.value = '';
             closeCtxMenu();

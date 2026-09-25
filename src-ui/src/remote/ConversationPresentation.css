@@ -57,6 +57,29 @@
 .tool-state.is-done { color:var(--m-green); }.tool-state.is-running { color:var(--m-info); }.tool-state.is-failed { color:var(--m-danger); }
 .phone-workspace .tool-body { padding:12px; }
 .phone-workspace .tool-body pre { font-size:12px; line-height:1.75; }
+.conversation-attachments { display:grid; gap:10px; margin-top:10px; min-width:0; }
+.conversation-attachments figure { margin:0; min-width:0; }
+.conversation-attachments img { display:block; max-width:100%; max-height:360px; object-fit:contain; border-radius:10px; }
+.conversation-attachments audio { max-width:100%; }
+.conversation-attachments figcaption { font-size:12px; overflow-wrap:anywhere; }
+.conversation-attachments small { display:block; opacity:.65; margin-top:4px; }
+.conversation-plan ol { padding:0; margin:8px 0; list-style:none; }
+.conversation-plan li { display:flex; align-items:flex-start; gap:8px; padding:7px 0; }
+.conversation-plan li > svg { flex-shrink:0; margin-top:3px; }
+.conversation-plan li > span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.conversation-plan li > small { flex-shrink:0; opacity:.65; }
+.conversation-plan li[data-state="completed"] > svg { color:var(--m-green); }
+.conversation-plan li[data-state="in_progress"] > svg { color:var(--m-info); }
+.conversation-changes > section { min-width:0; margin-bottom:12px; }
+.conversation-patch { max-height:420px; overflow:auto; }
+.conversation-patch .diff-line { white-space:pre; }
+.conversation-patch .added { background:color-mix(in srgb, var(--m-green) 12%, transparent); }
+.conversation-patch .removed { background:color-mix(in srgb, #e06c75 12%, transparent); }
+.conversation-activity-details { flex:1; min-width:0; }
+.conversation-activity-details summary { cursor:pointer; overflow-wrap:anywhere; }
+.conversation-activity-details pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:320px; overflow:auto; font-size:12px; }
+.conversation-activity.warning > svg { color:#c88927; }
+.conversation-activity.info > svg { color:var(--m-info); }
 .phone-workspace .tool-detail-heading { color:var(--m-muted); font-size:11px; }
 .tool-group { border:1px solid var(--m-border); border-radius:12px; margin:12px 0 22px; background:var(--m-surface); }
 .tool-group > summary { display:flex; align-items:center; gap:10px; min-height:64px; padding:12px; list-style:none; cursor:pointer; color:var(--m-muted); }
@@ -123,3 +146,4 @@
   .phone-workspace .conversation-status summary { min-height:30px; }.phone-workspace .conversation-status-details { max-height:60px; }
   .phone-workspace .chat-timeline { padding-top:16px; }.phone-workspace .chat-message { margin-bottom:18px; }
 }
+.chat-markdown.terminal-projection p { white-space: pre-wrap; }

@@ -20,7 +20,7 @@ it('keeps the captured Claude composer borders and HUD out of mobile messages', 
   expect(result.terminalStatus?.model).toBe('Fable 5.1');
   expect(result.terminalStatus?.lines.join(' ')).toContain('3%');
   expect(result.terminalStatus?.lines.join(' ')).toContain('27106 tokens');
-  expect(result.events.some(event => event.text === 'TEST COMPLETE')).toBe(true);
+  expect(result.events.some(event => event.text.replace(/[*_]/g, '') === 'TEST COMPLETE')).toBe(true);
   expect(result.events.some(event => /Claude Code v/.test(event.text))).toBe(false);
 });
 
@@ -254,7 +254,7 @@ it('keeps every Claude spinner frame in one activity row instead of alternating 
 
 it('preserves ordinary dots, Markdown lists and code when recognizing Claude progress', () => {
   const prose = ['* First item', '* Second item', '· 普通说明', '2 * 3 = 6', '```text', '* Synthesizing…', '· Synthesizing…', '```'];
-  expect(projectConversation(prose, prose.length - 1, 'claude').events).toEqual([{ id: 'output-0', kind: 'assistant', text: prose.join('\n') }]);
+  expect(projectConversation(prose, prose.length - 1, 'claude').events).toEqual([{ id: 'output-0', kind: 'assistant', terminal: true, text: prose.join('\n') }]);
   const indented = ['    * Synthesizing…'];
   expect(projectConversation(indented, 0, 'claude').events[0].text).toBe(indented[0]);
   expect(projectConversation(['* Synthesizing…'], 0, 'codex').events[0].kind).toBe('assistant');

@@ -40,8 +40,10 @@
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "remark-parse": "11.0.0",
     "shiki": "^4.0.2",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "unified": "11.0.5"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.2",

@@ -1,4 +1,4 @@
-import { Children, isValidElement, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Check, Copy } from 'lucide-react';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,14 +13,36 @@ export function ConversationCode({ code, language = 'text' }: { code: string; la
   const [highlight, setHighlight] = useState<{ code: string; language: string; lines: ThemedTokenWithVariants[][] } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [copyError, setCopyError] = useState(false);
+  const latest = useRef({ code, language }); latest.current = { code, language };
+  const work = useRef<{ timer?: ReturnType<typeof setTimeout>; active: boolean; mounted: boolean }>({ active: false, mounted: true });
   useEffect(() => {
-    let cancelled = false;
-    // Debounce streamed partial code, and keep its plain text visible throughout.
-    const timer = setTimeout(() => { void import('./highlightCode').then(module => module.highlightCode(code, language)).then(lines => { if (!cancelled && lines) setHighlight({ code, language, lines }); }).catch(() => {}); }, 180);
-    return () => { cancelled = true; clearTimeout(timer); };
+    const state = work.current;
+    state.mounted = true;
+    return () => { state.mounted = false; clearTimeout(state.timer); state.active = false; };
+  }, []);
+  useEffect(() => {
+    const state = work.current;
+    function schedule() {
+      if (state.active || !state.mounted) return;
+      state.active = true;
+      state.timer = setTimeout(() => {
+        const snapshot = latest.current;
+        void import('./highlightCode').then(module => module.highlightCode(snapshot.code, snapshot.language)).then(lines => {
+          if (state.mounted && lines) setHighlight({ ...snapshot, lines });
+        }).catch(() => {}).finally(() => {
+          state.active = false;
+          if (snapshot.code !== latest.current.code || snapshot.language !== latest.current.language) schedule();
+        });
+      }, 100);
+    }
+    schedule();
   }, [code, language]);
   useEffect(() => { if (copied === null) return; const timer = setTimeout(() => setCopied(null), 1800); return () => clearTimeout(timer); }, [copied]);
-  const lines = highlight?.code === code && highlight.language === language ? highlight.lines : null;
+  // Keep only complete, unchanged highlighted lines while the next chunk is
+  // being tokenized. Never turn the entire block back into plain text.
+  const prefix = highlight && highlight.language === language && code.startsWith(highlight.code)
+    ? highlight.code === code ? code.length : highlight.code.lastIndexOf('\n') + 1 : 0;
+  const lines = prefix && highlight ? highlight.lines.slice(0, highlight.code === code ? undefined : highlight.code.slice(0, prefix).split('\n').length - 1) : null;
   async function copy() {
     setCopyError(false);
     try { await clipboardWrite(code, { throwOnError: true }); setCopied(code); }
@@ -29,7 +51,7 @@ export function ConversationCode({ code, language = 'text' }: { code: string; la
   return <div className="conversation-code">
     <div className="code-heading"><span>{language}</span><button type="button" onClick={() => void copy()} aria-label="复制代码">{copied === code ? <Check size={14} /> : <Copy size={14} />}{copied === code ? '已复制' : '复制'}</button></div>
     {copyError && <p className="code-copy-error" role="status">复制失败，请长按代码选择并复制。</p>}
-    <pre tabIndex={0} aria-label={`${language} 代码`}><code>{lines ? lines.map((line, index) => <span className="code-line" key={index}>{line.map((token, part) => <span key={part} style={{ '--code-light': token.variants.light.color, '--code-dark': token.variants.dark.color } as CSSProperties}>{token.content}</span>)}{index < lines.length - 1 ? '\n' : ''}</span>) : code}</code></pre>
+    <pre tabIndex={0} aria-label={`${language} 代码`}><code>{lines ? <>{lines.map((line, index) => <span className="code-line" key={index}>{line.map((token, part) => <span key={part} style={{ '--code-light': token.variants.light.color, '--code-dark': token.variants.dark.color } as CSSProperties}>{token.content}</span>)}{index < lines.length - 1 || prefix < code.length ? '\n' : ''}</span>)}{code.slice(prefix)}</> : code}</code></pre>
   </div>;
 }
 
@@ -41,6 +63,6 @@ const components: Components = {
     return <ConversationCode code={textOf(children).replace(/\n$/, '')} language={language} />;
   },
 };
-export function ConversationMarkdown({ text }: { text: string }) {
-  return <div className="chat-markdown"><Markdown remarkPlugins={[remarkGfm]} components={components}>{text}</Markdown></div>;
+export function ConversationMarkdown({ text, terminal = false }: { text: string; terminal?: boolean }) {
+  return <div className={`chat-markdown${terminal ? ' terminal-projection' : ''}`}><Markdown remarkPlugins={[remarkGfm]} components={components}>{text}</Markdown></div>;
 }
