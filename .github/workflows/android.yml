@@ -26,6 +26,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # The default package list includes the unavailable legacy 'tools' package.
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci --prefix src-ui
       - run: npm test --prefix src-ui
