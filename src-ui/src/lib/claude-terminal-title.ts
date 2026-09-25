@@ -1,9 +1,10 @@
 import type { AgentStatus } from '../store/app-state';
 
-// Claude Code 2.1.220 alternates these two Braille frames while its internal
-// status is `busy`. Every non-busy state, including permission prompts, uses
-// the same static U+2733 prefix, so terminal title alone supports two states.
-const CLAUDE_ACTIVITY_FRAMES = new Set(['⠂', '⠐']);
+// Claude Code 2.1.228 replaced the 2.1.220 Braille frames with ◐/◑ (also
+// verified in 2.1.278). Accept both pairs for older installations. Every
+// non-busy state, including permission prompts, uses the static U+2733 prefix,
+// so terminal title alone supports two states.
+const CLAUDE_ACTIVITY_FRAMES = new Set(['⠂', '⠐', '◐', '◑']);
 const CLAUDE_IDLE_MARK = '✳';
 
 export interface ClaudeTerminalTitleState {
