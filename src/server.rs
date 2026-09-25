@@ -1112,30 +1112,22 @@ fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate that a path exists inside the selected workspace.
-/// Canonicalizing both sides also prevents symlink-based escapes.
+/// Resolve the parent within the workspace, preserving the final entry.
+/// A link (including a dangling one) is operated on, never its target.
 fn validate_workspace_path(path: &str, workspace_root: &str) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let input = std::path::Path::new(path);
-    let input_metadata = std::fs::symlink_metadata(input)
-        .map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?;
-    if metadata_is_link_or_reparse(&input_metadata) {
-        return Err("FS_SYMLINK_UNSUPPORTED".to_string());
-    }
-    let root = std::path::Path::new(workspace_root)
-        .canonicalize()
+    let metadata = std::fs::symlink_metadata(input).map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?;
+    let root = std::path::Path::new(workspace_root).canonicalize()
         .map_err(|e| format!("FS_WORKSPACE_UNAVAILABLE: {e}"))?;
-    if !root.is_dir() {
-        return Err("FS_WORKSPACE_UNAVAILABLE".to_string());
+    if !root.is_dir() { return Err("FS_WORKSPACE_UNAVAILABLE".into()); }
+    if !metadata_is_link_or_reparse(&metadata) && input.canonicalize().ok().is_some_and(|p| path_eq(&p, &root)) {
+        return Err("FS_WORKSPACE_ROOT_PROTECTED".into());
     }
-    let canonical = std::path::Path::new(path)
-        .canonicalize()
-        .map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?;
-    if !path_is_within(&canonical, &root) {
-        return Err("FS_PATH_OUTSIDE_WORKSPACE".to_string());
-    }
-    if canonical == root {
-        return Err("FS_WORKSPACE_ROOT_PROTECTED".to_string());
-    }
+    let name = input.file_name().ok_or("FS_INVALID_NAME")?;
+    let parent = input.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let canonical = parent.canonicalize().map_err(|e| format!("FS_PATH_UNAVAILABLE: {e}"))?.join(name);
+    if !path_is_within(&canonical, &root) { return Err("FS_PATH_OUTSIDE_WORKSPACE".into()); }
+    if path_eq(&canonical, &root) { return Err("FS_WORKSPACE_ROOT_PROTECTED".into()); }
     Ok((canonical, root))
 }
 
@@ -1144,7 +1136,8 @@ fn validate_entry_name(name: &str) -> Result<(), String> {
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         return Err("FS_INVALID_NAME".to_string());
     }
-    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.chars().any(char::is_control) {
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.chars().any(char::is_control)
+        || (cfg!(windows) && (trimmed.contains(':') || trimmed.ends_with('.'))) {
         return Err("FS_INVALID_NAME".to_string());
     }
     Ok(())
@@ -1155,18 +1148,8 @@ fn reject_existing_destination(
     source: Option<&std::path::Path>,
 ) -> Result<(), String> {
     match std::fs::symlink_metadata(destination) {
-        Ok(metadata) => {
-            if metadata_is_link_or_reparse(&metadata) {
-                return Err("FS_SYMLINK_UNSUPPORTED".to_string());
-            }
-            if let Some(source) = source {
-                let existing = destination
-                    .canonicalize()
-                    .map_err(|e| format!("FS_DESTINATION_UNAVAILABLE: {e}"))?;
-                if path_eq(&existing, source) {
-                    return Ok(());
-                }
-            }
+        Ok(_) => {
+            if source.is_some_and(|source| path_eq(destination, source)) { return Ok(()); }
             Err("FS_DESTINATION_EXISTS".to_string())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1178,7 +1161,19 @@ fn reject_existing_destination(
 #[tauri::command]
 fn fs_delete(path: String, workspace_root: String) -> Result<(), String> {
     let (p, _root) = validate_workspace_path(&path, &workspace_root)?;
-    if p.is_dir() {
+    let metadata = std::fs::symlink_metadata(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if metadata.file_type().is_symlink_dir() {
+            return std::fs::remove_dir(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"));
+        }
+    }
+    if metadata.file_type().is_symlink() {
+        return std::fs::remove_file(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"));
+    }
+    if metadata_is_link_or_reparse(&metadata) { return Err("FS_SYMLINK_UNSUPPORTED".into()); }
+    if metadata.is_dir() {
         std::fs::remove_dir_all(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"))
     } else {
         std::fs::remove_file(&p).map_err(|e| format!("FS_DELETE_FAILED: {e}"))
@@ -1234,7 +1229,8 @@ fn fs_paste(action: String, src_path: String, target_dir: String, workspace_root
     if path_eq(&dest, &src) {
         return Err("FS_PASTE_SAME_PATH".to_string());
     }
-    if src.is_dir() && path_is_within(&dest, &src) {
+    let source_metadata = std::fs::symlink_metadata(&src).map_err(|e| format!("FS_SOURCE_UNAVAILABLE: {e}"))?;
+    if source_metadata.is_dir() && !metadata_is_link_or_reparse(&source_metadata) && path_is_within(&dest, &src) {
         return Err("FS_PASTE_INTO_SELF".to_string());
     }
     reject_existing_destination(&dest, None)?;
@@ -1243,48 +1239,54 @@ fn fs_paste(action: String, src_path: String, target_dir: String, workspace_root
         "cut" => {
             std::fs::rename(&src, &dest).map_err(|e| format!("FS_MOVE_FAILED: {e}"))
         }
-        "copy" => {
-            if src.is_dir() {
-                if let Err(copy_error) = copy_dir_all(&src, &dest) {
-                    return match std::fs::remove_dir_all(&dest) {
-                        Ok(()) => Err(format!("FS_COPY_FAILED: {copy_error}")),
-                        Err(rollback_error) if rollback_error.kind() == std::io::ErrorKind::NotFound => {
-                            Err(format!("FS_COPY_FAILED: {copy_error}"))
-                        }
-                        Err(rollback_error) => Err(format!(
-                            "FS_COPY_ROLLBACK_FAILED: {copy_error}; cleanup failed: {rollback_error}",
-                        )),
-                    };
-                }
-                Ok(())
-            } else {
-                copy_file_new(&src, &dest).map_err(|e| format!("FS_COPY_FAILED: {e}"))
-            }
-        }
+        "copy" => copy_fs_entry(&src, &dest).map_err(|e| format!("FS_COPY_FAILED: {e}")),
         _ => Err("FS_INVALID_ACTION".to_string()),
     }
 }
 
-/// Recursively copy a directory and all its contents.
-fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir(dest)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let metadata = std::fs::symlink_metadata(entry.path())?;
-        if metadata_is_link_or_reparse(&metadata) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "symbolic links and reparse points are not supported",
-            ));
+/// Copy links as links and ordinary entries with no overwrite or link traversal.
+fn copy_fs_entry(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(src)?;
+    #[cfg(unix)]
+    if metadata.file_type().is_symlink() {
+        return std::os::unix::fs::symlink(std::fs::read_link(src)?, dest);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if metadata.file_type().is_symlink_dir() {
+            return std::os::windows::fs::symlink_dir(std::fs::read_link(src)?, dest);
         }
-        let target = dest.join(entry.file_name());
-        if metadata.is_dir() {
-            copy_dir_all(&entry.path(), &target)?;
-        } else {
-            copy_file_new(&entry.path(), &target)?;
+        if metadata.file_type().is_symlink_file() {
+            return std::os::windows::fs::symlink_file(std::fs::read_link(src)?, dest);
         }
     }
-    std::fs::set_permissions(dest, std::fs::metadata(src)?.permissions())?;
+    if metadata_is_link_or_reparse(&metadata) {
+        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported reparse point"));
+    }
+    if metadata.is_dir() { copy_dir_all(src, dest) }
+    else if metadata.is_file() { copy_file_new(src, dest) }
+    else { Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported file type")) }
+}
+
+fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    // Roll back only a directory this invocation successfully created. A race
+    // creating the destination must never cause us to delete another entry.
+    std::fs::create_dir(dest)?;
+    let result = (|| {
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_fs_entry(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+        std::fs::set_permissions(dest, std::fs::metadata(src)?.permissions())
+    })();
+    if let Err(copy_error) = result {
+        return match std::fs::remove_dir_all(dest) {
+            Ok(()) => Err(copy_error),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(copy_error),
+            Err(error) => Err(std::io::Error::other(format!("FS_COPY_ROLLBACK_FAILED: {copy_error}; {error}"))),
+        };
+    }
     Ok(())
 }
 
@@ -6923,3 +6925,7 @@ mod history_cache_tests;
 #[cfg(test)]
 #[path = "server/pty_resize_tests.rs"]
 mod pty_resize_tests;
+
+#[cfg(test)]
+#[path = "server/file_ops_tests.rs"]
+mod file_ops_tests;
