@@ -4,6 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "build:android": "tsc -b && vite build --config vite.android.config.ts && cap sync android",
+    "android:apk": "node scripts/android-build.mjs debug",
+    "android:release": "node scripts/android-build.mjs release",
+    "android:setup-signing": "node scripts/android-signing.mjs",
+    "android:open": "cap open android",
     "build:phone": "tsc -b && vite build --config vite.phone.config.ts",
     "dev:phone": "vite --config vite.phone.config.ts",
     "dev": "vite",
@@ -13,6 +18,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2",
     "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
@@ -36,6 +43,7 @@
     "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.2",
     "@eslint/js": "^9.39.4",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24.12.0",

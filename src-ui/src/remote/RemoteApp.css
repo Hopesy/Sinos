@@ -31,7 +31,7 @@ button svg, a svg { flex-shrink: 0; }
   --m-shadow: 0 24px 100px #263d3026;
 }
 .remote-app button { color: inherit; }
-.mobile-shell { height: 100%; max-width: 1040px; margin: auto; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+.mobile-shell { height: 100%; max-width: 1040px; margin: auto; display: flex; flex-direction: column; padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px)); }
 .mobile-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 66px; padding: 10px 20px; }
 .mobile-brand { display: flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 600; letter-spacing: -.6px; }
 .mobile-brand img { width: 29px; height: 29px; border-radius: 8px; }
@@ -57,7 +57,7 @@ button svg, a svg { flex-shrink: 0; }
 .new-session-button { border: 1px solid var(--m-border); border-radius: 11px; width: 36px; height: 40px; }
 .mobile-content, .session-workspace, .mobile-tab-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; }
 .mobile-content { margin: 0 16px; }
-.mobile-tabbar { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-around; padding: 9px 30px max(9px, env(safe-area-inset-bottom)); gap: 20px; }
+.mobile-tabbar { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-around; padding: 9px 30px max(9px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); gap: 20px; }
 .mobile-tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 51px; border: 0; background: transparent; color: var(--m-subtle); font-size: 10px; font-weight: 600; }
 .mobile-tabbar button > span { width: 56px; height: 29px; display: grid; place-items: center; border-radius: 10px; }
 .mobile-tabbar button.is-active { color: var(--m-accent); }
@@ -106,7 +106,7 @@ button svg, a svg { flex-shrink: 0; }
 
 .mobile-sheet { padding: 0; width: 100%; max-width: 560px; max-height: min(90dvh, 850px); border: 1px solid var(--m-border); border-bottom: 0; border-radius: 24px 24px 0 0; margin: auto auto 0; background: var(--m-surface); color: var(--m-text); box-shadow: var(--m-shadow); overscroll-behavior: contain; }
 .mobile-sheet::backdrop { background: #050b08a8; backdrop-filter: blur(4px); }
-.mobile-sheet-inner { padding: 9px 20px max(24px, env(safe-area-inset-bottom)); }
+.mobile-sheet-inner { padding: 9px 20px max(24px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 .mobile-sheet-handle { width: 32px; height: 4px; border-radius: 4px; background: var(--m-border); margin: 0 auto 9px; }
 .mobile-sheet header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mobile-sheet h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.4px; }
@@ -242,7 +242,7 @@ button svg, a svg { flex-shrink: 0; }
   .mobile-header { min-height: 44px; padding-top: 0; padding-bottom: 0; }
   .workspace-switcher { padding: 2px 5px; margin-bottom: 6px; }
   .project-avatar { height: 32px; flex-basis: 32px; }
-  .mobile-tabbar { padding-top: 3px; padding-bottom: max(3px, env(safe-area-inset-bottom)); }
+  .mobile-tabbar { padding-top: 3px; padding-bottom: max(3px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
   .mobile-tabbar button { min-height: 40px; gap: 0; }
   .mobile-tabbar button > span { height: 24px; }
   .mobile-composer { padding: 8px 12px 6px; }

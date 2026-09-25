@@ -19,7 +19,9 @@ export async function clipboardWrite(text: string, options?: { throwOnError: boo
       const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
       await writeText(text);
     } else {
-      await navigator.clipboard.writeText(text);
+      const { isAndroidApp, SinosMobile } = await import('../remote/native/bridge');
+      if (isAndroidApp) await SinosMobile.clipboardWrite({ value: text });
+      else await navigator.clipboard.writeText(text);
     }
   } catch (error) { if (options?.throwOnError) throw error; }
 }
@@ -33,6 +35,8 @@ export async function clipboardRead(): Promise<string> {
       const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
       return (await readText()) ?? '';
     }
+    const { isAndroidApp, SinosMobile } = await import('../remote/native/bridge');
+    if (isAndroidApp) return (await SinosMobile.clipboardRead()).value;
     return await navigator.clipboard.readText();
   } catch { return ''; }
 }

@@ -1,0 +1,39 @@
+name: Build Android app
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['src-ui/**', 'tauri.conf.json', '.github/workflows/android.yml']
+  push:
+    branches: [main]
+    paths: ['src-ui/**', 'tauri.conf.json', '.github/workflows/android.yml']
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src-ui/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci --prefix src-ui
+      - run: npm test --prefix src-ui
+      - run: chmod +x src-ui/android/gradlew
+      - run: npm run android:apk --prefix src-ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sinos-Android-test-${{ github.sha }}
+          path: target/android/*.apk
+          if-no-files-found: error
+          retention-days: 14

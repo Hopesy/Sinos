@@ -1,25 +1,17 @@
 import { RemoteClient, RemoteError, type RemoteSocket } from '../client';
 import { openFrame, sealFrame, generateContentKey, boxContentKey } from './crypto';
-import { fromBase64Url, toBase64Url, parsePairUri } from './encoding';
+import { fromBase64Url, toBase64Url } from './encoding';
 import { ResponseChunks, type ResponseChunk } from './responseChunks';
+import { checkDeviceStorage, saveDevice, validateInvite, type PairedDevice } from './deviceStorage';
+import { isAndroidApp } from '../native/bridge';
+import { NativeRelaySocket, type RelaySocket } from '../native/NativeRelaySocket';
+export { savedDevice, forgetDevice, type PairedDevice } from './deviceStorage';
 
-export interface PairedDevice { pairId: string; relay: string; token: string; contentKey: string; name: string }
-const STORAGE = 'coffee-paired-computer';
-export function savedDevice(): PairedDevice | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE) || 'null') as PairedDevice | null;
-    if (!value || !/^[\w-]{22}$/.test(value.pairId) || fromBase64Url(value.contentKey).length !== 32 || !value.token || new URL(value.relay).origin !== location.origin) return null;
-    return value;
-  } catch { return null; }
-}
-export function forgetDevice() { localStorage.removeItem(STORAGE); }
 export async function claimDevice(link: string, name: string): Promise<PairedDevice> {
-  const invite = parsePairUri(link);
+  const invite = validateInvite(link);
   const relay = new URL(invite.relay);
-  if (relay.origin !== location.origin) throw new Error('请在配对链接对应的中继网站打开链接。');
-  if (invite.publicKey.length !== 32) throw new Error('配对链接不完整，请重新复制链接或扫码。');
   // Check durable storage before consuming the single-use invitation.
-  localStorage.setItem(`${STORAGE}-check`, '1'); localStorage.removeItem(`${STORAGE}-check`);
+  await checkDeviceStorage();
   const key = generateContentKey();
   const boxed = boxContentKey(key, invite.publicKey);
   const response = await fetch(`${relay.origin}/v1/pair/claim`, {
@@ -28,9 +20,9 @@ export async function claimDevice(link: string, name: string): Promise<PairedDev
   });
   if (!response.ok) throw new Error(response.status === 409 || response.status === 410 ? '配对邀请已使用或过期，请在电脑上重新生成。' : '配对未完成，请检查网络后重试。');
   const result = await response.json() as { pairId: string; deviceToken: string };
-  if (!result.pairId || !result.deviceToken) throw new Error('中继响应不正确。');
+  if (!/^[\w-]{22}$/.test(result.pairId) || typeof result.deviceToken !== 'string' || !result.deviceToken) throw new Error('中继响应不正确。');
   const device = { pairId: result.pairId, token: result.deviceToken, relay: relay.origin, contentKey: toBase64Url(key), name };
-  localStorage.setItem(STORAGE, JSON.stringify(device));
+  await saveDevice(device);
   history.replaceState(null, '', location.pathname);
   return device;
 }
@@ -39,12 +31,13 @@ interface Reply extends ResponseChunk { type: string; protocol?: string; channel
 interface Pending { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; cleanup: () => void; chunks?: ResponseChunks }
 
 export class RelayClient extends RemoteClient {
-  private ws?: WebSocket;
+  private ws?: RelaySocket;
   private channel = '';
   private seq = 0;
   private stopped = false;
   private revoked = false;
   private replaced = false;
+  private paused = false;
   private attempt = 0;
   private pending = new Map<string, Pending>();
   private retry?: ReturnType<typeof setTimeout>;
@@ -65,22 +58,25 @@ export class RelayClient extends RemoteClient {
   }
   private failPending() {
     this.channel = '';
-    for (const item of this.pending.values()) { clearTimeout(item.timer); item.cleanup(); item.reject(new RemoteError(this.revoked ? 401 : 503, 'DISCONNECTED')); }
+    for (const item of this.pending.values()) { clearTimeout(item.timer); item.cleanup(); item.reject(new RemoteError(this.revoked ? 401 : this.paused ? 409 : 503, this.paused ? 'CONNECTION_PAUSED' : 'DISCONNECTED')); }
     this.pending.clear();
   }
   private connect() {
-    if (this.stopped || this.revoked || this.replaced || (this.ws && this.ws.readyState < 2)) return;
+    if (this.stopped || this.revoked || this.replaced || this.paused || (this.ws && this.ws.readyState < 2)) return;
     const url = new URL(`/v1/pair/${this.device.pairId}`, this.device.relay);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('role', 'guest'); url.searchParams.set('token', this.device.token);
-    const ws = this.ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
-    const connectDeadline = setTimeout(() => { if (ws.readyState === 0) ws.close(); }, 12000);
+    this.ws?.close();
+    const socket = isAndroidApp ? new NativeRelaySocket(url) : new WebSocket(url);
+    if (socket instanceof WebSocket) socket.binaryType = 'arraybuffer';
+    const ws = this.ws = socket as RelaySocket;
+    const connectDeadline = isAndroidApp ? undefined : setTimeout(() => { if (ws.readyState === 0) ws.close(); }, 12000);
     ws.onopen = () => {
       clearTimeout(connectDeadline);
       this.lastSeen = Date.now(); clearInterval(this.heartbeat);
-      this.heartbeat = setInterval(() => { if (Date.now() - this.lastSeen > 25000) ws.close(); else if (ws.readyState === 1) ws.send('ping'); }, 10000);
+      if (!isAndroidApp) this.heartbeat = setInterval(() => { if (Date.now() - this.lastSeen > 25000) ws.close(); else if (ws.readyState === 1) ws.send('ping'); }, 10000);
     };
-    ws.onmessage = (event: MessageEvent) => {
+    ws.onmessage = (event) => {
       this.lastSeen = Date.now();
       this.receiveQueue = this.receiveQueue.then(async () => {
         if (ws !== this.ws || this.stopped) return;
@@ -122,12 +118,15 @@ export class RelayClient extends RemoteClient {
       if (ws !== this.ws) return;
       if (event.code === 1008) this.revoked = true;
       if (event.code === 1000 && event.reason === 'replaced') this.replaced = true;
+      if (event.code === 4000) this.paused = true;
       clearInterval(this.heartbeat); this.failPending();
-      if (!this.stopped && !this.revoked && !this.replaced) this.retry = setTimeout(() => this.connect(), Math.min(30000, 1000 * 2 ** this.attempt++) + Math.random() * 300);
+      if (!this.stopped && !this.revoked && !this.replaced && !this.paused && ws.readyState !== 0) this.retry = setTimeout(() => this.connect(), Math.min(30000, 1000 * 2 ** this.attempt++) + Math.random() * 300);
     };
   }
-  resumeHere() { if (!this.stopped && !this.revoked) { this.replaced = false; this.attempt = 0; clearTimeout(this.retry); this.connect(); } }
+  pauseConnection() { this.paused = true; clearTimeout(this.retry); clearInterval(this.heartbeat); this.ws?.close(); this.failPending(); }
+  resumeHere() { if (!this.stopped && !this.revoked) { this.replaced = false; this.paused = false; this.attempt = 0; clearTimeout(this.retry); this.connect(); } }
   rpc<T>(action: string, sessionId = '', params: unknown = {}, signal?: AbortSignal): Promise<T> {
+    if (this.paused) return Promise.reject(new RemoteError(409, 'CONNECTION_PAUSED'));
     if (this.replaced) return Promise.reject(new RemoteError(409, 'CONNECTION_REPLACED'));
     if (!this.channel || this.ws?.readyState !== 1 || signal?.aborted) return Promise.reject(new RemoteError(this.revoked ? 401 : 503, 'COMPUTER_OFFLINE'));
     if (this.pending.size >= 32) return Promise.reject(new RemoteError(429, 'TOO_MANY_REQUESTS'));

@@ -1,11 +1,15 @@
 # Rust
 /target
+/src-ui/target/
 *.pdb
 
 # Node / Frontend
 node_modules/
 dist/
 dist-phone/
+dist-android/
+*.jks
+*.keystore
 .vite/
 
 # Tauri generated

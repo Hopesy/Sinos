@@ -30,8 +30,9 @@ export function useConnection(client: RemoteClient) {
       } catch (error) {
         const unauthorized = error instanceof RemoteError && error.status === 401;
         const replaced = error instanceof RemoteError && error.message === 'CONNECTION_REPLACED';
-        const starting = !connectedOnce && !unauthorized && Date.now() - started < 10000;
-        if (!disposed) setConnection(unauthorized ? 'unauthorized' : replaced ? 'replaced' : starting ? 'connecting' : 'offline');
+        const paused = error instanceof RemoteError && error.message === 'CONNECTION_PAUSED';
+        const starting = !connectedOnce && !unauthorized && !paused && Date.now() - started < 10000;
+        if (!disposed) setConnection(unauthorized ? 'unauthorized' : replaced ? 'replaced' : paused ? 'paused' : starting ? 'connecting' : 'offline');
         delay = starting ? 1000 : 6000;
       } finally {
         busy = false;

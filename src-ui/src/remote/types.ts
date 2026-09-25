@@ -8,7 +8,7 @@ export interface QueueSnapshot { messages: QueuedPrompt[]; activity: ActivitySna
 export interface RemoteSession { id: string; tool: string | null; cwd: string; running: boolean; paused: boolean; output_chunks: number; cols: number; rows: number; activity?: ActivitySnapshot; queued_count?: number }
 export interface RemoteTool { id: string; displayName: string }
 export interface RemoteState { sessions: RemoteSession[]; device_name: string; capabilities?: string[] }
-export type Connection = 'connecting' | 'online' | 'offline' | 'unauthorized' | 'replaced';
+export type Connection = 'connecting' | 'online' | 'offline' | 'unauthorized' | 'replaced' | 'paused';
 export type StreamState = 'connecting' | 'live' | 'reconnecting' | 'ended';
 export type ServerMessage = { type: 'reset' } | { type: 'output'; session_id: string; data: string; sequence?: number } | { type: 'status'; session_id: string; running: boolean; paused: boolean } | { type: 'error'; message: string };
 export interface FileEntry { name: string; path: string; is_dir: boolean; size: number }
