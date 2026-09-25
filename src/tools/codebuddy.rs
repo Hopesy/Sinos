@@ -18,8 +18,8 @@
 //! conversation as `payload.type == "message"` rows with `role` + content
 //! blocks. Handled by `parse_codebuddy_session_jsonl` in server.rs.
 //!
-//! No hook surface (so the tab stays in its native terminal UI — no Dynamic
-//! Island). Registered in `TOOLS` for display name + PATH probe + launch
+//! No native status hook surface (no Dynamic Island); saved transcripts also
+//! support desktop/mobile conversation rendering. Registered in `TOOLS` for display name + PATH probe + launch
 //! binary + history; the launchpad tile lives in CenterPanel's AGENT_CATALOG
 //! and the resume preset in terminal.rs AGENT_PRESETS.
 

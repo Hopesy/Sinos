@@ -1,5 +1,5 @@
 //! Oh-My-Pi — T2: Pi-format history, heatmap and resume.
-//! All live interaction stays in its native terminal UI.
+//! Native title state supplements desktop/mobile conversation rendering.
 //! Its own store is ~/.omp/agent/sessions/<encoded-cwd>/*.jsonl.
 
 use super::{HistoryShape, ToolDescriptor};

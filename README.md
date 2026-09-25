@@ -53,11 +53,11 @@ Sinos CLI can launch **any** command-line agent — but the ones below get deepe
 | Tier | What you get | CLIs |
 |---|---|---|
 | **T1** | Dynamic Island · History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | **Claude Code** · **Codex CLI** · **Grok Build** |
-| **T2** | History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | OpenCode · mimocode · Kimi Code · OpenClaw · Hermes Agent · Antigravity · Qwen Code · Pi |
-| **T3** | Brand icon · One-click launch | Crush · Aider · Goose · Copilot CLI · Cursor · Cline · Oh-My-Pi |
+| **T2** | History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | OpenCode · mimocode · Kimi Code · OpenClaw · Hermes Agent · Antigravity · Qwen Code · Pi · Oh-My-Pi · CodeBuddy |
+| **T3** | Brand icon · One-click launch | Crush · Aider · Goose · Copilot CLI · Cursor · Cline |
 | **T4** | Open a terminal tab and type the command to launch | any other CLI |
 
-*Dynamic Island status is hook-free and currently available only for Claude Code, Codex CLI, and Grok Build. Sinos CLI reads each tool's native terminal title state and does not install status hooks.*
+*Dynamic Island status is hook-free for Claude Code, Codex CLI, Grok Build, Oh-My-Pi and Kimi Code. Sinos reads native terminal titles or supported screen states and does not install status hooks. Oh-My-Pi and CodeBuddy support history resume and conversation rendering on desktop and mobile.*
 
 *T1 and T2 CLIs ship today; T3 integrations are rolling in.*
 

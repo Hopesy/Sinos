@@ -261,6 +261,19 @@ fn record_epoch(value: &serde_json::Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn omp_titles_and_current_claude_frames_do_not_authorize_auto_send() {
+        let mut runtime = Runtime::new();
+        for frame in ["◐", "◑", "⠂", "⠐"] {
+            runtime.observe_output(&format!("\x1b]0;{frame} Test\x07"), "claude");
+            assert_eq!(runtime.activity.state, Activity::Working);
+        }
+        for (prefix, state) in [(":", Activity::Working), ("!", Activity::Waiting), (">", Activity::Idle)] {
+            runtime.observe_output(&format!("\x1b]0;π {prefix} Test\x07"), "omp");
+            assert_eq!(runtime.activity.state, state);
+            assert!(!runtime.activity.auto_send_ready);
+        }
+    }
     fn request(id: &str, text: &str) -> QueueRequest { QueueRequest { action: "enqueue".into(), id: id.into(), text: text.into(), expected_revision: None, attachments: Vec::new() } }
     #[test] fn native_titles_are_split_safe_and_never_authorize_auto_send() {
         let mut runtime = Runtime::new();
