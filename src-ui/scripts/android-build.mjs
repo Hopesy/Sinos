@@ -17,7 +17,14 @@ if (!env.JAVA_HOME) {
   const jdks = join(homedir(), '.jdks');
   const candidates = [win && 'C:/Program Files/Android/Android Studio/jbr',
     ...existsSync(jdks) ? readdirSync(jdks).map(name => join(jdks, name)) : []].filter(Boolean);
-  env.JAVA_HOME = candidates.find(path => existsSync(join(path, 'bin', win ? 'javac.exe' : 'javac')));
+  // Android Studio can ship a newer runtime than this Gradle version supports.
+  // Prefer the documented JDK 21 even when it is installed separately.
+  env.JAVA_HOME = candidates.find(path => {
+    const metadata = join(path, 'release');
+    return existsSync(join(path, 'bin', win ? 'javac.exe' : 'javac')) &&
+      existsSync(metadata) && /^JAVA_VERSION="21(?:[."+-])/m.test(readFileSync(metadata, 'utf8'));
+  });
+  if (!env.JAVA_HOME) throw new Error('No compatible JDK found. Install JDK 21 and set JAVA_HOME before building Android.');
 }
 if (!env.ANDROID_HOME && win) {
   const sdk = join(env.LOCALAPPDATA || join(homedir(), 'AppData/Local'), 'Android/Sdk');
