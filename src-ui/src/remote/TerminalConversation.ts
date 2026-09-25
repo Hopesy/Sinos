@@ -4,6 +4,7 @@ import { projectConversation, type ConversationProjection } from './conversation
 import { parseClaudeTerminalTitle } from '../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../lib/codex-terminal-title';
 import { parseGrokTerminalTitle } from '../lib/grok-terminal-title';
+import { parseOmpTerminalTitle } from '../lib/omp-terminal-title';
 import { isTerminalRule } from './claudeChrome';
 
 /** A VT decoder only: never open(), attach DOM, fit, or send terminal replies.
@@ -19,7 +20,7 @@ export class TerminalConversation {
     this.terminal.loadAddon(new Unicode11Addon());
     this.terminal.unicode.activeVersion = '11';
     this.terminal.onTitleChange(title => {
-      const parsed = tool === 'claude' ? parseClaudeTerminalTitle(title) : tool === 'codex' ? parseCodexTerminalTitle(title) : tool === 'grok' ? parseGrokTerminalTitle(title) : null;
+      const parsed = tool === 'claude' ? parseClaudeTerminalTitle(title) : tool === 'codex' ? parseCodexTerminalTitle(title) : tool === 'grok' ? parseGrokTerminalTitle(title) : tool === 'omp' ? parseOmpTerminalTitle(title) : null;
       if (parsed) this.activity = parsed.status === 'working' ? 'working' : parsed.status === 'wait_input' ? 'waiting' : 'idle';
     });
   }

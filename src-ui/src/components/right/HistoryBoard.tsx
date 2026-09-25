@@ -28,6 +28,7 @@ import KIMICODE_DATA_URL from '../../icons-inline/kimicode.png?inline';
 // text color — otherwise currentColor resolves to black and the mark is
 // invisible on dark themes. CenterPanel does the same (?raw + inlineSvgIcon).
 import PI_SVG from '../../icons-inline/pi.svg?raw';
+import OMP_SVG from '../../icons-inline/omp.svg?raw';
 // Grok Build - same monochrome currentColor mark treatment as Pi: inline SVG
 // so it inherits the surrounding text color across light/dark themes.
 import GROK_SVG from '../../icons-inline/grok.svg?raw';
@@ -37,6 +38,9 @@ import GROK_SVG from '../../icons-inline/grok.svg?raw';
 // disk. The markup carries its own fills, so it does NOT go through the
 // currentColor branch above.
 import OPENCLAW_SVG from '../../icons-inline/openclaw.svg?raw';
+// CodeBuddy — same full-color inline treatment as OpenClaw (gradient squircle
+// with its own fills, no currentColor).
+import CODEBUDDY_SVG from '../../icons-inline/codebuddy.svg?raw';
 import './HistoryBoard.css';
 
 // Tool icons — claude/codex/qwen/antigravity load via <img src=public/...>
@@ -68,8 +72,8 @@ const getToolIcon = (tool: string) => {
   // resolve currentColor to black — invisible on dark themes (issue: "会话记录
   // 列表 Pi 图标一直是黑色看不清"). The other tools are fixed-color brand
   // marks (logo orange, codex gradient, kimi squircle…) and stay <img>.
-  if (tool === 'pi' || tool === 'grok') {
-    const svg = tool === 'pi' ? PI_SVG : GROK_SVG;
+  if (tool === 'pi' || tool === 'grok' || tool === 'omp') {
+    const svg = tool === 'pi' ? PI_SVG : tool === 'omp' ? OMP_SVG : GROK_SVG;
     return (
       <span
         aria-hidden
@@ -78,16 +82,17 @@ const getToolIcon = (tool: string) => {
       />
     );
   }
-  // OpenClaw is a full-color brand mark (red gradient lobster, teal eyes) —
-  // inline SVG with its own fills, NOT currentColor. Renders as an inline
-  // span so the markup's hardcoded colors show verbatim (an <img> would also
-  // work, but we reuse the same SVG bytes CenterPanel imports).
-  if (tool === 'openclaw') {
+  // OpenClaw / CodeBuddy are full-color brand marks (lobster gradient; teal →
+  // violet squircle) — inline SVG with their own fills, NOT currentColor.
+  // Renders as an inline span so the markup's hardcoded colors show verbatim
+  // (an <img> would also work, but we reuse the same SVG bytes CenterPanel
+  // imports).
+  if (tool === 'openclaw' || tool === 'codebuddy') {
     return (
       <span
         aria-hidden
         style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '1em', height: '1em', flexShrink: 0 }}
-        dangerouslySetInnerHTML={{ __html: OPENCLAW_SVG }}
+        dangerouslySetInnerHTML={{ __html: tool === 'codebuddy' ? CODEBUDDY_SVG : OPENCLAW_SVG }}
       />
     );
   }

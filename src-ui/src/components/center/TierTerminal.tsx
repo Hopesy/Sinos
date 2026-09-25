@@ -23,18 +23,20 @@ import { installTerminalLinks } from '../../lib/terminal-links';
 import { registerTabActions, getTabActions } from '../../lib/tab-actions';
 import {
   clearTerminalInteraction, getTerminalInteraction, hasTerminalInteraction,
-  parseTerminalInteraction, readTerminalScreen, setTerminalInteraction, supportsTerminalInteraction,
+  parseTerminalAgentStatus, parseTerminalInteraction, readTerminalScreen, setTerminalInteraction, supportsTerminalInteraction,
 } from '../../lib/terminal-interaction';
+import { createTerminalAgentStatus } from '../../lib/terminal-agent-status';
 import { createTerminalInteractionResponder } from '../../lib/terminal-interaction-response';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
 import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
+import { parseOmpTerminalTitle } from '../../lib/omp-terminal-title';
 import { parseGrokTerminalTitle } from '../../lib/grok-terminal-title';
 import { markNotifySoundPromptSubmitted } from '../../lib/notify-sound';
 import { onWindowForeground } from '../../lib/window-focus-filter';
 import { createTerminalSizeSync, DEFAULT_TERMINAL_GRID } from '../../lib/terminal-size-sync';
 import { commands } from '../../tauri';
-import { supportsNativeAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, type ToolType, type ThemeColor } from '../../store/app-state';
+import { supportsAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, type ToolType, type ThemeColor } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { getToolDisplayName } from '../../lib/tool-info';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
@@ -484,6 +486,7 @@ function TierTerminalImpl({
   const [processExited, setProcessExited] = useState(false);
   const processExitedRef = useRef(false);
   const interactionSuppressionRef = useRef<string | null>(null);
+  const submitStatusRef = useRef<(() => void) | null>(null);
   const [startFailed, setStartFailed] = useState(false);
   // Rolling buffer for agent-to-agent marker scanning. PTY chunks can split
   // `[COFFEE-TELL:...]` / `[COFFEE-DONE:...]` across boundaries; the buffer
@@ -526,6 +529,13 @@ function TierTerminalImpl({
 
     let mounted = true;
     const unlisteners: (() => void)[] = [];
+    const usesAgentStatus = supportsAgentStatus(tool);
+    const activity = createTerminalAgentStatus(
+      status => { if (mounted && usesAgentStatus) dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status }); },
+      () => hasTerminalInteraction(sessionId), tool === 'omp',
+    );
+    submitStatusRef.current = activity.submitted;
+    unlisteners.push(() => { activity.dispose(); submitStatusRef.current = null; });
 
     const fontFamily = buildFontFamily(termFont);
     const term = new Terminal({
@@ -1008,6 +1018,7 @@ function TierTerminalImpl({
       if (!data) return;
       if (data.includes('\r') || data.includes('\n')) {
         markNotifySoundPromptSubmitted(sessionId, tool);
+        activity.submitted();
       }
       commands.tierTerminalInput(sessionId, data).catch(() => {});
     };
@@ -1180,16 +1191,22 @@ function TierTerminalImpl({
       }
     });
     unlisteners.push(() => writeParsedSub.dispose());
-    const usesNativeStatus = supportsNativeAgentStatus(tool);
+
 
     // Inspect completed xterm frames, including hidden tabs watched by a phone.
     // Briefly retain a card across a partial TUI repaint, but never submit from
     // that retained snapshot: the response path re-reads the live screen.
     if (supportsTerminalInteraction(tool)) {
       let clearTimer: ReturnType<typeof setTimeout> | undefined;
+      let previousScreen = "";
       const scanInteraction = () => {
         if (!mounted || processExitedRef.current) return;
-        const interaction = parseTerminalInteraction(readTerminalScreen(term), tool);
+        const screen = readTerminalScreen(term);
+        const interaction = parseTerminalInteraction(screen, tool);
+        const fingerprint = screen.slice(-30).map(line => line.text).join('\n');
+        const live = interaction?.fingerprint === interactionSuppressionRef.current ? null : interaction ?? getTerminalInteraction(sessionId);
+        activity.screen(parseTerminalAgentStatus(screen, tool, live), fingerprint !== previousScreen);
+        previousScreen = fingerprint;
         if (interaction) {
           clearTimeout(clearTimer);
           clearTimer = undefined;
@@ -1204,6 +1221,7 @@ function TierTerminalImpl({
             else {
               interactionSuppressionRef.current = null;
               clearTerminalInteraction(sessionId);
+              activity.screen(null, true);
             }
           }, 100);
         }
@@ -1258,24 +1276,28 @@ function TierTerminalImpl({
     const setGrokStatus = (status: AgentStatus) => {
       if (status === grokStatus) return;
       grokStatus = status;
-      dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status });
+      activity.native(status);
     };
     term.onTitleChange((title) => {
       let displayTitle = title;
       if (tool === 'claude') {
         const parsed = parseClaudeTerminalTitle(title);
         displayTitle = parsed.displayTitle;
-        dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: parsed.status });
+        activity.native(parsed.status);
       } else if (tool === 'codex') {
         const parsed = parseCodexTerminalTitle(title);
         displayTitle = parsed.displayTitle;
-        dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: parsed.status });
+        activity.native(parsed.status);
         if (parsed.status === 'wait_input') {
           requestTerminalForNativeAction('native:codex:action-required');
         } else {
           clearTimeout(nativeActionTimer);
           nativeActionTimer = undefined;
         }
+      } else if (tool === 'omp') {
+        const parsed = parseOmpTerminalTitle(title);
+        displayTitle = parsed.displayTitle;
+        activity.native(parsed.status);
       } else if (tool === 'grok') {
         const parsed = parseGrokTerminalTitle(title);
         displayTitle = parsed.displayTitle;
@@ -1452,8 +1474,9 @@ function TierTerminalImpl({
           sizeSync.markPtyStopped();
           processExitedRef.current = true;
           clearTerminalInteraction(sessionId);
+          activity.stopped();
           setProcessExited(true);
-          if (usesNativeStatus) {
+          if (usesAgentStatus) {
             dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
           }
         },
@@ -1471,8 +1494,9 @@ function TierTerminalImpl({
           sizeSync.markPtyStopped();
           processExitedRef.current = true;
           clearTerminalInteraction(sessionId);
+          activity.stopped();
           setProcessExited(true);
-          if (usesNativeStatus) {
+          if (usesAgentStatus) {
             dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
           }
         },
@@ -1742,6 +1766,7 @@ function TierTerminalImpl({
         interactionSuppressionRef.current = fingerprint;
         if (getTerminalInteraction(sessionId)?.fingerprint === fingerprint) clearTerminalInteraction(sessionId);
         markNotifySoundPromptSubmitted(sessionId, tool);
+        submitStatusRef.current?.();
       },
     });
     const unregister = registerTabActions(sessionId, {

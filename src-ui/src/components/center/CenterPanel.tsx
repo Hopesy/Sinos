@@ -9,7 +9,7 @@ import { ToolConfigModal } from './ToolConfigModal';
 import { ContributionHeatmap } from './ContributionHeatmap';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { DiffPanel } from '../right/DiffPanel';
-import { supportsNativeAgentStatus, useAppState, type ToolType } from '../../store/app-state';
+import { supportsAgentStatus, useAppState, type ToolType } from '../../store/app-state';
 import { isFrostShape } from '../../lib/personalization';
 import { supportsConversationTool } from '../../lib/chat-tools';
 import { useT } from '../../i18n/useT';
@@ -139,6 +139,7 @@ import KILO_SVG from '../../icons-inline/kilo.svg?raw';
 import CURSOR_SVG from '../../icons-inline/cursor.svg?raw';
 import CLINE_SVG from '../../icons-inline/cline.svg?raw';
 import OMP_SVG from '../../icons-inline/omp.svg?raw';
+import CODEBUDDY_SVG from '../../icons-inline/codebuddy.svg?raw';
 import AIDER_DATA_URL from '../../icons-inline/aider.png?inline';
 import KIMICODE_DATA_URL from '../../icons-inline/kimicode.png?inline';
 import CRUSH_DATA_URL from '../../icons-inline/crush.png?inline';
@@ -274,6 +275,9 @@ const SvgGoose     = () => bgIcon(GOOSE_DATA_URL, '1em', {
 const SvgCursor    = () => inlineSvgIcon(CURSOR_SVG);
 const SvgCline     = () => inlineSvgIcon(CLINE_SVG);
 const SvgOmp       = () => inlineSvgIcon(OMP_SVG);
+// CodeBuddy is a full-color gradient squircle (like OpenClaw / Oh-My-Pi) —
+// inline SVG so the markup's own fills render verbatim and synchronously.
+const SvgCodeBuddy = () => inlineSvgIcon(CODEBUDDY_SVG);
 
 // Sinos 101 card icon — utility mark for the onboarding course.
 // now portaled into the titlebar from Explorer.tsx): steam wave loops 3s, cup
@@ -462,6 +466,7 @@ const getToolIcon = (tool: ToolType): React.ReactNode => {
     case 'cursor': return <SvgCursor />;
     case 'cline': return <SvgCline />;
     case 'omp': return <SvgOmp />;
+    case 'codebuddy': return <SvgCodeBuddy />;
     case 'remote':
     case 'terminal': return <TerminalIcon />;
     case 'two-split': return <SvgTwoSplit />;
@@ -483,12 +488,14 @@ export { getToolIcon };
 const VALID_PIN_KEYS = new Set<string>([
   'claude', 'opencode', 'mimocode', 'kilo', 'openclaw', 'codex', 'grok', 'antigravity', 'qwen', 'hermes', 'terminal',
   'pi', 'crush', 'aider', 'kimicode', 'goose', 'copilot', 'cursor', 'cline', 'omp',
+  'codebuddy',
   'installer', 'four-split', 'three-split', 'two-split',
 ]);
 
 const CONFIGURABLE_AGENT_TOOLS = new Set<ToolType>([
   'claude', 'codex', 'grok', 'antigravity', 'qwen', 'opencode',
-  'mimocode', 'kilo', 'openclaw', 'hermes', 'pi', 'kimicode',
+  'mimocode', 'kilo', 'openclaw', 'hermes', 'pi', 'kimicode', 'omp',
+  'codebuddy',
 ]);
 
 // Only tools with an authoritative native OSC title protocol get a Dynamic
@@ -594,6 +601,7 @@ export function CenterPanel() {
     cursor: <SvgCursor />,
     cline: <SvgCline />,
     omp: <SvgOmp />,
+    codebuddy: <SvgCodeBuddy />,
   };
 
   // Built-in AI CLI catalog. Fully local — no remote fetch. Display
@@ -603,6 +611,7 @@ export function CenterPanel() {
     'claude', 'opencode', 'mimocode', 'kilo', 'openclaw', 'codex', 'grok', 'antigravity', 'qwen', 'hermes',
     // Pi (T2) + Crush/Aider/Goose/Copilot/Cursor/Cline/Oh-My-Pi (T3 launch-only). Kimi Code is T1.
     'pi', 'crush', 'aider', 'kimicode', 'goose', 'copilot', 'cursor', 'cline', 'omp',
+    'codebuddy',
   ].map((key) => ({ key: key as ToolType, label: getToolDisplayName(key) }));
 
   // Unified agent catalog — fully local. The remote catalog fetch
@@ -1287,6 +1296,7 @@ export function CenterPanel() {
       case 'cursor': return { icon, title: cwd ?? getToolDisplayName('cursor'), tooltip: pathTip };
       case 'cline': return { icon, title: cwd ?? getToolDisplayName('cline'), tooltip: pathTip };
       case 'omp': return { icon, title: cwd ?? getToolDisplayName('omp'), tooltip: pathTip };
+      case 'codebuddy': return { icon, title: cwd ?? getToolDisplayName('codebuddy'), tooltip: pathTip };
       case 'remote': {
         let title = t('tool.remote') as string;
         if (session.toolData) {
@@ -1413,10 +1423,10 @@ export function CenterPanel() {
             >
               {icon}
               <span className="tab-title" style={{ flex: '0 1 auto', minWidth: 0, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{title}</span>
-              <div className={`tab-actions${supportsNativeAgentStatus(session.tool) ? '' : ' tab-actions--close-only'}`}>
+              <div className={`tab-actions${supportsAgentStatus(session.tool) ? '' : ' tab-actions--close-only'}`}>
                 {/* Only Claude/Codex/Grok expose authoritative native OSC
                     state. All other tabs go straight to the close button. */}
-                {supportsNativeAgentStatus(session.tool) && (
+                {supportsAgentStatus(session.tool) && (
                   <div className={`tab-status-grid status-${
                     session.agentStatus === 'wait_input' ? 'waiting' : session.agentStatus ?? 'idle'
                   }${__IS_LINUX__ ? ' tab-status-grid--static' : ''}`}>

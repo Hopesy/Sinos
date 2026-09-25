@@ -40,6 +40,115 @@ fn codex_titles_follow_history_root_and_refresh_cached_sessions() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[test]
+fn omp_history_preserves_identity_titles_and_counts_only_messages() {
+    let path = temp_jsonl("omp");
+    write_jsonl(&path, &[
+        r#"{"type":"title","title":"Current title","pad":"   "}"#,
+        r#"{"type":"session","id":"01900000-0000-7000-8000-000000000000","cwd":"D:\\project","timestamp":"2026-09-08T00:00:00Z","title":"Old title"}"#,
+        r#"{"type":"model_change","modelId":"test"}"#,
+        r#"{"type":"message","message":{"role":"user","content":"你好"}}"#,
+        r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}]}}"#,
+        r#"{"type":"message","message":{"role":"toolResult","content":[]}}"#,
+        "{unfinished",
+    ]);
+    let session = cold_parse(&path, "omp").unwrap();
+    assert_eq!(session.tool, "omp");
+    assert!(session.id.starts_with("omp_native_"));
+    assert_eq!(session.cwd, "D:\\project");
+    assert_eq!(session.name, "Current title");
+    assert_eq!(session.turn_count, Some(1));
+    assert_eq!(count_omp_messages(&path), 3);
+    append_lines(&path, &[r#"{"type":"title_change","title":"Renamed"}"#]);
+    assert_eq!(cold_parse(&path, "omp").unwrap().name, "Renamed");
+    assert_eq!(count_omp_messages(&path), 3);
+    // Pi keeps its own identity and first-prompt title in the shared parser.
+    assert_eq!(cold_parse(&path, "pi").unwrap().name, "你好");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn omp_metadata_only_session_has_no_history_or_activity() {
+    let path = temp_jsonl("omp-empty");
+    write_jsonl(&path, &[r#"{"type":"session","id":"empty","cwd":"/project"}"#]);
+    assert!(cold_parse(&path, "omp").is_none());
+    assert_eq!(count_omp_messages(&path), 0);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn codebuddy_parser_reads_envelopes_and_prefers_native_titles() {
+    let path = temp_jsonl("codebuddy");
+    write_jsonl(&path, &[
+        // session-meta is the one row shape that is NOT enveloped.
+        r#"{"type":"session-meta","id":"meta-1","sessionId":"0f0f0f0f-1111-2222-3333-444444444444","timestamp":1787100000000,"meta":{"multitaskMode":false}}"#,
+        r#"{"type":"message","uuid":"u1","timestamp":"2026-09-08T00:00:00.000Z","payload":{"id":"u1","type":"message","role":"user","content":[{"type":"input_text","text":"add retry backoff"}],"cwd":"D:\\codebuddy-proj","timestamp":1787100000001}}"#,
+        // Tool rows are history items too — they must not become titles or
+        // message rows.
+        r#"{"type":"function_call","uuid":"c1","timestamp":"2026-09-08T00:00:01.000Z","payload":{"id":"c1","type":"function_call","callId":"c1","name":"Bash","arguments":"{\"command\":\"ls\"}","cwd":"D:\\codebuddy-proj","timestamp":1787100000002}}"#,
+        r#"{"type":"function_call_result","uuid":"r1","timestamp":"2026-09-08T00:00:02.000Z","payload":{"id":"r1","type":"function_call_result","callId":"c1","status":"completed","output":{"type":"text","text":"role: user"},"cwd":"D:\\codebuddy-proj","timestamp":1787100000003}}"#,
+        r#"{"type":"message","uuid":"a1","timestamp":"2026-09-08T00:00:03.000Z","payload":{"id":"a1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}],"cwd":"D:\\codebuddy-proj","timestamp":1787100000004}}"#,
+        r#"{"type":"ai-title","uuid":"t1","timestamp":"2026-09-08T00:00:04.000Z","payload":{"id":"t1","type":"ai-title","aiTitle":"Backoff retry work","cwd":"D:\\codebuddy-proj"}}"#,
+    ]);
+    let session = cold_parse(&path, "codebuddy").expect("session should parse");
+    assert_eq!(session.tool, "codebuddy");
+    assert!(session.id.starts_with("codebuddy_native_"));
+    assert_eq!(session.name, "Backoff retry work", "generated title beats the first prompt");
+    assert_eq!(session.cwd, "D:\\codebuddy-proj");
+    // The session-meta row is written first and carries the creation stamp.
+    assert_eq!(session.created_at.as_deref(), Some("1787100000000"));
+    // The resume token is the file stem — the name CodeBuddy itself resolves.
+    assert_eq!(
+        session.session_token.as_deref(),
+        path.file_stem().unwrap().to_str(),
+        "resume token must be the transcript file stem"
+    );
+    // 1 user + 1 assistant = 2 counted rows -> (2+1)/2 = 1.
+    assert_eq!(session.turn_count, Some(1));
+
+    // A user rename outranks the generated title.
+    append_lines(&path, &[
+        r#"{"type":"custom-title","uuid":"t2","timestamp":"2026-09-08T00:00:05.000Z","payload":{"id":"t2","type":"custom-title","customTitle":"Renamed by user","sessionId":"0f0f0f0f-1111-2222-3333-444444444444"}}"#,
+    ]);
+    assert_eq!(cold_parse(&path, "codebuddy").unwrap().name, "Renamed by user");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn codebuddy_metadata_only_session_has_no_history() {
+    let path = temp_jsonl("codebuddy-empty");
+    write_jsonl(&path, &[
+        r#"{"type":"session-meta","id":"meta-1","sessionId":"0f0f0f0f-1111-2222-3333-444444444444","timestamp":1787100000000,"meta":{}}"#,
+        r#"{"type":"function_call","uuid":"c1","payload":{"id":"c1","type":"function_call","callId":"c1","name":"Bash","cwd":"/project"}}"#,
+        // A skill preload is stored as a plain role:"user" row, but the user
+        // never typed it — it must not become a title or a history card.
+        r#"{"type":"message","uuid":"u0","payload":{"id":"u0","type":"message","role":"user","content":[{"type":"input_text","text":"Preload the pdf skill"}],"providerData":{"isMeta":true,"skipRun":true},"cwd":"/project"}}"#,
+    ]);
+    assert!(cold_parse(&path, "codebuddy").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+#[ignore = "reads the current user's installed Oh-My-Pi history"]
+fn omp_local_history_smoke() {
+    let home = dirs::home_dir().unwrap();
+    let tool = crate::tools::find("omp").unwrap();
+    let shape = tool.history_shape.as_ref().unwrap();
+    let mut candidates = Vec::new();
+    collect_jsonl_paths_with_mtime(history_root(tool, shape, &home), 2, "omp", &mut candidates);
+    assert!(!candidates.is_empty(), "No local OMP transcripts to verify");
+    let mut messages = 0;
+    for (_, path, _) in &candidates {
+        let session = cold_parse(path, "omp").expect("real OMP history should parse");
+        assert_eq!(session.tool, "omp");
+        assert!(!session.name.is_empty());
+        assert!(!session.cwd.is_empty());
+        assert!(session.session_token.is_some());
+        assert!(validated_native_session_path(&path.to_string_lossy()).is_ok());
+        messages += count_omp_messages(path);
+    }
+    println!("Verified {} local OMP sessions and {messages} messages", candidates.len());
+}
 
 #[test]
 fn history_cache_tracks_submillisecond_same_size_edits() {

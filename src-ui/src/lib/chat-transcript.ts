@@ -102,8 +102,10 @@ function parseBlocks(
     } else if (type === 'tool_use' || type === 'function_call' || type === 'custom_tool_call') {
       // Codex emits both an item `id` and a `call_id`; its corresponding
       // function_call_output references call_id. Claude only has `id`, so
-      // preferring call_id links both formats correctly.
-      const id = String(block.call_id ?? block.id ?? `${rowId}:${index}`);
+      // preferring call_id links both formats correctly. CodeBuddy camel-cases
+      // the same field (`callId`) and pairs it with a `function_call_result`
+      // row, which the result branch below links the same way.
+      const id = String(block.call_id ?? block.callId ?? block.id ?? `${rowId}:${index}`);
       const message: ChatMessage = {
         id,
         role: 'tool',
@@ -113,10 +115,13 @@ function parseBlocks(
       };
       out.push(message);
       toolById.set(id, out.length - 1);
-    } else if (type === 'tool_result' || type === 'function_call_output' || type === 'custom_tool_call_output') {
-      const id = String(block.tool_use_id ?? block.call_id ?? block.id ?? '');
+    } else if (type === 'tool_result' || type === 'function_call_output' || type === 'function_call_result' || type === 'custom_tool_call_output') {
+      const id = String(block.tool_use_id ?? block.call_id ?? block.callId ?? block.id ?? '');
       const targetIndex = toolById.get(id);
-      const failed = block.is_error === true || block.error != null;
+      // `status` covers CodeBuddy's function_call_result rows, which flag a
+      // failed tool with status "incomplete" and carry no is_error field.
+      const failed = block.is_error === true || block.error != null ||
+        block.status === 'incomplete' || block.status === 'failed';
       if (targetIndex !== undefined) {
         const status = failed ? 'failed' : 'done';
         const output = stringValue(block.content ?? block.output ?? block.error);
@@ -177,7 +182,7 @@ function parseLine(
     if (payload) {
       if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
         parseBlocks(out, payload.content, payload.role, rowId, toolById, previousCount, owned);
-      } else if (['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output', 'reasoning'].includes(String(payload.type))) {
+      } else if (['function_call', 'custom_tool_call', 'function_call_output', 'function_call_result', 'custom_tool_call_output', 'reasoning'].includes(String(payload.type))) {
         parseBlocks(out, payload, 'assistant', rowId, toolById, previousCount, owned);
       }
       return;

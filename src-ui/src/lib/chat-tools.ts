@@ -2,7 +2,7 @@ import type { ToolType } from '../store/app-state';
 
 const CHAT_TOOLS = new Set<ToolType>([
   'claude', 'codex', 'qwen', 'antigravity', 'pi', 'hermes',
-  'opencode', 'mimocode', 'kilo', 'grok', 'kimicode',
+  'opencode', 'mimocode', 'kilo', 'grok', 'kimicode', 'omp', 'codebuddy',
 ]);
 
 export function supportsConversationTool(tool: ToolType | null | undefined): boolean {

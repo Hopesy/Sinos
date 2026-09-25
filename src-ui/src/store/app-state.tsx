@@ -5,7 +5,7 @@ import type { ReactNode, RefObject } from 'react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type ToolType = 'claude' | 'qwen' | 'installer' | 'hermes' | 'opencode' | 'mimocode' | 'kilo' | 'openclaw' | 'codex' | 'grok' | 'antigravity' | 'pi' | 'crush' | 'aider' | 'kimicode' | 'goose' | 'copilot' | 'cursor' | 'cline' | 'omp' | 'terminal' | 'remote' | 'two-split' | 'three-split' | 'four-split' | null;
+export type ToolType = 'claude' | 'qwen' | 'installer' | 'hermes' | 'opencode' | 'mimocode' | 'kilo' | 'openclaw' | 'codex' | 'grok' | 'antigravity' | 'pi' | 'crush' | 'aider' | 'kimicode' | 'goose' | 'copilot' | 'cursor' | 'cline' | 'omp' | 'codebuddy' | 'terminal' | 'remote' | 'two-split' | 'three-split' | 'four-split' | null;
 
 /**
  * Tab status shown as an animated 9-dot glyph. Three states only —
@@ -22,7 +22,12 @@ export type AgentStatus = 'idle' | 'working' | 'wait_input';
 
 /** True only when the upstream CLI exposes authoritative state via OSC title. */
 export function supportsNativeAgentStatus(tool: ToolType): boolean {
-  return tool === 'claude' || tool === 'codex' || tool === 'grok';
+  return tool === 'claude' || tool === 'codex' || tool === 'grok' || tool === 'omp';
+}
+
+/** Includes the source-verified Kimi screen protocol without removing native tools. */
+export function supportsAgentStatus(tool: ToolType): boolean {
+  return supportsNativeAgentStatus(tool) || tool === 'kimicode';
 }
 
 // Theme: color palette (orthogonal to shape)

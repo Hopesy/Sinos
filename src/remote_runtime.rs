@@ -110,13 +110,19 @@ impl Runtime {
         let title = title.trim();
         let first = title.split_whitespace().next().unwrap_or("");
         let state = match tool {
-            "claude" if matches!(first, "⠂" | "⠐") => Activity::Working,
+            "claude" if matches!(first, "⠂" | "⠐" | "◐" | "◑") => Activity::Working,
             // Claude's static prefix also covers permission prompts. It must
             // not overwrite a structured waiting state or unlock auto-send.
             "claude" if first == "✳" => if self.activity.state == Activity::Waiting { Activity::Waiting } else { Activity::Idle },
             "codex" if title.starts_with('[') && title.split(']').next().is_some_and(|v| matches!(v.trim_start_matches('[').trim(), "!" | ".")) => Activity::Waiting,
             "codex" if title.split_whitespace().any(|s| ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"].contains(&s)) => Activity::Working,
             "codex" if !title.is_empty() => Activity::Idle,
+            "omp" if first == "π" => match title.split_whitespace().nth(1) {
+                Some("!") => Activity::Waiting,
+                Some(">") => Activity::Idle,
+                Some(":" | "⠋" | "⠙" | "⠹" | "⠸" | "⠼" | "⠴" | "⠦" | "⠧" | "⠇" | "⠏") => Activity::Working,
+                _ => return,
+            },
             "grok" if title.contains("Action Required") => Activity::Waiting,
             "grok" if title.split(" - ").any(|s| ["Thinking","Responding","Compacting","Waiting","Running tool","⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧"].contains(&s) || s.starts_with("Running:") || s.ends_with('…')) => Activity::Working,
             // Grok hides its action-required title during the blink cycle.
