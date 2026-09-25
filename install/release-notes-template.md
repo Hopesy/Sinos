@@ -1,76 +1,74 @@
 <details open>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-### Sinos CLI v4.0.0
+### Sinos CLI v4.0.1
 
-- **Android 正式安装包。** 扫码配对后安全保存连接记录，后续打开自动重连；前台连接服务支持后台保持连接，手机继续桌面的对话、文件编辑与 Git 审查。
-- **桌面与移动端统一外观。** 新增浅色、深色、跟随系统和 12 组配色，完善玻璃效果、终端、代码高亮与编辑器主题；保留并迁移已有外观偏好。
-- **新增工具集成。** Oh-My-Pi 支持历史、恢复会话和原生状态；CodeBuddy 支持启动配置、历史、恢复会话和对话展示。
-- **交互与状态更稳定。** 桌面支持已识别的 Claude/Codex/Kimi 选项卡片；改进 Kimi 状态识别、完成提示音防抖、终端尺寸同步和渲染生命周期。
-- **阅读与文件操作完善。** 改进会话历史缓存、原生标题、对话阅读位置、导航居中和实时差异；支持对链接本身复制、改名和删除，并保留工作区边界与拒绝覆盖保护。
-- **保留现有能力。** 移动中继、编辑器、Grok、Antigravity 等继续可用；旧 Orca 配置清理保留用户会话、认证信息与无关配置。
+- **Claude / Codex 移动端实时同步。** 支持的新版 CLI 直接同步桌面同一会话的结构化事件，列表、Markdown、代码块与工具进度在生成中持续显示，减少完成时格式跳变和重复消息。
+- **状态和交互更稳定。** 模型、目录和上下文信息独立保留；完善长对话、重连补发、历史交接、停止及清空会话。审批和选择按钮仍控制桌面原会话。
+- **保留兼容路径。** Claude 使用官方早期 Mods 接口并检查能力；网络限制启用时改用本地文件传递。旧版或不支持的启动方式继续使用改进后的终端与日志适配。
+- **PC 右键直接复制。** 选中文字后按右键即可复制；提前保存选区，修复复制项置灰及焦点变化造成的内容丢失。无选区时保留粘贴、全选菜单。
+- **Android 同步更新。** 正式包 `Sinos-4.0.1-android-release.apk`，沿用配对、自动重连和前台连接服务。
 
-Android 安装请选择 `Sinos-4.0.0-android-release.apk`。手机连接仍需电脑端运行且在线；Android 系统省电或强制停止可能中断连接，重新打开可恢复。测试 APK 与正式 APK 签名不同，若无法覆盖安装测试包，需要重新安装并配对。自定义 CLI 菜单不保证都能转换为按钮。
+安装新版桌面端后，新建 Claude / Codex 终端即可启用支持的实时事件功能。现有终端继续使用兼容路径。手机连接仍需电脑端运行且在线。
 
 </details>
 
 <details>
 <summary><b>🇺🇸 English</b></summary>
 
-### Sinos CLI v4.0.0
+### Sinos CLI v4.0.1
 
-- **Android companion app:** QR pairing, securely saved credentials, automatic reconnection and a foreground connection service. Continue desktop conversations, edit files and review Git changes from your phone.
-- **Adaptive appearance:** light, dark and system modes, twelve color families, refined glass effects, and matching terminal, syntax highlighting and editor themes. Existing preferences migrate automatically.
-- **New integrations:** Oh-My-Pi history, resume and native status; CodeBuddy launch configuration, history, resume and conversation rendering.
-- **More stable interaction:** supported Claude/Codex/Kimi choice cards, improved Kimi status, debounced completion sounds, terminal sizing and renderer lifecycle fixes.
-- **Better navigation and file handling:** history caching and native titles, retained reading positions, centered conversation navigation, live diffs and workspace-bounded operations on links.
-- Existing relay, editor, Grok and Antigravity features remain available. Legacy Orca cleanup preserves user sessions, authentication and unrelated settings.
+- Stream structured events from the same official Claude/Codex desktop session on supported CLIs. Mobile lists, Markdown, code and tool progress update during generation, with stable history handoff and reconnect replay.
+- Keep model, directory and context information outside scrollback. Preserve guarded desktop approval controls, interruption and session-clear behavior.
+- Probe Claude's early-access Mods interface before enabling it. Local file IPC preserves streaming when nonessential network traffic is disabled; unsupported versions/modes retain improved terminal/transcript adaptation.
+- Right-click selected desktop terminal text to copy directly. Capture the selection before focus changes; retain the paste/select-all menu when nothing is selected.
+- Updated signed Android app: `Sinos-4.0.1-android-release.apk`.
 
-Install `Sinos-4.0.0-android-release.apk` on Android. The desktop must remain running and online. Android power restrictions or force-stop can interrupt connectivity; reopening restores the connection. Debug APKs use a different signature and may require reinstalling and pairing again. Some custom CLI menus cannot be converted into buttons.
+Start a new Claude/Codex terminal after updating the desktop app to activate supported event streaming. Existing terminals retain the compatibility path. The desktop must remain running and online.
 
 </details>
 
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-### Sinos CLI v4.0.0
+### Sinos CLI v4.0.1
 
-- 新增 Android 正式安裝包，支援掃碼配對、安全保存連線記錄、自動重連與前景連線服務。
-- 桌面與行動端支援淺色、深色、跟隨系統和 12 組配色，改善終端、編輯器與玻璃效果，遷移既有外觀偏好。
-- 整合 Oh-My-Pi 的歷史、恢復工作階段與原生狀態，以及 CodeBuddy 的啟動設定、歷史、恢復與對話顯示。
-- 改善選項卡片、狀態識別、提示音、終端尺寸、歷史快取、閱讀位置、導覽與即時差異。
-- 支援操作連結本身並保留工作區及覆寫保護；Orca 殘留清理保留使用者資料。既有中繼、編輯器、Grok 和 Antigravity 功能繼續可用。
+- 支援的新版 Claude / Codex 直接同步桌面同一工作階段的事件，改善生成中的清單、Markdown、程式碼與工具進度。
+- 模型、目錄和上下文資訊獨立保留，完善斷線重連、歷史交接、停止及清空；審批按鈕繼續控制桌面原工作階段。
+- Claude 先檢查官方早期 Mods 介面；網路限制下使用本機檔案傳遞，不支援時保留相容解析。
+- PC 選中文字後按右鍵直接複製，修復複製項反灰與焦點變化丟失選區；無選區時保留原選單。
+- Android 正式包：`Sinos-4.0.1-android-release.apk`。
 
-手機連線仍需電腦執行且在線；系統省電可能中斷連線，重新開啟即可恢復。測試 APK 與正式 APK 簽章不同，可能需要重新安裝及配對。
+更新桌面端後請新建 Claude / Codex 終端。手機連線仍需電腦執行且在線。
 
 </details>
 
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-### Sinos CLI v4.0.0
+### Sinos CLI v4.0.1
 
-- Android 版を追加。QR ペアリング、安全な接続情報の保存、自動再接続、フォアグラウンド接続サービスに対応しました。
-- デスクトップとモバイルにライト／ダーク／システム連動と 12 種類の配色を追加。ターミナル、エディター、ガラス効果を改善し、既存の外観設定を移行します。
-- Oh-My-Pi の履歴・再開・状態表示と、CodeBuddy の起動設定・履歴・再開・会話表示を統合しました。
-- 選択カード、状態認識、通知音、ターミナルのサイズ同期、履歴キャッシュ、読書位置、会話ナビゲーションと差分表示を改善しました。
-- ワークスペース保護を維持したリンク操作と、ユーザーデータを保持する Orca 設定のクリーンアップ。既存のリレー、エディター、Grok、Antigravity 機能も利用できます。
+- 対応する Claude / Codex で、デスクトップと同じセッションの構造化イベントをモバイルへ配信。生成中のリスト、Markdown、コード、ツール進捗と再接続を改善しました。
+- モデル、ディレクトリ、コンテキスト情報を履歴とは別に保持。承認操作、停止、セッションのクリアにも対応します。
+- Claude の早期公開 Mods API は機能を確認して有効化。通信制限時はローカルファイルで連携し、未対応版には従来の互換経路を使用します。
+- PC で選択したテキストを右クリックすると直接コピー。選択消失やコピー項目の無効化を修正しました。
+- Android 正式版：`Sinos-4.0.1-android-release.apk`。
 
-接続中はデスクトップを起動しオンラインにしてください。省電力や強制停止で切断された場合は、アプリを開くと再接続します。テスト APK と正式 APK は署名が異なるため、再インストールと再ペアリングが必要な場合があります。
+更新後、新しい Claude / Codex ターミナルを開始してください。モバイル接続には PC が起動・接続している必要があります。
 
 </details>
 
 <details>
 <summary><b>🇰🇷 한국어</b></summary>
 
-### Sinos CLI v4.0.0
+### Sinos CLI v4.0.1
 
-- Android 앱을 추가했습니다. QR 페어링, 연결 정보의 안전한 저장, 자동 재연결과 포그라운드 연결 서비스를 지원합니다.
-- 데스크톱과 모바일에 밝게／어둡게／시스템 설정 및 12가지 색상을 추가했습니다. 터미널, 편집기와 유리 효과를 개선하고 기존 외관 설정을 이전합니다.
-- Oh-My-Pi의 기록·세션 재개·상태 표시와 CodeBuddy의 실행 설정·기록·재개·대화 표시를 통합했습니다.
-- 선택 카드, 상태 인식, 알림음, 터미널 크기 동기화, 기록 캐시, 읽기 위치, 대화 탐색과 실시간 차이 보기를 개선했습니다.
-- 작업 공간 보호를 유지하며 링크 자체를 조작할 수 있습니다. Orca 정리 시 사용자 데이터를 보존하며 기존 중계, 편집기, Grok과 Antigravity 기능도 유지합니다.
+- 지원되는 Claude / Codex에서 데스크톱과 동일한 세션의 구조화된 이벤트를 모바일로 전달합니다. 생성 중 목록, Markdown, 코드, 도구 진행 상황과 재연결을 개선했습니다.
+- 모델, 디렉터리, 컨텍스트 정보를 대화 기록과 별도로 유지하고 승인, 중단 및 세션 초기화를 보완했습니다.
+- Claude의 초기 공개 Mods API를 확인한 뒤 활성화합니다. 네트워크 제한 시 로컬 파일로 전달하며, 미지원 버전은 호환 경로를 유지합니다.
+- PC에서 선택한 텍스트를 우클릭하면 바로 복사합니다. 선택 영역 손실과 복사 항목 비활성화 문제를 수정했습니다.
+- Android 정식 설치 파일: `Sinos-4.0.1-android-release.apk`.
 
-데스크톱이 실행 중이고 온라인이어야 합니다. 절전 또는 강제 종료로 연결이 끊어지면 앱을 다시 열어 복구할 수 있습니다. 테스트 APK와 정식 APK는 서명이 달라 재설치 및 재페어링이 필요할 수 있습니다.
+업데이트 후 새 Claude / Codex 터미널을 시작하세요. 모바일 연결에는 PC가 실행 중이며 온라인 상태여야 합니다.
 
 </details>
