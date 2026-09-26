@@ -9,6 +9,27 @@ and `git tag --list "v*"`.
 
 ## [Unreleased]
 
+## [4.0.2] — 2026-09-26
+
+### Added
+- One-time mobile session sharing with view or control access, expiry and revocation.
+- Syntax highlighting for mobile code blocks, including streamed and unlabeled code.
+- Desktop screenshot and image-file paste, multiple-image input, drag and drop,
+  clipboard image protection and concise paste feedback without a thumbnail panel.
+
+### Fixed
+- Mobile startup placeholder cards, duplicate thinking/status content, image prompt
+  reconciliation and stale waiting indicators.
+- Live Claude/Codex project titles and paths, compact header metadata, context
+  percentages, desktop-default launch directories and creation of missing folders.
+- Codex resume pickers now retain the current project's history scope.
+- Desktop terminal copying supports Codex-owned selections and keeps the context
+  menu visible after automatic right-click copying.
+- Mobile and Android clipboard copying works inside sharing dialogs.
+
+### Updated
+- Signed Android companion APK and mobile relay assets for this release.
+
 ## [4.0.0] — 2026-09-25
 
 ### Added

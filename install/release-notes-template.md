@@ -1,74 +1,79 @@
 <details open>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-### Sinos CLI v4.0.1
+### Sinos CLI v4.0.2
 
-- **Claude / Codex 移动端实时同步。** 支持的新版 CLI 直接同步桌面同一会话的结构化事件，列表、Markdown、代码块与工具进度在生成中持续显示，减少完成时格式跳变和重复消息。
-- **状态和交互更稳定。** 模型、目录和上下文信息独立保留；完善长对话、重连补发、历史交接、停止及清空会话。审批和选择按钮仍控制桌面原会话。
-- **保留兼容路径。** Claude 使用官方早期 Mods 接口并检查能力；网络限制启用时改用本地文件传递。旧版或不支持的启动方式继续使用改进后的终端与日志适配。
-- **PC 右键直接复制。** 选中文字后按右键即可复制；提前保存选区，修复复制项置灰及焦点变化造成的内容丢失。无选区时保留粘贴、全选菜单。
-- **Android 同步更新。** 正式包 `Sinos-4.0.1-android-release.apk`，沿用配对、自动重连和前台连接服务。
+- **临时分享会话。** 生成一次性链接，支持只读观看或终端控制，可设置有效期并随时撤销；访客仅能访问指定会话。
+- **移动端展示更完整。** 代码块支持语法高亮，修复启动空白卡片、思考内容重复、图片消息重复和等待状态残留。标题和项目路径集中显示在顶部，上下文用量显示百分比。
+- **会话信息与启动修复。** 正确更新 Claude / Codex 的项目标题和目录；移动端启动默认使用电脑桌面，指定目录不存在时自动创建。Codex `/resume` 默认显示当前项目的历史会话。
+- **PC 图片输入更方便。** 截图后 Ctrl+V、复制图片文件后粘贴、拖入图片或右键“粘贴图片”，支持多图及中文路径。仅显示简短处理提示，图片加入后再按 Enter 发送。
+- **右键复制保留菜单。** 兼容 Codex 自绘选区；选中文字后右键直接复制且菜单仍显示。剪贴板中有图片时避免被自动复制覆盖，仍可手动点击“复制”。
+- **分享与复制体验优化。** 改进分享面板、有效期选择和生成链接反馈，修复手机浏览器及 Android 分享弹窗内的复制。
+- **Android 正式包同步更新：** `Sinos-4.0.2-android-release.apk`，沿用现有签名和配对信息。
 
-安装新版桌面端后，新建 Claude / Codex 终端即可启用支持的实时事件功能。现有终端继续使用兼容路径。手机连接仍需电脑端运行且在线。
+请同时更新桌面端和 Android App；手机网页版刷新即可使用已部署的新页面。手机连接及临时分享均需要电脑端运行且在线。
 
 </details>
 
 <details>
 <summary><b>🇺🇸 English</b></summary>
 
-### Sinos CLI v4.0.1
+### Sinos CLI v4.0.2
 
-- Stream structured events from the same official Claude/Codex desktop session on supported CLIs. Mobile lists, Markdown, code and tool progress update during generation, with stable history handoff and reconnect replay.
-- Keep model, directory and context information outside scrollback. Preserve guarded desktop approval controls, interruption and session-clear behavior.
-- Probe Claude's early-access Mods interface before enabling it. Local file IPC preserves streaming when nonessential network traffic is disabled; unsupported versions/modes retain improved terminal/transcript adaptation.
-- Right-click selected desktop terminal text to copy directly. Capture the selection before focus changes; retain the paste/select-all menu when nothing is selected.
-- Updated signed Android app: `Sinos-4.0.1-android-release.apk`.
+- Add one-time session sharing with view or control access, selectable expiry and revocation, restricted to the selected session.
+- Highlight mobile code blocks and fix empty startup cards, repeated thinking/image content and stale waiting indicators. Keep live project metadata in the header and show context percentages.
+- Fix Claude/Codex titles and working directories. Mobile launches default to the desktop and create missing directories. Codex `/resume` retains the current project scope.
+- Paste screenshots or copied image files, drag images into the terminal, or choose “Paste image.” Support multiple images and Unicode paths with brief feedback and no added thumbnail panel. Press Enter after attaching to send.
+- Copy Codex-owned terminal selections on right-click while retaining the menu. Protect clipboard images from automatic text copying; explicit Copy remains available.
+- Improve sharing controls, link-generation feedback and copying inside mobile/Android dialogs.
+- Updated signed Android APK: `Sinos-4.0.2-android-release.apk`, preserving the existing signing identity and pairing data.
 
-Start a new Claude/Codex terminal after updating the desktop app to activate supported event streaming. Existing terminals retain the compatibility path. The desktop must remain running and online.
+Update both the desktop and Android apps; refresh the mobile website for the deployed UI. The desktop must remain running and online for mobile connections and shared sessions.
 
 </details>
 
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-### Sinos CLI v4.0.1
+### Sinos CLI v4.0.2
 
-- 支援的新版 Claude / Codex 直接同步桌面同一工作階段的事件，改善生成中的清單、Markdown、程式碼與工具進度。
-- 模型、目錄和上下文資訊獨立保留，完善斷線重連、歷史交接、停止及清空；審批按鈕繼續控制桌面原工作階段。
-- Claude 先檢查官方早期 Mods 介面；網路限制下使用本機檔案傳遞，不支援時保留相容解析。
-- PC 選中文字後按右鍵直接複製，修復複製項反灰與焦點變化丟失選區；無選區時保留原選單。
-- Android 正式包：`Sinos-4.0.1-android-release.apk`。
+- 新增一次性工作階段分享，支援唯讀觀看或終端控制，可設定期限及撤銷，訪客只能存取指定工作階段。
+- 行動端程式碼區塊支援語法醒目提示，修復啟動空白卡片、思考與圖片訊息重複及等待狀態殘留。標題與路徑集中在頂部，上下文顯示百分比。
+- 修復 Claude / Codex 標題與目錄更新；行動端預設在電腦桌面啟動並自動建立缺少的資料夾。Codex `/resume` 保留目前專案的歷史範圍。
+- PC 支援截圖貼上、複製圖片檔案後貼上、多圖拖入及右鍵「貼上圖片」，相容中文路徑，不新增縮圖區域；加入圖片後按 Enter 傳送。
+- 右鍵直接複製 Codex 選區並保留選單，剪貼簿圖片不會被自動複製覆蓋。改善分享介面及行動端彈窗內複製。
+- Android 正式包：`Sinos-4.0.2-android-release.apk`，沿用現有簽章及配對資訊。
 
-更新桌面端後請新建 Claude / Codex 終端。手機連線仍需電腦執行且在線。
+請更新桌面端與 Android App；手機網頁重新整理即可。連線與分享需要電腦持續執行且在線。
 
 </details>
 
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-### Sinos CLI v4.0.1
+### Sinos CLI v4.0.2
 
-- 対応する Claude / Codex で、デスクトップと同じセッションの構造化イベントをモバイルへ配信。生成中のリスト、Markdown、コード、ツール進捗と再接続を改善しました。
-- モデル、ディレクトリ、コンテキスト情報を履歴とは別に保持。承認操作、停止、セッションのクリアにも対応します。
-- Claude の早期公開 Mods API は機能を確認して有効化。通信制限時はローカルファイルで連携し、未対応版には従来の互換経路を使用します。
-- PC で選択したテキストを右クリックすると直接コピー。選択消失やコピー項目の無効化を修正しました。
-- Android 正式版：`Sinos-4.0.1-android-release.apk`。
+- 閲覧専用または操作可能な一回限りのセッション共有を追加。有効期限と取り消しに対応し、選択したセッションだけにアクセスできます。
+- モバイルのコード強調表示を追加し、空カード、思考・画像の重複、待機表示の残留を修正。プロジェクト情報を上部にまとめ、コンテキスト使用率を表示します。
+- Claude / Codex のタイトルと作業フォルダーを修正。モバイル起動は PC のデスクトップを既定とし、存在しないフォルダーを作成します。Codex `/resume` は現在のプロジェクトを対象にします。
+- PC でスクリーンショット、コピーした画像ファイル、複数画像のドラッグ＆ドロップに対応。画像追加後に Enter で送信します。右クリックコピー後もメニューを保持し、クリップボードの画像を保護します。
+- 共有画面とモバイルのコピー操作を改善。署名済み Android APK：`Sinos-4.0.2-android-release.apk`。
 
-更新後、新しい Claude / Codex ターミナルを開始してください。モバイル接続には PC が起動・接続している必要があります。
+デスクトップと Android アプリを更新してください。モバイル Web は再読み込みで更新できます。接続・共有には PC が起動し、オンラインである必要があります。
 
 </details>
 
 <details>
 <summary><b>🇰🇷 한국어</b></summary>
 
-### Sinos CLI v4.0.1
+### Sinos CLI v4.0.2
 
-- 지원되는 Claude / Codex에서 데스크톱과 동일한 세션의 구조화된 이벤트를 모바일로 전달합니다. 생성 중 목록, Markdown, 코드, 도구 진행 상황과 재연결을 개선했습니다.
-- 모델, 디렉터리, 컨텍스트 정보를 대화 기록과 별도로 유지하고 승인, 중단 및 세션 초기화를 보완했습니다.
-- Claude의 초기 공개 Mods API를 확인한 뒤 활성화합니다. 네트워크 제한 시 로컬 파일로 전달하며, 미지원 버전은 호환 경로를 유지합니다.
-- PC에서 선택한 텍스트를 우클릭하면 바로 복사합니다. 선택 영역 손실과 복사 항목 비활성화 문제를 수정했습니다.
-- Android 정식 설치 파일: `Sinos-4.0.1-android-release.apk`.
+- 보기 전용 또는 제어 권한을 선택할 수 있는 일회성 세션 공유를 추가했습니다. 만료 시간과 취소를 지원하며 선택한 세션에만 접근할 수 있습니다.
+- 모바일 코드 구문 강조를 추가하고 빈 시작 카드, 생각·이미지 메시지 중복 및 남아 있는 대기 표시를 수정했습니다. 프로젝트 정보는 상단에 표시하고 컨텍스트 사용률을 백분율로 보여 줍니다.
+- Claude / Codex 제목과 작업 폴더 갱신을 수정했습니다. 모바일 실행은 PC 바탕 화면을 기본으로 사용하고 없는 폴더를 만듭니다. Codex `/resume`은 현재 프로젝트의 기록을 표시합니다.
+- PC에서 스크린샷 붙여넣기, 복사한 이미지 파일, 여러 이미지 드래그를 지원합니다. 이미지 추가 후 Enter로 전송합니다. 우클릭 복사 후 메뉴를 유지하며 클립보드 이미지를 보호합니다.
+- 공유 화면과 모바일 복사를 개선했습니다. 서명된 Android APK: `Sinos-4.0.2-android-release.apk`.
 
-업데이트 후 새 Claude / Codex 터미널을 시작하세요. 모바일 연결에는 PC가 실행 중이며 온라인 상태여야 합니다.
+데스크톱과 Android 앱을 함께 업데이트하세요. 모바일 웹은 새로 고치면 됩니다. 연결 및 공유하려면 PC가 실행 중이며 온라인 상태여야 합니다.
 
 </details>
