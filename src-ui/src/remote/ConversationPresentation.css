@@ -1,4 +1,10 @@
 /* Conversation hierarchy inspired by EnsoCode; shared protocol stays unchanged. */
+.conversation-progress { display:flex; align-items:center; gap:10px; min-height:32px; margin:8px 0 18px; color:var(--m-muted); font-size:12px; }
+.progress-dots { display:flex; gap:4px; align-items:center; height:16px; }
+.progress-dots i { width:5px; height:5px; border-radius:50%; background:var(--m-info); animation:conversation-pulse 1.4s ease-in-out infinite; }
+.progress-dots i:nth-child(2) { animation-delay:.16s; }.progress-dots i:nth-child(3) { animation-delay:.32s; }
+@keyframes conversation-pulse { 0%,75%,100% { opacity:.35; transform:translateY(0); } 35% { opacity:1; transform:translateY(-3px); } }
+@media(prefers-reduced-motion:reduce) { .progress-dots i { animation:none; } }
 .remote-app.phone-workspace {
   --m-bg:#191a1c; --m-surface:#222326; --m-raised:#2c2e32; --m-border:#36383e;
   --m-text:#ececef; --m-muted:#a4a6af; --m-subtle:#9699a3;
@@ -119,9 +125,6 @@
 .phone-workspace .composer-stop,.phone-workspace .composer-queue,.phone-workspace .composer-attach { width:36px; min-height:44px; flex-shrink:0; border-radius:9px; }
 .phone-workspace .send-hit { flex-shrink:0; }.phone-workspace .send-hit span { width:36px; height:36px; }
 .phone-workspace .conversation-status { margin:-4px 0 9px; border-bottom:1px solid var(--m-border); padding-bottom:6px; }
-.phone-workspace .conversation-status summary { min-height:36px; padding:0 2px; font-size:11px; gap:8px; }
-.phone-workspace .conversation-status summary strong { padding:3px 7px; border-radius:6px; background:var(--m-raised); font-size:11px; }
-.phone-workspace .conversation-status-details { padding:3px 2px 5px; max-height:104px; }
 .phone-workspace .conversation-question { border-color:color-mix(in srgb,var(--m-info) 35%,var(--m-border)); box-shadow:var(--m-input-shadow); }
 .phone-workspace .question-heading { color:var(--m-info); }.phone-workspace .question-heading strong { font-weight:600; }
 .phone-workspace .question-choices button { background:var(--m-surface); font-size:13px; }
@@ -143,7 +146,6 @@
   .phone-workspace .chat-compose { padding:7px 10px 2px; border-radius:15px; }
   .phone-workspace .chat-compose textarea { min-height:30px; max-height:78px; padding:2px; }
   .phone-workspace .conversation-status { margin:0 0 4px; padding-bottom:3px; }
-  .phone-workspace .conversation-status summary { min-height:30px; }.phone-workspace .conversation-status-details { max-height:60px; }
   .phone-workspace .chat-timeline { padding-top:16px; }.phone-workspace .chat-message { margin-bottom:18px; }
 }
 .chat-markdown.terminal-projection p { white-space: pre-wrap; }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { Laptop, Plus, RefreshCw, ShieldCheck, Smartphone, X } from 'lucide-react';
+import { Eye, EyeOff, LoaderCircle, Plus, QrCode, RefreshCw, ShieldCheck, Unplug } from 'lucide-react';
 import { clipboardWrite } from '../../lib/clipboard';
+import { RelayDeviceList, type RelayDeviceInfo } from './RelayDeviceList';
 import './RelaySettings.css';
 
-interface RelayStatus { relayUrl: string; inviteUrl: string | null; expiresAt: number | null; error: string | null; devices: { pairId: string; deviceName: string; relayUrl: string; online: boolean; state: string; pairedAt: number }[] }
+interface RelayStatus { relayUrl: string; inviteUrl: string | null; expiresAt: number | null; error: string | null; devices: RelayDeviceInfo[] }
 async function call<T>(command: string, args?: Record<string, unknown>) { const { invoke } = await import('@tauri-apps/api/core'); return invoke<T>(command, args); }
 export function RelaySettings() {
   const [status, setStatus] = useState<RelayStatus | null>(null);
@@ -13,9 +14,9 @@ export function RelaySettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now());
-  const [remove, setRemove] = useState('');
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [showAddress, setShowAddress] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   useEffect(() => {
     let disposed = false, loading = false, first = true;
@@ -35,8 +36,8 @@ export function RelaySettings() {
   }, [status?.inviteUrl]);
   async function action(command: string, args?: Record<string, unknown>) {
     setBusy(true); setError(''); setCopied(false);
-    try { setStatus(await call<RelayStatus>(command, args)); setRemove(''); }
-    catch (cause) { setError(String(cause)); }
+    try { setStatus(await call<RelayStatus>(command, args)); return true; }
+    catch (cause) { setError(String(cause)); return false; }
     finally { setBusy(false); }
   }
   async function testConnection() {
@@ -53,27 +54,34 @@ export function RelaySettings() {
     <div className="relay-address">
       <label htmlFor="relay-address-input">Cloudflare 中继地址</label>
       <div className="relay-address-row">
-        <input id="relay-address-input" type="url" value={relay} onChange={e => { setRelay(e.target.value); setTestResult(null); }} placeholder="https://relay.example.com" spellCheck={false} autoCapitalize="off" autoComplete="off" disabled={busy || testing} aria-describedby="relay-address-help" />
-        <button className="settings-btn relay-test" disabled={busy || testing || !relay.trim()} onClick={() => void testConnection()}>{testing ? '测试中…' : '测试连接'}</button>
+        <div className="relay-address-field">
+          <input id="relay-address-input" type={showAddress ? 'url' : 'password'} value={relay} onChange={e => { setRelay(e.target.value); setTestResult(null); }} placeholder={showAddress ? 'https://relay.example.com' : '*****'} spellCheck={false} autoCapitalize="off" autoComplete="off" disabled={busy || testing} />
+          <button className="relay-eye" type="button" aria-label={showAddress ? '隐藏中继地址' : '显示中继地址'} title={showAddress ? '隐藏中继地址' : '显示中继地址'} aria-pressed={showAddress} onClick={() => setShowAddress(value => !value)}>{showAddress ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+        </div>
+        <button className="settings-btn relay-test" aria-label={testing ? '测试中' : '测试连接'} title={testing ? '测试中…' : '测试连接'} disabled={busy || testing || !relay.trim()} onClick={() => void testConnection()}>{testing ? <LoaderCircle size={17} className="relay-spin" /> : <Unplug size={17} />}</button>
       </div>
-      <p id="relay-address-help">{qr && seconds > 0 && relay.trim() !== status?.relayUrl ? '地址已修改，点击下方“刷新”生成新的配对链接。' : '连接新设备时保存此地址；已有设备继续使用原来的中继。'}</p>
       {testResult && <p className={`relay-test-result ${testResult.ok ? 'is-success' : 'is-error'}`} role={testResult.ok ? 'status' : 'alert'}>{testResult.message}</p>}
     </div>
-    {!showingInvite && <div className="relay-intro"><div className="relay-device-art"><Laptop size={36} strokeWidth={1.4} /><span>···</span><Smartphone size={26} strokeWidth={1.4} /></div><h3>把工作带到手机上</h3><p>扫码或打开配对链接，继续对话、查看变更、编辑文件。<br />手机与电脑无需连接同一个网络。</p></div>}
-    {showingInvite ? <div className="relay-invite">
+    <section className="relay-pair-card" aria-label="手机配对">
+      <div className="relay-pair-heading"><span className="relay-pair-icon"><QrCode size={20} strokeWidth={1.6} /></span><div><h3>手机配对</h3><p>{showingInvite ? '扫描二维码，或在手机上打开链接' : '扫码连接，接续电脑会话'}</p></div>
+        {!showingInvite && <button className="relay-connect" disabled={busy} onClick={() => void action('relay_create_pairing', { relayUrl: relay })}>{busy ? <LoaderCircle size={14} className="relay-spin" /> : <Plus size={14} />}{busy ? '连接中…' : '连接新设备'}</button>}
+      </div>
+      {showingInvite && <div className="relay-invite">
       <img src={qr} alt="手机扫码配对二维码" />
       <div className="relay-invite-copy">
-        <strong>扫码，或复制链接在手机上打开</strong>
-        <span>{seconds} 秒后过期 · 每个配对邀请只能使用一次</span>
+        <strong>等待手机配对</strong>
+        <span>{seconds} 秒后过期 · 仅限使用一次</span>
+        {relay.trim() !== status?.relayUrl && <span>地址已修改，刷新二维码后生效。</span>}
         <div className="relay-actions">
           <button className="settings-btn" disabled={busy} onClick={() => void action('relay_create_pairing', { relayUrl: relay })}><RefreshCw size={13} />刷新</button>
           <button className="settings-btn" onClick={() => { if (status?.inviteUrl) void clipboardWrite(status.inviteUrl).then(() => setCopied(true)).catch(cause => setError(String(cause))); }}>{copied ? '已复制' : '复制链接'}</button>
           <button className="settings-btn" disabled={busy} onClick={() => void action('relay_cancel_pairing')}>取消</button>
         </div>
       </div>
-    </div> : <button className="relay-connect" disabled={busy} onClick={() => void action('relay_create_pairing', { relayUrl: relay })}><Plus size={16} />{busy ? '正在连接中继…' : '连接新设备'}</button>}
+      </div>}
+      <div className="relay-security"><ShieldCheck size={13} /><span>端到端加密 · 电脑需保持运行</span></div>
+    </section>
     {(error || status?.error) && <p className="relay-error" role="alert">{error || status?.error}</p>}
-    <div className="relay-security"><ShieldCheck size={16} /><span>端到端加密 · 电脑保持运行即可远程使用</span></div>
-    <div className="relay-devices"><h4>已配对设备 <span>{status?.devices.length || 0}</span></h4>{!status?.devices.length && <p className="relay-empty">配对后的设备会出现在这里。</p>}{status?.devices.map(device => <div className="relay-device" key={device.pairId}><Smartphone size={20} /><div><strong>{device.deviceName}</strong><span>{device.state === 'revoked' ? '已在本机停用 · 可重试撤销中继凭据' : device.online ? '在线' : '未连接'} · {new Date(device.pairedAt).toLocaleDateString()}</span></div><button className="settings-btn" disabled={busy} onClick={() => { if (remove === device.pairId) void action('relay_revoke_device', { pairId: device.pairId }); else setRemove(device.pairId); }}>{remove === device.pairId ? '确认撤销' : '撤销'}</button>{remove === device.pairId && <button className="settings-btn" aria-label="取消撤销" onClick={() => setRemove('')}><X size={13} /></button>}</div>)}</div>
+    <RelayDeviceList devices={status?.devices || []} busy={busy} action={action} />
   </div>;
 }

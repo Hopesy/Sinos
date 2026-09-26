@@ -13,6 +13,7 @@ mod tools;
 mod git;
 mod shell_probe;
 mod remote_server;
+mod remote_input;
 mod remote_runtime;
 mod remote_images;
 mod pair_crypto;

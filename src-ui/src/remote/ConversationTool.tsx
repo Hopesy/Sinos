@@ -1,8 +1,10 @@
 import { ChevronDown, CircleCheck, CircleDashed, FileCode, FileSearch, Search, SquareTerminal, X, Wrench } from 'lucide-react';
+import { useState } from 'react';
 import type { ChatMessage } from '../lib/chat-transcript';
 import { ConversationDiff } from './ConversationDiff';
 import { ConversationAttachments } from './ConversationAttachments';
 import { ConversationChanges, ConversationPlan } from './ConversationToolDetails';
+import { ConversationMarkdown } from './ConversationMarkdown';
 
 function parameters(content: string): Record<string, unknown> {
   try { const value: unknown = JSON.parse(content); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
@@ -38,15 +40,16 @@ export function ConversationTool({ message, cwd, active }: { message: ChatMessag
   const patch = edit && (message.changes || /^\*\*\* Begin Patch\r?\n/.test(message.content));
   const failed = message.toolStatus === 'failed';
   // Missing results in an old history page do not mean the tool is still running.
-  const running = !reasoning && message.toolStatus === 'running' && active;
+  const running = message.toolStatus === 'running' && active;
   const unresolved = !reasoning && message.toolStatus === 'running' && !active;
   const Icon = reasoning || running || unresolved ? CircleDashed : failed ? X : CircleCheck;
   const KindIcon = edit ? FileCode : read ? FileSearch : search ? Search : shell ? SquareTerminal : reasoning ? CircleDashed : Wrench;
-  return <details className={`chat-tool ${failed ? 'tool-failed' : ''} ${reasoning ? 'tool-reasoning' : ''}`} data-tool-kind={edit ? 'edit' : read ? 'read' : search ? 'search' : shell ? 'shell' : 'other'}>
-    <summary><span className="tool-kind-icon"><KindIcon size={16} /></span><span className="tool-description"><span>{label}</span>{summary && <code title={summary}>{summary}</code>}</span><span className={`tool-state ${running ? 'is-running' : failed ? 'is-failed' : unresolved ? '' : 'is-done'}`}><Icon size={12} className={running ? 'spin' : ''} />{running ? '执行中' : failed ? '失败' : unresolved ? '未收到结果' : reasoning ? '' : plan ? '已更新' : '完成'}</span><ChevronDown size={13} /></summary>
+  const [expanded, setExpanded] = useState(reasoning && running);
+  return <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className={`chat-tool ${failed ? 'tool-failed' : ''} ${reasoning ? 'tool-reasoning' : ''}`} data-tool-kind={edit ? 'edit' : read ? 'read' : search ? 'search' : shell ? 'shell' : reasoning ? 'reasoning' : 'other'}>
+    <summary><span className="tool-kind-icon"><KindIcon size={16} className={reasoning && running ? 'spin' : ''} /></span><span className="tool-description"><span>{label}</span>{summary && <code title={summary}>{summary}</code>}</span><span className={`tool-state ${running ? 'is-running' : failed ? 'is-failed' : unresolved ? '' : 'is-done'}`}>{!reasoning && <Icon size={12} className={running ? 'spin' : ''} />}{running ? reasoning ? '思考中' : '执行中' : failed ? reasoning ? '已停止' : '失败' : unresolved ? '未收到结果' : reasoning ? '已完成' : plan ? '已更新' : '完成'}</span><ChevronDown size={13} /></summary>
     <div className="tool-body">
-      {KindIcon && <div className="tool-detail-heading"><KindIcon size={14} /><span>{label}</span>{path && <code>{path}</code>}</div>}
-      {plan ? <ConversationPlan plan={args.plan} explanation={args.explanation} /> : patch ? <ConversationChanges changes={message.changes} patch={message.content} /> : edit && (before || after) ? <ConversationDiff before={before} after={after} /> : content && <pre>{content}</pre>}
+      {!reasoning && <div className="tool-detail-heading"><KindIcon size={14} /><span>{label}</span>{path && <code>{path}</code>}</div>}
+      {reasoning ? <ConversationMarkdown text={message.content} /> : plan ? <ConversationPlan plan={args.plan} explanation={args.explanation} /> : patch ? <ConversationChanges changes={message.changes} patch={message.content} /> : edit && (before || after) ? <ConversationDiff before={before} after={after} /> : content && <pre>{content}</pre>}
       {message.output && <div className="tool-result"><span>执行结果</span><pre>{message.output}</pre></div>}
       <ConversationAttachments items={message.attachments} />
     </div>

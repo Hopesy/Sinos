@@ -75,9 +75,11 @@ export function register(on) {
       if (item.done) { result = item.value; break; }
       const chunk = item.value;
       if (!e.agentId && endpoint && !failed) {
-        // Opaque engine envelopes and signed/private thinking are not relayed.
+        // Only documented visible chunks; no opaque envelopes, signatures or
+        // redacted/encrypted thinking. `thinking.text` is what the TUI shows.
         const base = { turn: e.turnId, step: e.index, model: e.model };
         if (chunk.kind === 'text') pending.push({ ...base, kind: 'text', index: chunk.index, text: chunk.text });
+        if (chunk.kind === 'thinking') pending.push({ ...base, kind: 'thinking', index: chunk.index, text: chunk.text });
         if (chunk.kind === 'tool') pending.push({ ...base, kind: 'tool', index: chunk.index, id: chunk.id, name: chunk.name });
         if (chunk.kind === 'input') pending.push({ ...base, kind: 'input', index: chunk.index, text: chunk.json });
         if (pending.length && (first || pending.length >= 4 || chunk.kind === 'stop')) {

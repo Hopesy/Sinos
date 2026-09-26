@@ -8,6 +8,8 @@ import { WebSocketServer } from 'ws';
 import { claudeTrustStartup } from '../src/remote/fixtures/claudeTrustStartup.ts';
 import { claudeStatusReplay } from '../src/remote/fixtures/claudeStatusReplay.ts';
 import { designConversation } from './fixtures/conversation-design.mjs';
+import { codexRealTui } from '../src/remote/fixtures/codexRealTui.ts';
+import { previewCsp } from './mobile-security.ts';
 
 const root = fileURLToPath(new URL('../dist-phone/', import.meta.url));
 const port = Number(process.env.SINOS_PREVIEW_PORT || 5174);
@@ -25,6 +27,16 @@ function queueFor(id) { if (!queues.has(id)) queues.set(id, []); return queues.g
 function queueSnapshot(id) { return { messages: queueFor(id), activity: activity(), held: queueHeld }; }
 let sessions = [{ id: 'preview-claude', tool: 'claude', cwd: 'C:/Projects/sinos-studio', running: true, paused: false, output_chunks: 1, cols: mode.endsWith('-native') ? claudeTrustStartup.cols : 100, rows: mode.endsWith('-native') ? claudeTrustStartup.rows : 30 }, { id: 'preview-codex', tool: 'codex', cwd: 'C:/Projects/design-system', running: true, paused: false, output_chunks: 1, cols: 100, rows: 30 }];
 let revision = 1;
+if (mode.startsWith('codex-')) sessions = sessions.filter(session => session.tool === 'codex');
+// Real isolated CLI capture, shared with CodexMobileReplay.test.tsx. Keep the
+// exact VT approval screen while replaying structured content independently.
+function codexPage() {
+  if (!mode.startsWith('codex-')) return null;
+  const methods = { 'codex-approval': 'item/commandExecution/requestApproval', 'codex-thinking': 'item/reasoning/summaryTextDelta' };
+  const end = mode === 'codex-startup' ? 2 : mode === 'codex-streaming' ? codexRealTui.page.events.findLastIndex(event => event.message.method === 'item/agentMessage/delta') + 1 : methods[mode] ? codexRealTui.page.events.findIndex(event => event.message.method === methods[mode]) + 1 : codexRealTui.page.events.length;
+  return { ...codexRealTui.page, reset: true, cursor: end, events: codexRealTui.page.events.slice(0, end) };
+}
+function sendCodex(ws) { const page = codexPage(); if (page) ws.send(JSON.stringify({ type: 'codex', page })); }
 let chatRows = [
   { type: 'user', message: { role: 'user', content: '帮我把工作台改成适合手机的对话界面，风格简洁一点。' } },
   { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '我先检查现有布局和会话组件，再调整手机上的阅读与输入体验。' }, { type: 'tool_use', id: 'read-app', name: 'Read', input: { file_path: 'src/App.tsx' } }] } },
@@ -41,6 +53,8 @@ const imageFixtureButton = `<button onclick="mode('claude-spinner')">Claude 连�
 const json = (response, status, value) => { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value)); };
 const menuFixtureButtons = `<button onclick="mode('trust')">目录信任菜单</button><button onclick="mode('trust-moved')">桌面下移一项</button>`;
 function screenOutput() {
+  if (mode === 'codex-approval') return codexRealTui.approvalFrames.join('');
+  if (mode.startsWith('codex-')) return mode === 'codex-startup' ? codexRealTui.startupFrames.join('') : '';
   // A full native history plus its latest visible reply, like a scrolled CLI.
   // Do not fabricate parallel tool-result echoes in a different display order.
   if (mode === 'design') return (designConversation.at(-1).message.content[0].text + '\n\n' + '─'.repeat(100) + '\n❯\n' + '─'.repeat(100) + '\n[Fable 5.1] ▰▱▱▱ 12% | sinos-studio\n⏸ manual mode on · ← for agents').replace(/\n/g, '\r\n');
@@ -61,7 +75,7 @@ function screenOutput() {
 }
 function broadcastScreen() {
   outputSequence++;
-  for (const ws of wss.clients) { ws.send(JSON.stringify({ type: 'reset' })); ws.send(JSON.stringify({ type: 'output', session_id: ws.sessionId, data: screenOutput(), sequence: outputSequence })); }
+  for (const ws of wss.clients) { ws.send(JSON.stringify({ type: 'reset' })); ws.send(JSON.stringify({ type: 'output', session_id: ws.sessionId, data: screenOutput(), sequence: outputSequence })); sendCodex(ws); }
 }
 const server = http.createServer(async (request, response) => {
   try {
@@ -80,7 +94,7 @@ const server = http.createServer(async (request, response) => {
       for (const ws of wss.clients) if (['offline','unauthorized','empty'].includes(mode)) ws.close();
       broadcastScreen(); return json(response, 200, { mode });
     }
-    if (route === '/preview.html') { response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return response.end(page.replace('</aside>', menuFixtureButtons + imageFixtureButton + '</aside>').replace('<p id="result">', '<button onclick="mode(\'startup\')">启动提示</button><button onclick="mode(\'streaming\')">生成中</button><button onclick="mode(\'finish\')">完成本轮</button><button onclick="mode(\'approval\')">确认卡片</button><button onclick="mode(\'multi\')">多选问题</button><button onclick="mode(\'text\')">文字回答</button><button onclick="mode(\'upload-failure\')">上传失败</button><p id="result">')); }
+    if (route === '/preview.html') { response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return response.end(page.replace('</aside>', menuFixtureButtons + imageFixtureButton + ['startup', 'approval', 'thinking', 'streaming', 'done'].map(stage => `<button onclick="mode('codex-${stage}')">Codex ${stage}</button>`).join('') + '</aside>').replace('<p id="result">', '<button onclick="mode(\'startup\')">启动提示</button><button onclick="mode(\'streaming\')">生成中</button><button onclick="mode(\'finish\')">完成本轮</button><button onclick="mode(\'approval\')">确认卡片</button><button onclick="mode(\'multi\')">多选问题</button><button onclick="mode(\'text\')">文字回答</button><button onclick="mode(\'upload-failure\')">上传失败</button><p id="result">')); }
     if (route.startsWith('/api/')) {
       if (mode === 'offline') return json(response, 503, {});
       if (mode === 'unauthorized') return json(response, 401, {});
@@ -96,7 +110,7 @@ const server = http.createServer(async (request, response) => {
       }
       if (route.endsWith('/changes')) return json(response, 200, { state: 'ok', branch: 'main', files: [{ path: 'src/App.tsx', status: 'M', added: 12, deleted: 4 }, { path: 'src/theme.css', status: 'M', added: 28, deleted: 8 }, { path: 'src/components/Workspace.tsx', status: '?', added: 86, deleted: 0 }] });
       if (route.endsWith('/diff')) return json(response, 200, { path: url.searchParams.get('path'), before: original, after: content });
-      if (route.endsWith('/chat')) return json(response, 200, { bound: !['startup', 'streaming', 'trust', 'trust-moved', 'trust-native', 'status-native'].includes(mode), sourceId: route.split('/')[3], title: '优化工作台的移动端体验', data: chatRows.map(row => JSON.stringify(row)).join('\n') + '\n', cursor: chatRows.length, history_cursor: 0, has_older: false, revision: String(chatRows.length), append: false, prepend: false, unchanged: url.searchParams.get('revision') === String(chatRows.length) });
+      if (route.endsWith('/chat')) return json(response, 200, { bound: !mode.startsWith('codex-') && !['startup', 'streaming', 'trust', 'trust-moved', 'trust-native', 'status-native'].includes(mode), sourceId: route.split('/')[3], title: '优化工作台的移动端体验', data: mode.startsWith('codex-') ? '' : chatRows.map(row => JSON.stringify(row)).join('\n') + '\n', cursor: chatRows.length, history_cursor: 0, has_older: false, revision: String(chatRows.length), append: false, prepend: false, unchanged: url.searchParams.get('revision') === String(chatRows.length) });
       const id = route.split('/')[3];
       if (route.endsWith('/images')) {
         const failure = (status, text) => { response.writeHead(status, { 'Content-Type': 'text/plain' }); response.end(text); };
@@ -160,7 +174,7 @@ const server = http.createServer(async (request, response) => {
     const bytes = await fs.readFile(file);
     const type = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }[path.extname(file)] || 'application/octet-stream';
     // Match production's script policy while allowing this local preview iframe.
-    const security = type.startsWith('text/html') ? { 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self'; connect-src 'self' ws: wss:; base-uri 'none'; object-src 'none'" } : {};
+    const security = type.startsWith('text/html') ? { 'Content-Security-Policy': previewCsp } : {};
     response.writeHead(200, { 'Content-Type': type, ...security }); response.end(bytes);
   } catch { response.writeHead(404); response.end(); }
 });
@@ -176,6 +190,7 @@ server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, ws => {
     ws.sessionId = new URL(request.url, 'http://localhost').searchParams.get('session_id');
     ws.send(JSON.stringify({ type: 'output', session_id: ws.sessionId, data: screenOutput(), sequence: outputSequence }));
+    sendCodex(ws);
     const timer = setInterval(() => ws.send(JSON.stringify({ type: 'status', session_id: ws.sessionId, running: sessions.some(s => s.id === ws.sessionId), paused: false })), 2000);
     ws.on('close', () => clearInterval(timer));
   });

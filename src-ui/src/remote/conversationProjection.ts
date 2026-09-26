@@ -86,7 +86,7 @@ function findArrowMenu(lines: string[], cursorLine: number, code: Set<number>, t
     // CLI renderers keep explanatory text after the question on the same
     // visual line. The active menu's cursor/choices/footer establish that it
     // is interactive; the prompt's question mark need not end that line.
-    if (!code.has(start) && (questionStart.test(line) || /[?？](?:\s|$)/.test(line) || /^(?:(?:select|choose)\b|请选择|选择)/i.test(line.trim()))) break;
+    if (!code.has(start) && !/^\s*(?:Reason|Environment|Command)[:：]/i.test(line) && (questionStart.test(line) || /[?？](?:\s|$)/.test(line) || /^(?:(?:select|choose)\b|请选择|选择)/i.test(line.trim()))) break;
     if (/^[›❯>]\s|^\s*(`{3,}|~{3,})/.test(line)) return null;
     start--;
   }

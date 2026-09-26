@@ -9,6 +9,18 @@ const decoders: TerminalConversation[] = [];
 const decoder = (cols = 100, rows = 30) => { const value = new TerminalConversation(cols, rows, 'codex'); decoders.push(value); return value; };
 afterEach(() => { cleanup(); decoders.splice(0).forEach(value => value.dispose()); });
 
+it('hides the initial composer placeholder before the footer has painted', async () => {
+  const result = await decoder().write('  \x1b[36mTip: Try a new task\x1b[0m\r\n\r\n› Ask Codex to do anything');
+  expect(result.events).toEqual([]);
+  expect(result.question).toBeNull();
+});
+
+it.each([20, 21])('preserves real Chinese and word wraps at width %s', async cols => {
+  const text = '这是需要完整显示在手机聊天界面里的中文内容。 mixed words 继续检查';
+  const result = await decoder(cols).write('• ' + text);
+  expect(result.events[0].text).toBe(text);
+});
+
 // Fixtures follow Codex history_cell/messages.rs + markdown_render.rs and
 // bottom_pane snapshots. The bytes are synthetic, not private user history.
 it('renders nested and loose Codex lists during generation, preserving paragraphs and emphasis', async () => {

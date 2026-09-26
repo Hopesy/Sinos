@@ -22,6 +22,7 @@ export function ConversationCode({ code, language = 'text' }: { code: string; la
   }, []);
   useEffect(() => {
     const state = work.current;
+    if (!code.trim()) return;
     function schedule() {
       if (state.active || !state.mounted) return;
       state.active = true;
@@ -48,6 +49,7 @@ export function ConversationCode({ code, language = 'text' }: { code: string; la
     try { await clipboardWrite(code, { throwOnError: true }); setCopied(code); }
     catch { setCopyError(true); }
   }
+  if (!code.trim()) return null;
   return <div className="conversation-code">
     <div className="code-heading"><span>{language}</span><button type="button" onClick={() => void copy()} aria-label="复制代码">{copied === code ? <Check size={14} /> : <Copy size={14} />}{copied === code ? '已复制' : '复制'}</button></div>
     {copyError && <p className="code-copy-error" role="status">复制失败，请长按代码选择并复制。</p>}

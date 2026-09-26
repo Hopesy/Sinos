@@ -30,9 +30,9 @@ export class ClaudeEventStream {
       if (sequence !== this.cursor + 1) this.valid = false;
       this.cursor = sequence;
       if (event.kind === 'session') {
-        this.status = { model: typeof event.model === 'string' ? event.model : this.status?.model, lines: this.status?.lines || [] };
+        this.status = { ...this.status, model: typeof event.model === 'string' ? event.model : this.status?.model, lines: this.status?.lines || [] };
         if (typeof event.cwd === 'string') this.cwd = event.cwd;
-        if (typeof event.percent === 'number') this.status.lines = [`上下文已用 ${Math.round(event.percent)}%`];
+        if (typeof event.percent === 'number' && Number.isFinite(event.percent)) this.status.contextUsed = Math.round(Math.max(0, Math.min(100, event.percent)));
         continue;
       }
       const id = typeof event.turn === 'string' ? event.turn : '';
@@ -45,9 +45,9 @@ export class ClaudeEventStream {
       if (!turn) { this.valid = false; continue; }
       if (typeof event.model === 'string') this.status = { ...this.status, model: event.model, lines: this.status?.lines || [] };
       const key = `${id}:${event.step}:${event.index}`;
-      if (event.kind === 'text') {
+      if (event.kind === 'text' || event.kind === 'thinking') {
         let message = this.blocks.get(key);
-        if (!message) { message = { id: `claude-${key}`, role: 'assistant', content: '' }; turn.messages.push(message); this.blocks.set(key, message); }
+        if (!message) { message = { id: `claude-${key}`, role: event.kind === 'thinking' ? 'reasoning' : 'assistant', content: '', ...(event.kind === 'thinking' ? { toolStatus: 'running' as const } : {}) }; turn.messages.push(message); this.blocks.set(key, message); }
         message.content += typeof event.text === 'string' ? event.text : '';
       } else if (event.kind === 'tool') {
         const message: ChatMessage = { id: String(event.id), role: 'tool', toolName: String(event.name), content: '', toolStatus: 'running' };
@@ -57,6 +57,7 @@ export class ClaudeEventStream {
         if (message?.role === 'tool') message.content += typeof event.text === 'string' ? event.text : '';
         else this.valid = false;
       } else if (event.kind === 'step') {
+        for (const [block, message] of this.blocks) if (block.startsWith(`${id}:${event.step}:`) && message.role === 'reasoning') message.toolStatus = 'done';
         for (const [block, message] of this.blocks) if (block.startsWith(`${id}:${event.step}:`) && message.role === 'tool') {
           try { message.content = JSON.stringify(JSON.parse(message.content || '{}'), null, 2); } catch { /* Partial/aborted tool arguments remain visible. */ }
         }
@@ -66,7 +67,7 @@ export class ClaudeEventStream {
       } else if (event.kind === 'complete') {
         turn.complete = true;
         this.activity = event.reason === 'error' || event.reason === 'refusal' ? 'failed' : 'idle';
-        for (const message of turn.messages) if (message.toolStatus === 'running') message.toolStatus = 'failed';
+        for (const message of turn.messages) if (message.toolStatus === 'running') message.toolStatus = message.role === 'reasoning' && event.reason === 'answer' ? 'done' : 'failed';
         if (event.reason === 'error' || event.reason === 'refusal' || event.reason === 'aborted') turn.messages.push({ id: `claude-${id}-end`, role: 'tool', toolName: event.reason === 'aborted' ? '已停止' : '本轮未完成', content: '', toolStatus: event.reason === 'aborted' ? 'done' : 'failed' });
       }
     }
@@ -81,7 +82,7 @@ export class ClaudeEventStream {
 /** Anchor at user turns, working backwards so repeated prompts match the
  * current occurrence. Native tool outcomes/images supplement the live text;
  * raw Markdown remains authoritative through the disk-flush handoff. */
-export function mergeClaudeMessages(native: ChatMessage[], live: ClaudeTurn[], known = new Map<string, string>()): ChatMessage[] {
+export function mergeClaudeMessages(native: ChatMessage[], live: ClaudeTurn[], known = new Map<string, string>(), samePrompt = (a: string, b: string) => normalizePrompt(a) === normalizePrompt(b)): ChatMessage[] {
   const anchors = new Map<string, number>();
   let end = native.length;
   for (let i = live.length - 1; i >= 0; i--) {
@@ -90,7 +91,7 @@ export function mergeClaudeMessages(native: ChatMessage[], live: ClaudeTurn[], k
     const reserved = new Set([...known].filter(([id]) => id !== turn.id).map(([, id]) => id));
     for (let j = end - 1; j >= 0; j--) {
       if (native[j].role !== 'user' || reserved.has(native[j].id)) continue;
-      if (known.has(turn.id) ? native[j].id !== known.get(turn.id) : native[j].id.split(':')[0] !== turn.id && (!turn.prompt.trim() || normalizePrompt(native[j].content) !== normalizePrompt(turn.prompt))) continue;
+      if (known.has(turn.id) ? native[j].id !== known.get(turn.id) : native[j].id.split(':')[0] !== turn.id && (!turn.prompt.trim() || !samePrompt(native[j].content, turn.prompt))) continue;
       // A repeated prompt still waiting for its disk row must not consume an
       // older completed answer. Once bound, the native UUID pins the handoff.
       if (!known.has(turn.id) && !turn.complete) {
@@ -118,7 +119,7 @@ export function mergeClaudeMessages(native: ChatMessage[], live: ClaudeTurn[], k
         const full = disk.find(item => item.id === message.id);
         return full && message.role === 'tool' ? { ...message, ...full, toolStatus: full.toolStatus === 'running' ? message.toolStatus : full.toolStatus, output: full.output || message.output } : message;
       });
-      result.push(...disk.filter(message => message.role === 'reasoning'), ...messages);
+      result.push(...(messages.some(message => message.role === 'reasoning') ? [] : disk.filter(message => message.role === 'reasoning')), ...messages);
       const media = disk.filter(message => message.attachments?.length);
       result.push(...media.map(message => ({ ...message, content: '', id: `${message.id}-media` })));
       // Before any assistant chunk, native may have just flushed the answer.

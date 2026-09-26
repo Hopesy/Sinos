@@ -31,9 +31,31 @@ struct Credential {
 }
 struct Device {
     credential: Credential,
+    name: RwLock<String>,
     stopped: AtomicBool,
     online: AtomicBool,
     state: RwLock<String>,
+}
+impl Device {
+    fn saved_credential(&self) -> Credential {
+        let mut credential = self.credential.clone();
+        credential.device_name = self.name.read().unwrap().clone();
+        credential.revoked = self.stopped.load(Ordering::SeqCst);
+        credential
+    }
+    fn rename(&self, name: String, persist: impl FnOnce(&Credential) -> Result<(), String>) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+            return Err("设备备注须为 1–60 个字符，不能包含换行或控制字符".into());
+        }
+        let mut credential = self.saved_credential();
+        credential.device_name = name.into();
+        // Only update the display after persistence succeeds. Existing sockets
+        // keep their identity and keys; renaming never interrupts a session.
+        persist(&credential)?;
+        *self.name.write().unwrap() = name.into();
+        Ok(())
+    }
 }
 #[derive(Clone)]
 struct Invitation {
@@ -175,17 +197,20 @@ fn load_credentials() -> Result<Vec<Credential>, String> {
 fn save_credentials(values: &[Credential]) -> Result<(), String> {
     // Windows limits each credential blob to 2.5 KB. Store keys individually.
     for value in values {
-        let raw = serde_json::to_string(value).map_err(|_| "无法保存配对记录")?;
-        keyring::Entry::new("coffee-cli", &format!("mobile-{}", value.pair_id))
-            .map_err(|_| "无法访问设备凭据")?
-            .set_password(&raw)
-            .map_err(|_| "无法保存设备凭据")?;
+        save_credential(value)?;
     }
     let raw = serde_json::to_string(&values.iter().map(|v| &v.pair_id).collect::<Vec<_>>())
         .map_err(|_| "无法保存配对记录")?;
     credential_entry()?
         .set_password(&raw)
         .map_err(|_| "无法写入系统凭据库，配对未保存".into())
+}
+fn save_credential(value: &Credential) -> Result<(), String> {
+    let raw = serde_json::to_string(value).map_err(|_| "无法保存配对记录")?;
+    keyring::Entry::new("coffee-cli", &format!("mobile-{}", value.pair_id))
+        .map_err(|_| "无法访问设备凭据")?
+        .set_password(&raw)
+        .map_err(|_| "无法保存设备凭据".into())
 }
 async fn http(
     relay: &str,
@@ -312,6 +337,16 @@ pub async fn relay_cancel_pairing() -> Result<RelayStatus, String> {
 }
 
 #[tauri::command]
+pub async fn relay_rename_device(pair_id: String, device_name: String) -> Result<RelayStatus, String> {
+    let manager = host()?;
+    let _guard = manager.credential_lock.lock().await;
+    let device = manager.devices.read().unwrap().get(&pair_id).cloned().ok_or("设备不存在")?;
+    tokio::task::spawn_blocking(move || device.rename(device_name, save_credential))
+        .await.map_err(|_| "无法保存设备备注")??;
+    Ok(manager.status())
+}
+
+#[tauri::command]
 pub async fn relay_revoke_device(pair_id: String) -> Result<RelayStatus, String> {
     let manager = host()?;
     let _guard = manager.credential_lock.lock().await;
@@ -330,11 +365,7 @@ pub async fn relay_revoke_device(pair_id: String) -> Result<RelayStatus, String>
         .read()
         .unwrap()
         .values()
-        .map(|d| {
-            let mut c = d.credential.clone();
-            c.revoked = d.stopped.load(Ordering::SeqCst);
-            c
-        })
+        .map(|d| d.saved_credential())
         .collect();
     tokio::task::spawn_blocking(move || save_credentials(&stopped))
         .await
@@ -352,11 +383,7 @@ pub async fn relay_revoke_device(pair_id: String) -> Result<RelayStatus, String>
         .unwrap()
         .iter()
         .filter(|(id, _)| *id != &pair_id)
-        .map(|(_, d)| {
-            let mut c = d.credential.clone();
-            c.revoked = d.stopped.load(Ordering::SeqCst);
-            c
-        })
+        .map(|(_, d)| d.saved_credential())
         .collect();
     tokio::task::spawn_blocking(move || save_credentials(&remaining))
         .await
@@ -390,7 +417,7 @@ impl RelayHost {
             .values()
             .map(|d| RelayDeviceInfo {
                 pair_id: d.credential.pair_id.clone(),
-                device_name: d.credential.device_name.clone(),
+                device_name: d.name.read().unwrap().clone(),
                 relay_url: d.credential.relay_url.clone(),
                 paired_at: d.credential.paired_at,
                 online: d.online.load(Ordering::SeqCst),
@@ -468,11 +495,7 @@ impl RelayHost {
                     .read()
                     .unwrap()
                     .values()
-                    .map(|d| {
-                        let mut c = d.credential.clone();
-                        c.revoked = d.stopped.load(Ordering::SeqCst);
-                        c
-                    })
+                    .map(|d| d.saved_credential())
                     .collect();
                 if stored.len() >= 16 {
                     return Err("请先移除不用的设备（最多 16 台）".into());
@@ -515,6 +538,7 @@ impl RelayHost {
         }
         let stopped = credential.revoked;
         let device = Arc::new(Device {
+            name: RwLock::new(credential.device_name.clone()),
             credential,
             stopped: AtomicBool::new(stopped),
             online: AtomicBool::new(false),
@@ -655,6 +679,34 @@ impl RelayHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_rename_preserves_connection_identity_and_survives_later_saves() {
+        let device = Device {
+            credential: Credential { pair_id: "same-pair".into(), relay_url: DEFAULT_RELAY.into(), token: "test-token".into(), content_key: "test-key".into(), device_name: "Android 手机".into(), paired_at: 123, revoked: false },
+            name: RwLock::new("Android 手机".into()), stopped: AtomicBool::new(false), online: AtomicBool::new(true), state: RwLock::new("connected".into()),
+        };
+        device.rename(" 我的 Pixel · Chrome ".into(), |saved| {
+            assert_eq!(saved.device_name, "我的 Pixel · Chrome");
+            assert_eq!(saved.pair_id, "same-pair");
+            assert_eq!(saved.token, "test-token");
+            assert_eq!(saved.content_key, "test-key");
+            assert_eq!(saved.paired_at, 123);
+            assert!(!saved.revoked);
+            Ok(())
+        }).unwrap();
+        assert!(device.online.load(Ordering::SeqCst));
+        assert_eq!(device.saved_credential().device_name, "我的 Pixel · Chrome");
+        assert!(device.rename("未保存".into(), |_| Err("storage failed".into())).is_err());
+        assert_eq!(device.saved_credential().device_name, "我的 Pixel · Chrome");
+        for invalid in [" ".into(), "中".repeat(61), "两个\n名字".into()] {
+            assert!(device.rename(invalid, |_| panic!("invalid names must not touch storage")).is_err());
+        }
+        device.stopped.store(true, Ordering::SeqCst);
+        let saved = device.saved_credential();
+        assert!(saved.revoked);
+        assert_eq!(saved.device_name, "我的 Pixel · Chrome");
+    }
+
     #[test]
     fn connection_test_requires_a_compatible_health_response() {
         use std::{io::{Read, Write}, net::TcpListener};

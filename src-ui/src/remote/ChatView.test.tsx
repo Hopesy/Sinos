@@ -28,7 +28,7 @@ it('renders Claude original Markdown once during streaming and native handoff wh
   expect(article?.querySelectorAll('li')).toHaveLength(2);
   expect(screen.queryByText('unformatted echo')).toBeNull();
   expect(screen.getByLabelText('会话状态').textContent).toContain('Opus');
-  expect(screen.getByLabelText('会话状态').textContent).toContain('18%');
+  expect(screen.getByRole('meter', { name: '上下文占用' }).getAttribute('aria-valuenow')).toBe('18');
   expect(screen.getByText('Allow tool?')).toBeTruthy(); expect(live.answer).not.toHaveBeenCalled();
   const data = [
     { uuid: 'native-user', message: { role: 'user', content: 'hello' } },
@@ -75,8 +75,8 @@ it('keeps the Codex footer outside history and shows native model/context even w
   const view = render(<ChatView {...props} />); await act(async () => {});
   const status = screen.getByLabelText('会话状态');
   expect(status.textContent).toContain('gpt-5.4 xhigh');
-  expect(status.textContent).toContain('上下文剩余 80%');
-  expect(status.textContent).toContain('/new-project');
+  expect(screen.getByRole('meter', { name: '上下文占用' }).getAttribute('aria-valuenow')).toBe('20');
+  expect(status.querySelector('.status-directory')?.getAttribute('title')).toBe('/new-project');
   expect(status.closest('.chat-scroll')).toBeNull();
   live.projection = { events: [], question: { id: 'q', text: 'Continue?', choices: [{ label: 'Yes', input: '\r' }] } };
   view.rerender(<ChatView {...props} />);
@@ -101,7 +101,7 @@ it('sends one multiline prompt and removes its optimistic copy when native histo
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^发送$/ })); });
   await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
   expect(client.prompt).toHaveBeenCalledExactlyOnceWith('chat-test', text);
-  expect(screen.queryByText('已发送')).toBeNull();
+  expect(screen.queryByText('等待终端确认')).toBeNull();
   expect((screen.getByRole('textbox', { name: '发送消息' }) as HTMLTextAreaElement).value).toBe('');
   expect(screen.getAllByRole('article')).toHaveLength(1);
 });
@@ -200,13 +200,13 @@ it('keeps repeated pending messages until distinct new desktop records acknowled
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '继续' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^发送$/ })); });
   }
-  expect(screen.getAllByText('已发送')).toHaveLength(2);
+  expect(screen.getAllByText('等待终端确认')).toHaveLength(2);
   vi.mocked(client.chat).mockResolvedValue(read(user('old') + user('first'), '2'));
   await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
-  expect(screen.getAllByText('已发送')).toHaveLength(1);
+  expect(screen.getAllByText('等待终端确认')).toHaveLength(1);
   vi.mocked(client.chat).mockResolvedValue(read(user('old') + user('first') + user('second'), '3'));
   await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
-  expect(screen.queryByText('已发送')).toBeNull();
+  expect(screen.queryByText('等待终端确认')).toBeNull();
 });
 
 it('stops the same desktop session from the shared composer', async () => {
@@ -236,7 +236,7 @@ it('updates one separate model/status strip while messages grow, with no HUD mes
   const view = mount(); await act(async () => {});
   const strip = screen.getByLabelText('会话状态');
   expect(strip.textContent).toContain('Fable 5.1');
-  expect(strip.textContent).toContain('/project');
+  expect(strip.querySelector('.status-directory')?.getAttribute('title')).toBe('/project');
   expect(view.container.querySelectorAll('.chat-message')).toHaveLength(1);
   for (let count = 4; count <= 10; count++) {
     live.projection = projectConversation([`Reply ${count}`, '', ...footer(count)], 7, 'claude');
@@ -245,7 +245,7 @@ it('updates one separate model/status strip while messages grow, with no HUD mes
     expect(view.container.querySelectorAll('.conversation-status')).toHaveLength(1);
     expect(view.container.querySelector('.chat-timeline .chat-markdown')?.textContent).toBe(`Reply ${count}`);
     expect(view.container.querySelector('.chat-timeline')?.textContent).not.toContain('Fable 5.1');
-    expect(strip.textContent).toContain(`${count}%`);
+    expect(screen.getByRole('meter', { name: '上下文占用' }).getAttribute('aria-valuenow')).toBe(String(count));
     expect(view.container.querySelector('.chat-timeline hr')).toBeNull();
   }
 });

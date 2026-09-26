@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { LockKeyhole, ScanLine, Smartphone } from 'lucide-react';
 import { RemoteApp } from './RemoteApp';
-import { RemoteClient, readPairingToken } from './client';
+import { RemoteClient, readPairingToken, storageRead, storageWrite } from './client';
 import { claimDevice, RelayClient, savedDevice } from './pair/RelayClient';
 import { validateInvite } from './pair/deviceStorage';
+import { defaultDeviceName } from './pair/deviceName';
 import { isAndroidApp, SinosMobile } from './native/bridge';
 import { useMobileViewport } from './useMobileViewport';
 import { usePhoneAppearance } from './usePhoneAppearance';
@@ -20,7 +21,7 @@ export function PairEntry() {
   const [invite, setInvite] = useState(() => location.hash.includes('pk=') ? location.href : '');
   const [link, setLink] = useState('');
   const [client, setClient] = useState<RemoteClient | null>(null);
-  const [name, setName] = useState(/iPhone|iPad/.test(navigator.userAgent) ? 'iPhone / iPad' : /Android/.test(navigator.userAgent) ? 'Android 手机' : '我的手机');
+  const [name, setName] = useState(() => storageRead('device-name') || defaultDeviceName(navigator.userAgent, isAndroidApp));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -43,7 +44,7 @@ export function PairEntry() {
     setBusy(true); setError('');
     try {
       if (isAndroidApp) await SinosMobile.requestNotifications();
-      await claimDevice(invite, name); setInvite('');
+      await claimDevice(invite, name); storageWrite('device-name', name.trim()); setInvite('');
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '配对失败，请重新生成配对链接。'); }
     finally { setBusy(false); }

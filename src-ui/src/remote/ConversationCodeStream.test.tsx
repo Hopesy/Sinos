@@ -7,6 +7,15 @@ const highlight = vi.hoisted(() => vi.fn(async (code: string) => code.split('\n'
 vi.mock('./highlightCode', () => ({ highlightCode: highlight }));
 afterEach(() => { cleanup(); vi.useRealTimers(); highlight.mockClear(); });
 
+it('hides an empty code card until actual streamed content arrives', async () => {
+  const view = render(<ConversationCode code={' \n '} language="text" />);
+  expect(view.container.textContent).toBe('');
+  expect(view.container.querySelector('pre, button')).toBeNull();
+  expect(highlight).not.toHaveBeenCalled();
+  view.rerender(<ConversationCode code="const x = 1;" language="ts" />);
+  expect(view.container.querySelector('pre')?.textContent).toBe('const x = 1;');
+});
+
 it('highlights a continuously growing block and retains complete highlighted lines between chunks', async () => {
   vi.useFakeTimers();
   const view = render(<ConversationCode code={'const a = 1;\n'} language="js" />);

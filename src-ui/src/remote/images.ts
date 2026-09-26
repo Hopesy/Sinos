@@ -1,6 +1,7 @@
 import { RemoteClient, RemoteError } from './client';
 import type { ImageAttachment, ImageUpload } from './types';
 import type { ConversationProjection } from './conversationProjection';
+import { normalizePrompt, type ChatMessage } from '../lib/chat-transcript';
 
 export const IMAGE_LIMIT = 4 * 1024 * 1024;
 export const IMAGE_CHUNK = 256 * 1024;
@@ -15,11 +16,49 @@ export function imagePrompt(text: string, images: ImageAttachment[]) {
   return images.length ? `${text.trim() ? text : '请参考这些图片。'}\n\n参考图片：\n${images.map(image => `- ${image.reference}`).join('\n')}` : text;
 }
 export function imageMessage(text: string, images: ImageAttachment[]) {
-  const index = text.lastIndexOf('\n\n参考图片：\n');
+  const index = text.lastIndexOf('参考图片：');
   if (index < 0) return { text, images: [] as ImageAttachment[] };
-  const paths = text.slice(index + '\n\n参考图片：\n'.length).trimEnd().split('\n');
-  const found = paths.map(path => images.find(image => `- ${image.reference}` === path.trimEnd()));
-  return paths.length <= 4 && found.every(Boolean) ? { text: text.slice(0, index), images: found as ImageAttachment[] } : { text, images: [] as ImageAttachment[] };
+  let rest = text.slice(index + '参考图片：'.length).trim();
+  const found: ImageAttachment[] = [];
+  // Older terminal echoes can lose LF characters from pasted prompts. Accept
+  // either layout, but only consume exact, known attachment paths all the way
+  // to the end. A path mentioned in ordinary prose is not an image envelope.
+  while (rest.startsWith('-') && found.length < 4) {
+    rest = rest.slice(1).trimStart();
+    const quote = /^["'`]/.test(rest) ? rest[0] : '';
+    if (quote) rest = rest.slice(1);
+    if (rest.startsWith('\\\\?\\')) rest = rest.slice(4);
+    const image = images.find(image => {
+      const reference = image.reference.replace(/^\\\\\?\\/, '').replace(/\\/g, '/');
+      const candidate = rest.slice(0, reference.length).replace(/\\/g, '/');
+      return /^[A-Za-z]:\//.test(reference) ? reference.toLowerCase() === candidate.toLowerCase() : reference === candidate;
+    });
+    if (!image || found.some(item => item.id === image.id)) return { text, images: [] as ImageAttachment[] };
+    rest = rest.slice(image.reference.replace(/^\\\\\?\\/, '').length);
+    if (quote) { if (!rest.startsWith(quote)) return { text, images: [] as ImageAttachment[] }; rest = rest.slice(1); }
+    found.push(image); rest = rest.trim();
+  }
+  return found.length && !rest ? { text: text.slice(0, index).trimEnd(), images: found } : { text, images: [] as ImageAttachment[] };
+}
+export function canonicalImagePrompt(text: string, images: ImageAttachment[]) {
+  const message = imageMessage(text, images);
+  return message.images.length ? imagePrompt(message.text, message.images) : text;
+}
+export function sameImagePrompt(left: string, right: string, images: ImageAttachment[]) {
+  if (normalizePrompt(left) === normalizePrompt(right)) return true;
+  const a = imageMessage(left, images), b = imageMessage(right, images);
+  if (!a.images.length || a.images.length !== b.images.length || a.images.some((image, i) => image.id !== b.images[i].id)) return false;
+  const equal = (x: string, y: string) => normalizePrompt(x) === normalizePrompt(y);
+  // Only repair the historical LF loss when attachment identity also agrees.
+  // Do not remove spaces from arbitrary prompts or merge repeated user turns.
+  return equal(a.text, b.text) || equal(a.text.replace(/\r?\n/g, ''), b.text) || equal(a.text, b.text.replace(/\r?\n/g, ''));
+}
+export function imageMessages(messages: ChatMessage[], images: ImageAttachment[]) {
+  return images.length ? messages.map(message => {
+    if (message.role !== 'user') return message;
+    const content = canonicalImagePrompt(message.content, images);
+    return content === message.content ? message : { ...message, content };
+  }) : messages;
 }
 // VT output can split the native multiline prompt at its blank lines. Merge
 // only an exact known image prompt, or an adjacent verified image footer.
@@ -27,18 +66,20 @@ export function imageMessage(text: string, images: ImageAttachment[]) {
 export function imageProjection(projection: ConversationProjection, prompts: string[], images: ImageAttachment[]): ConversationProjection {
   if (!images.length) return projection;
   const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
-  const known = prompts.filter(text => imageMessage(text, images).images.length).map(text => ({ text, normalized: normalize(text) }));
+  const compact = (text: string) => normalize(text.replace(/\r?\n/g, ''));
+  const known = prompts.filter(text => imageMessage(text, images).images.length).map(text => ({ text, normalized: normalize(text), compact: compact(text) }));
   const events = [];
   for (let i = 0; i < projection.events.length; i++) {
-    const event = projection.events[i];
+    const original = projection.events[i];
+    const event = original.kind === 'user' ? { ...original, text: known.find(item => sameImagePrompt(original.text, item.text, images))?.text || canonicalImagePrompt(original.text, images) } : original;
     if (event.kind !== 'user') { events.push(event); continue; }
     let joined = event.text, matched = false;
     for (let j = i + 1; j < projection.events.length && projection.events[j].kind === 'assistant'; j++) {
       joined += `\n\n${projection.events[j].text}`;
-      const exact = known.find(item => item.normalized === normalize(joined));
+      const exact = known.find(item => sameImagePrompt(item.text, joined, images));
       const adjacentFooter = j === i + 1 && imageMessage(`\n\n${projection.events[j].text}`, images).images.length > 0;
-      if (exact || adjacentFooter) { events.push({ ...event, text: exact?.text || joined }); i = j; matched = true; break; }
-      if (!known.some(item => item.normalized.startsWith(normalize(joined)))) break;
+      if (exact || adjacentFooter) { events.push({ ...event, text: exact?.text || canonicalImagePrompt(joined, images) }); i = j; matched = true; break; }
+      if (!known.some(item => item.normalized.startsWith(normalize(joined)) || item.compact.startsWith(compact(joined)))) break;
     }
     if (!matched) events.push(event);
   }

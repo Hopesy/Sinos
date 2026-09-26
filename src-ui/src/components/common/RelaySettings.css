@@ -1,49 +1,70 @@
 .relay-settings { max-width:540px; margin:auto; color:var(--text-1); container-type:inline-size; overflow-anchor:none; }
-.relay-intro { text-align:center; padding:10px 0 20px; }
-.relay-device-art { display:flex; align-items:center; justify-content:center; gap:16px; color:var(--text-2); margin-bottom:18px; }
-.relay-device-art span { letter-spacing:5px; opacity:.5; }
-.relay-intro h3 { margin:0 0 10px; font-size:21px; font-weight:500; }
-.relay-intro p { font-size:12px; line-height:1.9; margin:0; opacity:.65; }
 
-.relay-address { margin:0 0 20px; padding-bottom:18px; border-bottom:1px solid var(--border,#8883); }
+.relay-address { margin:0 0 14px; }
 .relay-address-row { display:flex; align-items:stretch; gap:8px; }
-.relay-address-row input { flex:1; }
-.relay-test { flex-shrink:0; white-space:nowrap; }
+.relay-address-field { position:relative; flex:1; min-width:0; }
+.relay-eye { position:absolute; right:2px; top:2px; display:grid; place-items:center; width:34px; height:32px; border:0; border-radius:6px; color:var(--text-2); background:transparent; cursor:pointer; }
+.relay-eye:hover { color:var(--text-1); background:var(--border,#8882); }
+.relay-eye:focus-visible,.relay-connect:focus-visible { outline:2px solid var(--accent,#c4956a); outline-offset:2px; }
+.relay-address-row .relay-test { display:grid; place-items:center; flex:0 0 36px; width:36px; padding:0; }
 .relay-address label { display:block; margin-bottom:8px; font-size:12px; font-weight:500; }
-.relay-address input { display:block; box-sizing:border-box; width:100%; min-width:0; min-height:40px; padding:10px 12px; border:1px solid var(--border,#8884); border-radius:8px; background:var(--bg-app,transparent); color:var(--text-1); font:inherit; font-size:12px; }
+.relay-address input { display:block; box-sizing:border-box; width:100%; min-width:0; height:36px; padding:8px 40px 8px 10px; border:1px solid var(--border,#8884); border-radius:8px; background:var(--bg-app,transparent); color:var(--text-1); font:inherit; font-size:12px; }
 .relay-address input:focus-visible { outline:2px solid var(--accent,#c4956a); outline-offset:2px; }
 .relay-address input:disabled { opacity:.6; }
 .relay-address p { margin:8px 0 0; font-size:11px; line-height:1.6; color:var(--text-2); }
 .relay-address .relay-test-result.is-success { color:var(--text-1); }
 .relay-address .relay-test-result.is-error { color:#d97770; }
 
-.relay-connect { display:flex; justify-content:center; align-items:center; gap:8px; width:100%; max-width:260px; min-height:40px; margin:0 auto 18px; border:1px solid var(--border,#8884); border-radius:8px; background:var(--text-1,#ddd); color:var(--bg-panel,#222); font-size:12px; cursor:pointer; }
-.relay-security { display:flex; align-items:center; justify-content:center; gap:7px; font-size:11px; opacity:.6; margin:20px 0 30px; }
-.relay-invite { display:grid; grid-template-columns:210px minmax(0,1fr); align-items:center; gap:20px; }
-.relay-invite img { width:210px; height:210px; border-radius:10px; }
-.relay-invite-copy { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:12px; }
-.relay-invite strong { font-size:14px; font-weight:500; line-height:1.7; }
-.relay-invite-copy > span { font-size:11px; line-height:1.7; opacity:.65; font-variant-numeric:tabular-nums; }
-.relay-actions { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 0; }
+.relay-pair-card { padding:14px; border:1px solid var(--border,#8883); border-radius:10px; margin-bottom:18px; }
+.relay-pair-heading { display:flex; align-items:center; gap:10px; }
+.relay-pair-icon { display:grid; place-items:center; width:36px; height:36px; flex-shrink:0; border:1px solid var(--border,#8883); border-radius:9px; color:var(--text-2); }
+.relay-pair-heading > div { flex:1; min-width:0; }
+.relay-pair-heading h3 { margin:0; font-size:13px; font-weight:500; }
+.relay-pair-heading p { margin:4px 0 0; font-size:11px; line-height:1.5; color:var(--text-2); }
+.relay-connect { display:flex; justify-content:center; align-items:center; gap:5px; flex-shrink:0; min-height:32px; padding:6px 10px; border:1px solid var(--border,#8884); border-radius:7px; background:var(--text-1,#ddd); color:var(--bg-panel,#222); font-size:11px; cursor:pointer; }
+.relay-connect:disabled { opacity:.55; cursor:default; }
+.relay-security { display:flex; align-items:center; gap:6px; color:var(--text-2); font-size:10px; margin-top:12px; padding-top:10px; border-top:1px solid var(--border,#8882); }
+.relay-invite { display:grid; grid-template-columns:160px minmax(0,1fr); align-items:center; gap:16px; margin-top:14px; }
+.relay-invite img { display:block; width:160px; height:160px; border-radius:8px; }
+.relay-invite-copy { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:6px; }
+.relay-invite strong { font-size:12px; font-weight:500; line-height:1.6; }
+.relay-invite-copy > span { font-size:11px; line-height:1.6; color:var(--text-2); font-variant-numeric:tabular-nums; }
+.relay-actions { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 0; }
 .relay-actions button { display:inline-flex; align-items:center; gap:5px; }
 .relay-error { font-size:12px; color:#d97770; line-height:1.8; }
-.relay-devices { border-top:1px solid var(--border,#8883); padding-top:15px; }
+.relay-devices { padding-top:2px; }
 .relay-devices h4 { font-size:12px; font-weight:500; margin:0 0 12px; }
 .relay-devices h4 span { opacity:.5; margin-left:5px; }
-.relay-empty { font-size:11px; opacity:.5; padding:8px 0 18px; }
+.relay-empty { font-size:11px; color:var(--text-2); line-height:1.7; margin:6px 0 12px; }
 .relay-device { display:flex; align-items:center; gap:10px; padding:13px 0; border-bottom:1px solid var(--border,#8882); }
-.relay-device > div { flex:1; }
-.relay-device strong { display:block; font-size:12px; font-weight:500; }
-.relay-device span { display:block; margin-top:4px; font-size:10px; opacity:.55; }
+.relay-device > svg { flex-shrink:0; color:var(--text-2); }
+.relay-device.is-online > svg { color:var(--accent,#c4956a); }
+.relay-device-info { flex:1; min-width:0; }
+.relay-device strong { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:500; overflow-wrap:anywhere; }
+.relay-device-info > span { display:block; margin-top:5px; font-size:10px; color:var(--text-2); overflow-wrap:anywhere; }
+.relay-device-state { flex-shrink:0; font-size:10px; font-weight:400; color:var(--text-2); }
+.relay-device.is-online .relay-device-state { color:var(--accent,#c4956a); }
+.relay-device-actions { display:flex; align-items:center; flex-shrink:0; justify-content:flex-end; gap:4px; }
+.relay-device .settings-btn { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; height:24px; min-height:24px; min-width:24px; padding:0 7px; border-radius:5px; background:transparent; color:var(--text-2); font-size:11px; font-weight:400; line-height:14px; white-space:nowrap; }
+.relay-device .settings-btn.relay-device-icon { width:24px; padding:0; }
+.relay-device .settings-btn:hover:not(:disabled) { color:var(--text-1); background:var(--bg-hover,#8881); }
+.relay-saved-devices { margin-top:12px; }
+.relay-saved-devices > summary { display:flex; align-items:center; gap:8px; padding:10px 0; cursor:pointer; list-style:none; font-size:12px; color:var(--text-2); }
+.relay-saved-devices > summary::-webkit-details-marker { display:none; }
+.relay-saved-devices > summary svg { transform:rotate(-90deg); }.relay-saved-devices[open] > summary svg { transform:none; }
+.relay-device-help { margin:2px 0 8px; font-size:11px; color:var(--text-2); line-height:1.7; }
+.relay-device-rename { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+.relay-device-rename input { flex:1; min-width:120px; border:1px solid var(--border,#8884); border-radius:6px; padding:7px 8px; background:var(--bg-app,transparent); color:var(--text-1); font:inherit; font-size:12px; }
+.relay-device-rename input:focus-visible { outline:2px solid var(--accent,#c4956a); outline-offset:2px; }
 
-@container (max-width:450px) {
-  .relay-invite { grid-template-columns:180px minmax(0,1fr); gap:14px; }
-  .relay-invite img { width:180px; height:180px; }
+@container (max-width:380px) {
+  .relay-pair-heading { flex-wrap:wrap; }
+  .relay-pair-heading .relay-connect { width:100%; margin-top:4px; }
+  .relay-invite { grid-template-columns:1fr; justify-items:center; gap:12px; }
+  .relay-invite-copy { align-items:center; text-align:center; }
+  .relay-device { flex-wrap:wrap; }
+  .relay-device-actions { margin-left:auto; }
 }
-
-@media (max-height:680px) {
-  .relay-address { margin-bottom:16px; padding-bottom:14px; }
-  .relay-invite { grid-template-columns:180px minmax(0,1fr); }
-  .relay-invite img { width:180px; height:180px; }
-  .relay-security { margin:14px 0 18px; }
-}
+@keyframes relay-spin { to { transform:rotate(360deg); } }
+.relay-spin { animation:relay-spin 1s linear infinite; }
+@media (prefers-reduced-motion:reduce) { .relay-spin { animation:none; } }

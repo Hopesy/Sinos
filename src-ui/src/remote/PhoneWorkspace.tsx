@@ -80,7 +80,7 @@ export function PhoneWorkspace({ client }: { client: RemoteClient }) {
       {pendingLaunch && <div className="phone-network" role="status">正在电脑上启动会话…</div>}
       <main className="phone-main">
         {selected ? <div className="session-workspace" key={selected.id}>
-          <section className="mobile-tab-panel" hidden={surface !== 'chat'} aria-label="对话"><ChatView client={client} session={selected} online={online} capabilities={state.capabilities} toolName={name(selected.tool)} onTitle={setTitle} insert={insert} onInserted={inserted} /></section>
+          <section className="mobile-tab-panel" hidden={surface !== 'chat'} aria-label="对话"><ChatView client={client} session={selected} online={online} capabilities={state.capabilities} toolName={name(selected.tool)} title={titles[selected.id]} onTitle={setTitle} insert={insert} onInserted={inserted} /></section>
           {visited.has('files') && <section className="mobile-tab-panel auxiliary-surface" hidden={surface !== 'files'} aria-label="项目文件"><FilesView client={client} sessionId={selected.id} online={online} onAttach={path => prompt(`请查看项目文件 ${path}`)} /></section>}
           {visited.has('changes') && <section className="mobile-tab-panel auxiliary-surface" hidden={surface !== 'changes'} aria-label="代码变更"><ChangesView client={client} sessionId={selected.id} active={surface === 'changes'} onPrompt={prompt} /></section>}
         </div> : <div className="phone-welcome" aria-busy={Boolean(pendingLaunch)}><Coffee size={30} strokeWidth={1.5} /><h1>让想法继续。</h1><p>在手机上接续电脑的会话，<br />把下一步交给 AI。</p><button className="primary-button" disabled={!online || Boolean(pendingLaunch)} onClick={() => setPanel('new')}><Plus size={17} />新建会话</button><span>{state.device_name || '等待连接你的电脑'}</span></div>}

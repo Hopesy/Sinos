@@ -99,7 +99,7 @@ impl Journal {
         }
     }
     fn observe(&mut self, event: &Value) {
-        // Copy only the visible, documented fields. Unknown/opaque/thinking
+        // Copy only the visible, documented fields. Unknown/opaque/signed
         // events, credentials and plugin metadata never cross the relay.
         let Some(kind) = event["kind"].as_str() else {
             return;
@@ -120,7 +120,7 @@ impl Journal {
         let fields: &[&str] = match kind {
             "session" => &["session", "model", "cwd", "percent"],
             "start" => &["turn", "text"],
-            "text" | "input" => &["turn", "step", "index", "model", "text"],
+            "text" | "thinking" | "input" => &["turn", "step", "index", "model", "text"],
             "tool" => &["turn", "step", "index", "model", "id", "name"],
             "step" => &["turn", "step", "model"],
             "result" => &["turn", "id", "text", "failed"],
@@ -452,15 +452,18 @@ mod tests {
     fn journal_replays_deduplicates_and_filters_fields() {
         let mut journal = Journal::default();
         journal.observe(&json!({"kind":"session","session":"a","model":"test","apiKey":"secret"}));
-        journal.observe(&json!({"kind":"thinking","text":"private"}));
+        journal.observe(&json!({"kind":"opaque","text":"private"}));
         journal.observe(&json!({"kind":"start","turn":"t1","text":"Hi"}));
         journal.observe(
             &json!({"kind":"text","turn":"t1","step":0,"index":0,"text":"1. First\n2. Second"}),
         );
+        journal.observe(&json!({"kind":"thinking","turn":"t1","step":0,"index":1,"text":"Visible thought","signature":"secret","encryptedContent":"private"}));
         let page = journal.page(None, 0);
         assert!(page.online && page.complete && page.reset);
-        assert_eq!(page.events.len(), 3);
+        assert_eq!(page.events.len(), 4);
         assert!(!serde_json::to_string(&page).unwrap().contains("secret"));
+        assert!(!serde_json::to_string(&page).unwrap().contains("private"));
+        assert_eq!(page.events.last().unwrap().message["text"], "Visible thought");
         assert!(journal
             .page(Some(&page.epoch), page.cursor)
             .events
@@ -540,11 +543,15 @@ mod tests {
             }
             let events = vec![
                 json!({"type":"message_start","message":message}),
-                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
-                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1. **First**\n"}}),
-                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"2. Second\n\n```ts\n"}}),
-                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"const x = 1;\n```\n"}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Checking the isolated fixture."}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"fixture-opaque-signature"}}),
                 json!({"type":"content_block_stop","index":0}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"1. **First**\n"}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"2. Second\n\n```ts\n"}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"const x = 1;\n```\n"}}),
+                json!({"type":"content_block_stop","index":1}),
                 json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":20}}),
                 json!({"type":"message_stop"}),
             ];
@@ -667,8 +674,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(3));
         {
             let mut writer = writer.lock().unwrap();
-            writer.write_all(b"Sinos mobile fixture\r").unwrap();
-            writer.flush().unwrap();
+            crate::remote_input::paste_and_submit(writer.as_mut(), "Sinos mobile fixture").unwrap();
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(25);
         let mut streamed = false;
@@ -752,6 +758,8 @@ mod tests {
             text,
             "1. **First**\n2. Second\n\n```ts\nconst x = 1;\n```\n"
         );
+        assert!(page.events.iter().any(|event| event.message["kind"] == "thinking" && event.message["text"] == "Checking the isolated fixture."));
+        assert!(!serde_json::to_string(&page).unwrap().contains("fixture-opaque-signature"));
         assert!(cleared, "/clear must stop projecting the old session");
     }
 }

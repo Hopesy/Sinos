@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, CircleCheck, CircleDashed, Info, ListPlus, Sparkles, Square, TriangleAlert, X } from 'lucide-react';
 import { RemoteClient, RemoteError, errorMessage, storageRead, storageWrite, type ChatRead } from './client';
-import { updateChatTranscript, normalizePrompt, type ChatTranscriptState } from '../lib/chat-transcript';
+import { updateChatTranscript, type ChatTranscriptState } from '../lib/chat-transcript';
 import { ConversationAttachments } from './ConversationAttachments';
 import type { RemoteSession } from './types';
 import { mergeConversationTimeline } from './conversationProjection';
@@ -17,24 +17,26 @@ import { MessageQueue } from './MessageQueue';
 import type { QueuedPrompt } from './types';
 import { useImageAttachments } from './useImageAttachments';
 import { DraftImages, ImagePicker, MessageImages } from './ImageAttachments';
-import { imageError, imageMessage, imagePrompt, imageProjection } from './images';
+import { canonicalImagePrompt, imageError, imageMessage, imageMessages, imagePrompt, imageProjection, sameImagePrompt } from './images';
+import type { ImageAttachment } from './types';
 import { mergeCodexMessages } from './CodexEventStream';
 import { mergeClaudeMessages } from './ClaudeEventStream';
 
-interface SentPrompt { id: number; text: string; seen: Set<string> }
+interface SentPrompt { id: number; text: string; images: ImageAttachment[]; seen: Set<string> }
 function remainingPrompts(prompts: SentPrompt[], transcript: ChatTranscriptState) {
   const acknowledged = new Set<string>();
   return prompts.filter(prompt => {
-    const match = transcript.messages.find(message => message.role === 'user' && !prompt.seen.has(message.id) && !acknowledged.has(message.id) && normalizePrompt(message.content) === normalizePrompt(prompt.text));
+    const match = transcript.messages.find(message => message.role === 'user' && !prompt.seen.has(message.id) && !acknowledged.has(message.id) && sameImagePrompt(message.content, prompt.text, prompt.images));
     if (match) { acknowledged.add(match.id); return false; }
     return true;
   }).map(prompt => ({ ...prompt, seen: new Set([...prompt.seen, ...acknowledged]) }));
 }
 
-export function ChatView({ client, session, online, toolName, onTitle, insert, onInserted, capabilities = [] }: {
+export function ChatView({ client, session, online, toolName, title, onTitle, insert, onInserted, capabilities = [] }: {
   client: RemoteClient; session: RemoteSession; online: boolean; toolName: string;
   onTitle: (title: string) => void; insert: string; onInserted: () => void;
   capabilities?: string[];
+  title?: string;
 }) {
   const [transcript, setTranscript] = useState<ChatTranscriptState>({ messages: [], remainder: '', nextLineIndex: 0 });
   const [draft, setDraft] = useState(() => {
@@ -55,40 +57,44 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
   const claudeAnchors = useRef(new Map<string, string>());
   const structured = nativeStream?.available || nativeStream?.retained;
   const codex = session.tool === 'codex' ? { ...transcript.codexStatus, ...(structured ? live.codex.status : {}) } : undefined;
-  const conversationMessages = useMemo(() => {
-    const native = structured && read?.sourceId && !read.sourceId.endsWith(nativeStream?.threadId || '') ? [] : transcript.messages;
-    return structured ? claude ? mergeClaudeMessages(native, claude.turns, claudeAnchors.current) : mergeCodexMessages(native, live.codex.messages) : native;
-  }, [structured, read?.sourceId, transcript.messages, live.codex, claude, nativeStream?.threadId]);
-  const terminalStatus = session.tool === 'codex' ? {
-    model: codex?.model ? [codex.model, codex.effort].filter(Boolean).join(' ') : live.projection.terminalStatus?.model || 'Codex',
-    lines: codex?.contextRemaining !== undefined ? [`上下文剩余 ${codex.contextRemaining}%`] : live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [codex?.cwd || session.cwd],
-  } : session.tool === 'claude' ? {
-    model: claude?.status?.model || live.projection.terminalStatus?.model || 'Claude Code',
-    lines: claude?.status?.lines.length ? claude.status.lines : live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [claude?.cwd || session.cwd],
-  } : live.projection.terminalStatus;
   const queueEnabled = capabilities.includes('message_queue');
   const autoQueueSupported = session.tool === 'claude' || session.tool === 'codex';
   const queue = useMessageQueue(client, session.id, queueEnabled, online);
   const imageEnabled = capabilities.includes('image_attachments_v1') && (session.tool === 'claude' || session.tool === 'codex');
   const images = useImageAttachments(client, session.id, imageEnabled, online);
+  const knownImages = useMemo(() => [...new Map([...images.known, ...(queue.snapshot?.messages.flatMap(item => item.attachments || []) || [])].map(image => [image.id, image])).values()], [images.known, queue.snapshot]);
+  const conversationMessages = useMemo(() => {
+    const native = imageMessages(structured && read?.sourceId && !read.sourceId.endsWith(nativeStream?.threadId || '') ? [] : transcript.messages, knownImages);
+    const samePrompt = (a: string, b: string) => sameImagePrompt(a, b, knownImages);
+    return structured ? claude ? mergeClaudeMessages(native, claude.turns.map(turn => ({ ...turn, prompt: canonicalImagePrompt(turn.prompt, knownImages) })), claudeAnchors.current, samePrompt) : mergeCodexMessages(native, imageMessages(live.codex.messages, knownImages), samePrompt) : native;
+  }, [structured, read?.sourceId, transcript.messages, live.codex, claude, nativeStream?.threadId, knownImages]);
+  const terminalStatus = session.tool === 'codex' ? {
+    model: codex?.model ? [codex.model, codex.effort].filter(Boolean).join(' ') : live.projection.terminalStatus?.model || 'Codex',
+    contextUsed: codex?.contextRemaining !== undefined ? 100 - codex.contextRemaining : live.projection.terminalStatus?.contextUsed,
+    lines: live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [codex?.cwd || session.cwd],
+  } : session.tool === 'claude' ? {
+    model: claude?.status?.model || live.projection.terminalStatus?.model || 'Claude Code',
+    contextUsed: claude?.status?.contextUsed ?? live.projection.terminalStatus?.contextUsed,
+    lines: claude?.status?.lines.length ? claude.status.lines : live.projection.terminalStatus?.lines.length ? live.projection.terminalStatus.lines : [claude?.cwd || session.cwd],
+  } : live.projection.terminalStatus;
   const hasContent = Boolean(draft.trim() || images.items.length);
   const preparingImages = images.preparing || (imageEnabled && !images.loaded);
   const messageKeys = useRef(new Map<string, string>());
-  const knownImages = useMemo(() => [...new Map([...images.known, ...(queue.snapshot?.messages.flatMap(item => item.attachments || []) || [])].map(image => [image.id, image])).values()], [images.known, queue.snapshot]);
+  const visiblePending = useMemo(() => remainingPrompts(pending, { ...transcript, messages: conversationMessages }), [pending, transcript, conversationMessages]);
   const timeline = useMemo(() => {
-    const visiblePending = structured ? remainingPrompts(pending, { ...transcript, messages: conversationMessages }) : pending;
     const messages = [...conversationMessages, ...visiblePending.map(prompt => ({ id: `pending-${prompt.id}`, role: 'user' as const, content: prompt.text }))];
     const projection = structured ? { ...live.projection, events: [] } : live.projection;
     return mergeConversationTimeline(imageProjection(projection, messages.filter(message => message.role === 'user').map(message => message.content), knownImages), messages, messageKeys.current);
-  }, [structured, live.projection, transcript, conversationMessages, pending, knownImages]);
+  }, [structured, live.projection, conversationMessages, visiblePending, knownImages]);
   const displayTimeline = useMemo(() => groupConversation(timeline), [timeline]);
   const lastSpoken = conversationMessages.reduce((last, message, index) => message.role === 'user' || message.role === 'assistant' ? index : last, -1);
-  const activeTools = new Set(conversationMessages.slice(lastSpoken + 1).map(message => message.id));
+  const activeTools = new Set((structured ? conversationMessages.filter(message => message.toolStatus === 'running') : conversationMessages.slice(lastSpoken + 1)).map(message => message.id));
   const question = session.running && live.stream !== 'ended' ? live.projection.question : null;
   const nativeActivity = queue.snapshot && queue.snapshot.activity.revision >= (session.activity?.revision ?? 0) ? queue.snapshot.activity : session.activity;
   const observedPhase = claude && nativeActivity?.state === 'waiting' ? 'waiting' : nativeStream?.available && nativeStream.activity ? nativeStream.activity : nativeActivity?.source === 'unknown' ? live.projection.activity || nativeActivity.state : nativeActivity?.state || live.projection.activity || 'unknown';
   const phase = question ? 'waiting' : !session.running || live.stream === 'ended' ? 'ended' : session.paused ? 'paused' : observedPhase;
   const working = phase === 'working';
+  const progress = visiblePending.length && !working ? '等待终端响应' : conversationMessages.some(message => message.role === 'reasoning' && activeTools.has(message.id)) ? '正在思考' : conversationMessages.some(message => message.role === 'tool' && activeTools.has(message.id)) ? '正在调用工具' : '正在生成';
   const phaseLabel = { working: '正在生成', waiting: '等待回答', idle: '就绪', paused: '已暂停', ended: '已结束', failed: '本轮已停止', unknown: '状态同步中' }[phase];
   const scroll = useRef<HTMLDivElement>(null);
   const timelineElement = useRef<HTMLDivElement>(null);
@@ -210,7 +216,7 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
       else await client.prompt(session.id, text);
       setDraft(value => value === text ? '' : value);
       if (selected.length) images.clear(selected);
-      updatePending(remainingPrompts([...pendingRef.current, { id: nextPrompt.current++, text: imagePrompt(text, uploaded), seen }], transcriptRef.current));
+      updatePending(remainingPrompts([...pendingRef.current, { id: nextPrompt.current++, text: imagePrompt(text, uploaded), images: uploaded, seen }], transcriptRef.current));
       follow(true); poll.current();
     } catch (cause) { setError(uploading || (cause instanceof Error && cause.message.startsWith('IMAGE_')) ? imageError(cause) : `${errorMessage(cause)} 草稿已保留，请查看最新消息后再决定是否重发。`); }
     finally { setSending(false); }
@@ -249,8 +255,9 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
           const message = role === 'user' ? imageMessage(text, knownImages) : null;
           const previous = displayTimeline[index - 1];
           const start = !previous || (previous.source === 'message' ? previous.message.role === 'user' : previous.source === 'projection' && previous.event.kind === 'user');
-          return <article className={`chat-message ${role}`} key={key}>{message ? <div className="user-bubble">{message.text}<MessageImages client={client} session={session.id} images={message.images} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}{sent && <small>已发送</small>}</div> : <>{start && <div className="assistant-label"><Sparkles size={14} /><span>{toolName}</span></div>}<ConversationMarkdown text={text} terminal={row.source === 'projection' && row.event.terminal} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}</>}</article>;
+          return <article className={`chat-message ${role}`} key={key}>{message ? <div className="user-bubble">{message.text}<MessageImages client={client} session={session.id} images={message.images} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}{sent && <small>等待终端确认</small>}</div> : <>{start && <div className="assistant-label"><Sparkles size={14} /><span>{toolName}</span></div>}<ConversationMarkdown text={text} terminal={row.source === 'projection' && row.event.terminal} />{row.source === 'message' && <ConversationAttachments items={row.message.attachments} />}</>}</article>;
         })}
+        {online && session.running && !session.paused && !question && (working || visiblePending.length > 0) && <div className="conversation-progress" role="status" aria-label="生成状态"><span className="progress-dots" aria-hidden="true"><i /><i /><i /></span><span>{progress}</span></div>}
         {online && live.stream === 'reconnecting' && <p className="conversation-sync" role="status">正在恢复会话同步…</p>}
       </div>
     </div>
@@ -262,7 +269,7 @@ export function ChatView({ client, session, online, toolName, onTitle, insert, o
       {queueEnabled && <MessageQueue messages={queue.snapshot?.messages || []} disabled={!online || queue.busy} canSend={!question && !working && phase !== 'waiting' && !session.paused && session.running} held={Boolean(queue.snapshot?.held)} onAction={queueAction} />}
       {question && <ConversationQuestion key={question.id} question={question} disabled={!online || live.stream !== 'live' || live.canAnswer === false || session.paused} unsupported={live.answerUnsupported || (question.kind === 'text' && !capabilities.includes('answer_text')) || (question.kind === 'multi' && !capabilities.includes('answer_multiselect'))} answering={live.answering} answered={live.answered === question.id} disconnected={!online || live.stream !== 'live'} onAnswer={async value => { setError(''); try { await live.answer(question.id, value); } catch (cause) { setError(errorMessage(cause)); throw cause; } }} />}
       </div><div className="chat-compose">
-      {terminalStatus && <ConversationStatus status={terminalStatus} cwd={codex?.cwd || claude?.cwd || session.cwd} />}
+      {terminalStatus && <ConversationStatus status={terminalStatus} cwd={codex?.cwd || claude?.cwd || session.cwd} title={read?.title || title} />}
       {images.items.length > 0 && <DraftImages items={images.items} disabled={sending || images.preparing} onRemove={images.remove} />}
       {(images.progress || images.preparing) && <div className="image-upload-status" role="status"><span>{images.progress || '正在处理图片…'}</span>{images.progress && <button onClick={images.cancel}>取消上传</button>}</div>}
       {images.notice && images.items.length > 0 && <p className="image-draft-notice">{images.notice}</p>}

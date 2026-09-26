@@ -24,7 +24,7 @@ function itemMessages(raw: Row): ChatMessage[] {
   }]));
   if (type === 'sleep') { item.type = 'Extension'; item.kind = 'clock.sleep'; item.durationMs = raw.durationMs; }
   const messages = updateChatTranscript(JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item } })).messages;
-  return messages;
+  return messages.map(message => message.role === 'reasoning' ? { ...message, toolStatus: raw.status === 'inProgress' ? 'running' : 'done' } : message);
 }
 
 /** Ordered, idempotent v2 event reducer. Completed items replace streamed
@@ -75,7 +75,7 @@ export class CodexEventStream {
         if (object(params.item)) {
           // File/command completion can omit an output already streamed.
           const old = this.items.get(String(params.item.id));
-          put({ ...old, ...params.item, ...(params.item.aggregatedOutput == null && old?.aggregatedOutput ? { aggregatedOutput: old.aggregatedOutput } : {}) });
+          put({ ...old, ...params.item, status: params.item.status || (method === 'item/started' ? 'inProgress' : 'completed'), ...(params.item.aggregatedOutput == null && old?.aggregatedOutput ? { aggregatedOutput: old.aggregatedOutput } : {}) });
         }
       } else if (typeof method === 'string' && /\/(?:delta|outputDelta|summaryTextDelta|summaryPartAdded)$/.test(method)) {
         const id = String(params.itemId || ''); if (!id) continue;
@@ -129,13 +129,13 @@ function threadActivity(status: unknown): ActivityPhase {
 
 /** Preserve native history and replace matching current items with the live
  * authoritative Markdown, retaining the live ID across the disk handoff. */
-export function mergeCodexMessages(native: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
+export function mergeCodexMessages(native: ChatMessage[], live: ChatMessage[], samePrompt = (a: string, b: string) => a === b): ChatMessage[] {
   const result: ChatMessage[] = []; let anchor = 0;
   let pending: ChatMessage[] = [];
   for (const message of live) {
     let index = native.findIndex((item, i) => i >= anchor && item.id === message.id);
     if (index < 0 && message.content.trim()) {
-      const matches = native.flatMap((item, i) => i >= anchor && item.role === message.role && item.toolName === message.toolName && item.content === message.content ? [i] : []);
+      const matches = native.flatMap((item, i) => i >= anchor && item.role === message.role && item.toolName === message.toolName && (message.role === 'user' ? samePrompt(item.content, message.content) : item.content === message.content) ? [i] : []);
       if (matches.length === 1) index = matches[0];
     }
     // Disk can flush a final response before its last websocket page arrives.

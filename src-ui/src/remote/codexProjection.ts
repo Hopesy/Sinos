@@ -47,10 +47,16 @@ export function projectCodex(lines: string[], rich: string[], cursor: number, re
   });
   // Footer hints replace the status line while typing/working. Extract only
   // the composer area, never a quoted model/context example in the answer.
-  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 12); i--) {
-    if (!/^›(?:\s|$)/.test(lines[i]) || cursor < i) continue;
+  const lastContent = lines.findLastIndex(line => line.trim());
+  for (let i = lastContent; i >= Math.max(0, lastContent - 12); i--) {
+    if (!/^›(?:\s|$)/.test(lines[i])) continue;
+    if (/^›\s+[1-9][.)]\s/.test(lines[i])) continue;
     const tail = lines.slice(i + 1).filter(line => line.trim());
-    if (!tail.length || !tail.every(line => /^\s{2,}/.test(line) && /(?:context.*\d+%|\d+%.*context|\? for shortcuts|esc to|tab to|gpt-|o[134](?:\b|[-.])|codex|shift\+|ctrl\+| · )/i.test(line))) continue;
+    const footer = tail.every(line => /^\s{2,}/.test(line) && /^(?:context.*\d+%|\d+%.*context|\? for shortcuts|esc to|tab to|gpt-|o[134](?:\b|[-.])|codex|shift\+|ctrl\+)| · /i.test(line.trim()));
+    // Startup draws the placeholder before its footer/cursor-position frame.
+    // It is input chrome, including while the model is still loading.
+    const placeholder = /^›\s*Ask Codex to do anything\s*$/i.test(lines[i]);
+    if (!footer || (!placeholder && cursor < i) || (!tail.length && cursor !== i && !placeholder)) continue;
     for (let j = i; j < lines.length; j++) hidden.add(j);
     const text = tail.find(line => /(?:context.*\d+%|\d+%.*context|gpt-|codex| · )/i.test(line))?.trim();
     if (text) {
@@ -76,6 +82,8 @@ export function projectCodex(lines: string[], rich: string[], cursor: number, re
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (hidden.has(i)) { flush(); continue; }
+    // Dim startup hints are colored text, not syntax-highlighted source code.
+    if (!inMessage && /^\s*Tip:\s/.test(line)) { flush(); continue; }
     if (renderedCode.has(i) && (kind === 'assistant' || /^• /.test(line))) {
       if (/^• /.test(line)) { flush(); start = i; kind = 'assistant'; }
       if (!code) { content.push('', fence); code = true; }

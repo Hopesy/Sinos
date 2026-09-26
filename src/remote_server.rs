@@ -614,31 +614,31 @@ async fn prompt(
     let Ok(text) = crate::remote_runtime::image_prompt_text(&request.data, !request.attachments.is_empty()) else { return StatusCode::BAD_REQUEST.into_response(); };
     let handles = state.sessions.lock().ok().and_then(|map| map.get(&id).map(|s| (s.mobile_runtime.clone(), s.writer_lock.clone(), s.paused.clone(), s.tool_name.clone())));
     let Some((runtime, writer, paused, tool)) = handles else { return StatusCode::NOT_FOUND.into_response(); };
-    let Ok(mut runtime) = runtime.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
-    if !request.attachments.is_empty() && !image_tool(tool.as_deref()) { return image_error("IMAGE_UNSUPPORTED"); }
-    // Uploading may take long enough for another client to start a turn.
-    // Do not paste an image prompt into an active turn or permission menu.
-    if !request.attachments.is_empty() && matches!(runtime.activity.state, crate::remote_runtime::Activity::Working | crate::remote_runtime::Activity::Waiting) { return (StatusCode::CONFLICT, "SESSION_BUSY").into_response(); }
-    let attachments = match runtime.images.metadata(&request.attachments) { Ok(value) => value, Err(error) => return image_error(error) };
-    let text = crate::remote_images::ImageStore::prompt(&text, &attachments);
-    let data = format!("\x1b[200~{text}\x1b[201~\r");
-    if paused.load(std::sync::atomic::Ordering::Relaxed) { return (StatusCode::CONFLICT, "SESSION_BUSY").into_response(); }
-    // Retain even on an uncertain partial write: the CLI may already refer
-    // to the file. Removing the composer preview cannot invalidate it.
-    runtime.images.retain(&attachments);
-    runtime.submitted();
-    use std::io::Write;
-    let result = writer.lock().map_err(|_| ()).and_then(|mut writer| writer.write_all(data.as_bytes()).and_then(|_| writer.flush()).map_err(|_| ()));
-    match result {
-        Ok(()) => {
-            let _ = state.app.emit(
-                "mobile-chat-prompt",
-                serde_json::json!({"sessionId":id, "text":text}),
-            );
-            StatusCode::NO_CONTENT.into_response()
+    tokio::task::spawn_blocking(move || {
+        let Ok(mut runtime) = runtime.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
+        if !request.attachments.is_empty() && !image_tool(tool.as_deref()) { return image_error("IMAGE_UNSUPPORTED"); }
+        // Uploading may take long enough for another client to start a turn.
+        // Do not paste an image prompt into an active turn or permission menu.
+        if !request.attachments.is_empty() && matches!(runtime.activity.state, crate::remote_runtime::Activity::Working | crate::remote_runtime::Activity::Waiting) { return (StatusCode::CONFLICT, "SESSION_BUSY").into_response(); }
+        let attachments = match runtime.images.metadata(&request.attachments) { Ok(value) => value, Err(error) => return image_error(error) };
+        let text = crate::remote_images::ImageStore::prompt(&text, &attachments);
+        if paused.load(std::sync::atomic::Ordering::Relaxed) { return (StatusCode::CONFLICT, "SESSION_BUSY").into_response(); }
+        // Retain even on an uncertain partial write: the CLI may already refer
+        // to the file. Removing the composer preview cannot invalidate it.
+        runtime.images.retain(&attachments);
+        runtime.submitted();
+        let result = writer.lock().map_err(|_| ()).and_then(|mut writer| crate::remote_input::paste_and_submit(writer.as_mut(), &text).map_err(|_| ()));
+        match result {
+            Ok(()) => {
+                let _ = state.app.emit(
+                    "mobile-chat-prompt",
+                    serde_json::json!({"sessionId":id, "text":text}),
+                );
+                StatusCode::NO_CONTENT.into_response()
+            }
+            Err(_) => { runtime.interrupted(); StatusCode::INTERNAL_SERVER_ERROR.into_response() },
         }
-        Err(_) => { runtime.interrupted(); StatusCode::INTERNAL_SERVER_ERROR.into_response() },
-    }
+    }).await.unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn image_tool(tool: Option<&str>) -> bool { matches!(tool, Some("claude" | "codex")) }
@@ -676,36 +676,36 @@ async fn queue_action(State(state): State<RemoteState>, Path(id): Path<String>, 
     if !authorized(&state, &headers, query.token.as_deref()) { return StatusCode::UNAUTHORIZED.into_response(); }
     let handles = state.sessions.lock().ok().and_then(|map| map.get(&id).map(|s| (s.mobile_runtime.clone(), s.writer_lock.clone(), s.paused.clone())));
     let Some((runtime, writer, paused)) = handles else { return StatusCode::NOT_FOUND.into_response(); };
-    let Ok(mut runtime) = runtime.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
-    runtime.watching_until = std::time::Instant::now() + Duration::from_secs(15);
-    let result = match request.action.as_str() {
-        "enqueue" => runtime.enqueue(&request),
-        "edit" | "remove" | "hold" | "release" => runtime.mutate(&request),
-        "send" => {
-            if paused.load(std::sync::atomic::Ordering::Relaxed) || matches!(runtime.activity.state, crate::remote_runtime::Activity::Working | crate::remote_runtime::Activity::Waiting) { Err("SESSION_BUSY") }
-            else {
-                match runtime.claim(Some(&request.id), request.expected_revision) {
-                    Ok(item) => deliver_queued(&state.app, &id, &writer, &mut runtime, item),
-                    Err(error) => Err(error),
+    tokio::task::spawn_blocking(move || {
+        let Ok(mut runtime) = runtime.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
+        runtime.watching_until = std::time::Instant::now() + Duration::from_secs(15);
+        let result = match request.action.as_str() {
+            "enqueue" => runtime.enqueue(&request),
+            "edit" | "remove" | "hold" | "release" => runtime.mutate(&request),
+            "send" => {
+                if paused.load(std::sync::atomic::Ordering::Relaxed) || matches!(runtime.activity.state, crate::remote_runtime::Activity::Working | crate::remote_runtime::Activity::Waiting) { Err("SESSION_BUSY") }
+                else {
+                    match runtime.claim(Some(&request.id), request.expected_revision) {
+                        Ok(item) => deliver_queued(&state.app, &id, &writer, &mut runtime, item),
+                        Err(error) => Err(error),
+                    }
                 }
             }
+            _ => Err("INVALID_ACTION"),
+        };
+        match result {
+            Ok(()) => Json(serde_json::json!({"messages":runtime.queue,"activity":runtime.activity,"held":runtime.held()})).into_response(),
+            Err(error) => (if matches!(error, "QUEUE_CONFLICT" | "SESSION_BUSY" | "DELIVERY_UNCERTAIN" | "MESSAGE_NOT_FOUND") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST }, error).into_response(),
         }
-        _ => Err("INVALID_ACTION"),
-    };
-    match result {
-        Ok(()) => Json(serde_json::json!({"messages":runtime.queue,"activity":runtime.activity,"held":runtime.held()})).into_response(),
-        Err(error) => (if matches!(error, "QUEUE_CONFLICT" | "SESSION_BUSY" | "DELIVERY_UNCERTAIN" | "MESSAGE_NOT_FOUND") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST }, error).into_response(),
-    }
+    }).await.unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn deliver_queued(app: &AppHandle, id: &str, writer: &Mutex<Box<dyn std::io::Write + Send>>, runtime: &mut crate::remote_runtime::Runtime, item: crate::remote_runtime::QueuedPrompt) -> Result<(), &'static str> {
-    use std::io::Write;
     let ids: Vec<_> = item.attachments.iter().map(|image| image.id.clone()).collect();
     let attachments = match runtime.images.metadata(&ids) { Ok(value) => value, Err(_) => { runtime.delivery_failed(item); return Err("DELIVERY_UNCERTAIN"); } };
     let text = crate::remote_images::ImageStore::prompt(&item.text, &attachments);
     runtime.images.retain(&attachments);
-    let data = format!("\x1b[200~{text}\x1b[201~\r");
-    let result = writer.lock().map_err(|_| ()).and_then(|mut writer| writer.write_all(data.as_bytes()).and_then(|_| writer.flush()).map_err(|_| ()));
+    let result = writer.lock().map_err(|_| ()).and_then(|mut writer| crate::remote_input::paste_and_submit(writer.as_mut(), &text).map_err(|_| ()));
     if result.is_err() { runtime.delivery_failed(item); return Err("DELIVERY_UNCERTAIN"); }
     let _ = app.emit("mobile-chat-prompt", serde_json::json!({"sessionId":id,"text":text}));
     Ok(())
@@ -776,40 +776,45 @@ async fn answer(
         session.answered_output_sequence.clone(),
     )));
     let Some((writer, buffer, sequence, paused, answered)) = handles else { return StatusCode::NOT_FOUND.into_response(); };
-    let Ok(_snapshot_guard) = buffer.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
-    match write_answer(&writer, &sequence, &paused, &answered, &request) {
+    tokio::task::spawn_blocking(move || match write_answer(&writer, &buffer, &sequence, &paused, &answered, &request) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err("STALE_INTERACTION") => (StatusCode::CONFLICT, "STALE_INTERACTION").into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    }).await.unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn prepare_answer(request: &mut AnswerRequest) -> bool {
     if request.kind.as_deref() == Some("text") {
         if request.data.len() > 16_384 || request.data.chars().any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')) { return false; }
         let Ok(text) = crate::remote_runtime::clean_prompt(&request.data) else { return false; };
-        request.data = format!("\x1b[200~{text}\x1b[201~\r");
+        request.data = text;
         true
     } else { request.kind.is_none() && valid_answer_keys(&request.data) }
 }
 
-/// Caller holds the output buffer lock, so the snapshot cannot advance while
-/// its choice is claimed. No implicit retry after a partially written answer.
+/// Claim the observed screen exactly once. Release the output snapshot lock
+/// before paste processing, while retaining exclusive ownership of the writer.
 fn write_answer(
     writer: &Mutex<Box<dyn std::io::Write + Send>>,
+    buffer: &Mutex<Vec<String>>,
     sequence: &std::sync::atomic::AtomicU64,
     paused: &std::sync::atomic::AtomicBool,
     answered: &std::sync::atomic::AtomicU64,
     request: &AnswerRequest,
 ) -> Result<(), &'static str> {
     use std::sync::atomic::Ordering;
+    let snapshot = buffer.lock().map_err(|_| "WRITE_FAILED")?;
+    let mut writer = writer.lock().map_err(|_| "WRITE_FAILED")?;
     if sequence.load(Ordering::Relaxed) != request.expected_output || answered.load(Ordering::Relaxed) == request.expected_output || paused.load(Ordering::Relaxed) {
         return Err("STALE_INTERACTION");
     }
-    use std::io::Write;
-    let mut writer = writer.lock().map_err(|_| "WRITE_FAILED")?;
     answered.store(request.expected_output, Ordering::Relaxed);
-    writer.write_all(request.data.as_bytes()).and_then(|_| writer.flush()).map_err(|_| "WRITE_FAILED")
+    drop(snapshot);
+    if request.kind.as_deref() == Some("text") {
+        crate::remote_input::paste_and_submit(writer.as_mut(), &request.data).map_err(|_| "WRITE_FAILED")
+    } else {
+        writer.write_all(request.data.as_bytes()).and_then(|_| writer.flush()).map_err(|_| "WRITE_FAILED")
+    }
 }
 
 fn valid_answer_keys(data: &str) -> bool {
@@ -1243,15 +1248,15 @@ mod conversation_tests {
         let paused = AtomicBool::new(false);
         let answered = AtomicU64::new(u64::MAX);
         let mut request = AnswerRequest { data: "\x1b[B\r".into(), expected_output: 41, kind: None };
-        assert_eq!(write_answer(&writer, &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert!(bytes.lock().unwrap().is_empty());
         request.expected_output = 42;
-        assert!(write_answer(&writer, &sequence, &paused, &answered, &request).is_ok());
-        assert_eq!(write_answer(&writer, &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request).is_ok());
+        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert_eq!(*bytes.lock().unwrap(), b"\x1b[B\r");
         sequence.store(43, Ordering::Relaxed); request.expected_output = 43;
         paused.store(true, Ordering::Relaxed);
-        assert_eq!(write_answer(&writer, &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert_eq!(*bytes.lock().unwrap(), b"\x1b[B\r");
     }
     #[test]
@@ -1266,9 +1271,9 @@ mod conversation_tests {
         let sequence = AtomicU64::new(8); let paused = AtomicBool::new(false); let answered = AtomicU64::new(u64::MAX);
         let mut request = AnswerRequest { data: "使用浅色\n增加留白".into(), expected_output: 8, kind: Some("text".into()) };
         assert!(prepare_answer(&mut request));
-        assert!(write_answer(&writer, &sequence, &paused, &answered, &request).is_ok());
+        assert!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request).is_ok());
         assert_eq!(*bytes.lock().unwrap(), "\x1b[200~使用浅色\n增加留白\x1b[201~\r".as_bytes());
-        assert_eq!(write_answer(&writer, &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         for value in [" ", "text\x03", "\x1b[201~escape", &"x".repeat(16_385)] {
             assert!(!prepare_answer(&mut AnswerRequest { data: value.into(), expected_output: 8, kind: Some("text".into()) }));
         }

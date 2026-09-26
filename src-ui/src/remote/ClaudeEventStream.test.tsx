@@ -9,6 +9,17 @@ import type { ChatMessage } from '../lib/chat-transcript';
 const page = (events: Record<string, unknown>[], start = 0, overrides = {}): CodexPage => ({ epoch: 'epoch', cursor: start + events.length, reset: start === 0, online: true, complete: true, has_more: false, thread_id: 'session', events: events.map((message, i) => ({ sequence: start + i + 1, message })), ...overrides });
 const begin = [{ kind: 'session', session: 'session', model: 'Opus', cwd: '/work' }, { kind: 'start', turn: 'turn', text: 'hello' }];
 const delta = (text: string, index = 0) => ({ kind: 'text', turn: 'turn', step: 0, index, text });
+
+it('streams visible thinking with stable identity, closes it at the step boundary and avoids a native duplicate', () => {
+  const stream = new ClaudeEventStream();
+  const first = stream.apply(page([...begin, { kind: 'thinking', turn: 'turn', step: 0, index: 0, text: '**Checking** ' }]));
+  const thinking = first.turns[0].messages[0];
+  expect(thinking).toMatchObject({ role: 'reasoning', content: '**Checking** ', toolStatus: 'running' });
+  const next = stream.apply(page([{ kind: 'thinking', turn: 'turn', step: 0, index: 0, text: 'the fixture.' }, { kind: 'step', turn: 'turn', step: 0 }], 3));
+  expect(next.turns[0].messages[0]).toMatchObject({ id: thinking.id, content: '**Checking** the fixture.', toolStatus: 'done' });
+  const merged = mergeClaudeMessages([{ id: 'user', role: 'user', content: 'hello' }, { id: 'native-thinking', role: 'reasoning', content: '**Checking** the fixture.' }], next.turns);
+  expect(merged.filter(message => message.role === 'reasoning')).toHaveLength(1);
+});
 it('renders original lists/emphasis before the turn finishes, with immutable snapshots and stable IDs', () => {
   const stream = new ClaudeEventStream();
   const first = stream.apply(page([...begin, delta('1. **First**\n')]));
@@ -42,7 +53,7 @@ it('keeps text blocks separate from incremental tool arguments and completes onl
 it('retains the footer through text-only frames, and resets it for a different session', () => {
   const stream = new ClaudeEventStream();
   stream.apply(page([{ ...begin[0], percent: 17 }, begin[1]]));
-  expect(stream.apply(page([delta('hello')], 2)).status).toEqual({ model: 'Opus', lines: ['上下文已用 17%'] });
+  expect(stream.apply(page([delta('hello')], 2)).status).toEqual({ model: 'Opus', lines: [], contextUsed: 17 });
   const cleared = stream.apply(page([{ kind: 'session', session: 'new', model: 'Sonnet' }], 0, { epoch: 'new', thread_id: 'new' }));
   expect(cleared.turns).toEqual([]); expect(cleared.status?.model).toBe('Sonnet');
 });

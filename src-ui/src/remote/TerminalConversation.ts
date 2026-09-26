@@ -61,12 +61,18 @@ export class TerminalConversation {
       if (!line) continue;
       const text = line.translateToString(!buffer.getLine(y + 1)?.isWrapped);
       const previous = buffer.getLine(y - 1);
-      const filled = (column: number) => { const cell = previous?.getCell(column); return Boolean(cell && (cell.getChars() || cell.getWidth() === 0)); };
+      const filled = (column: number) => { const cell = previous?.getCell(column); return Boolean(cell && (cell.getChars().trim() || cell.getWidth() === 0)); };
       // Erase-to-end during an Ink repaint leaves isWrapped on the following
       // row. A short, erased predecessor is no longer a wrapped paragraph.
       // A wide character may legitimately wrap with one unused cell left.
-      const wideGap = line.isWrapped && !filled(this.terminal.cols - 1) && filled(this.terminal.cols - 2) && line.getCell(0)?.getWidth() === 2;
-      const wrapped = line.isWrapped && (!['claude', 'codex'].includes(this.tool || '') || filled(this.terminal.cols - 1) || wideGap);
+      const edge = previous?.getCell(this.terminal.cols - 1);
+      const beforeEdge = filled(this.terminal.cols - 2) || (previous?.getCell(this.terminal.cols - 2)?.getChars() === ' ' && filled(this.terminal.cols - 3));
+      const wideGap = line.isWrapped && edge?.getWidth() === 1 && !edge.getChars() && beforeEdge && line.getCell(0)?.getWidth() === 2;
+      // ConPTY repaint pads erased rows with actual space cells, and can leave
+      // isWrapped on the next row. Those spaces do not establish a soft wrap.
+      // Retain a real word boundary at the edge (one trailing space), though.
+      const wordGap = line.isWrapped && previous?.getCell(this.terminal.cols - 1)?.getChars() === ' ' && filled(this.terminal.cols - 2);
+      const wrapped = line.isWrapped && (!['claude', 'codex'].includes(this.tool || '') || filled(this.terminal.cols - 1) || wideGap || wordGap);
       let rich = text;
       // Syntax-highlighted code in Codex has an explicit foreground on every
       // content cell. Prose has default foreground; links are underlined.
@@ -98,7 +104,8 @@ export class TerminalConversation {
           if (next !== marker) { flush(); marker = next; }
           run += cell.getChars() || ' ';
         }
-        flush(); rich = rich.trimEnd();
+        flush();
+        if (!buffer.getLine(y + 1)?.isWrapped) rich = rich.trimEnd();
       }
       const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(text)?.[1];
       const rule: boolean = this.tool === 'claude' && !fence && (isTerminalRule(text) || (previousRule && wrapped && /^[\s─━═┄┈]+$/.test(text) && /[─━═┄┈]/.test(text)));
@@ -108,7 +115,15 @@ export class TerminalConversation {
         if (wideGap) richLines[richLines.length - 1] = richLines[richLines.length - 1].slice(0, -1);
         richLines[richLines.length - 1] += rich;
       }
-      else { lines.push(text); richLines.push(rich); }
+      else {
+        // Once the next row proves that a wrap flag was stale, discard the
+        // predecessor's repaint padding without touching real soft wraps.
+        if (lines.length) {
+          lines[lines.length - 1] = lines[lines.length - 1].trimEnd();
+          richLines[richLines.length - 1] = richLines[richLines.length - 1].trimEnd();
+        }
+        lines.push(text); richLines.push(rich);
+      }
       if (code) codeRows.add(lines.length - 1);
       previousRule = rule;
       if (marker && !wrapped) {

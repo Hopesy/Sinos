@@ -52,11 +52,14 @@ html { font-size: 15px; }
 .text-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; background:none; border:0; color:var(--m-muted) !important; font-size:12px; padding:5px 8px; }
 .chat-compose-wrap { flex-shrink:0; display:flex; flex-direction:column; min-height:0; max-height:calc(100% - 40px); padding:0 12px max(7px,var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 .chat-interactions { flex:0 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--m-border) transparent; }.chat-interactions:empty { display:none; }
-.conversation-status { max-width:736px; margin:0 auto 6px; color:var(--m-muted); font-size:11px; }
-.conversation-status summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:4px 8px; cursor:pointer; list-style:none; }
-.conversation-status summary::-webkit-details-marker { display:none; }.conversation-status summary strong { flex-shrink:0; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color:var(--m-text); }
-.conversation-status summary > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.conversation-status summary svg { flex-shrink:0; }.conversation-status[open] summary svg { transform:rotate(180deg); }
-.conversation-status-details { max-height:130px; overflow:auto; padding:0 8px 8px; line-height:1.6; overflow-wrap:anywhere; }.conversation-status-details p { margin:4px 0; }.conversation-status-details p > span { margin-right:8px; }.conversation-status-details code { font:inherit; }
+.conversation-status { display:flex; flex-wrap:wrap; align-items:center; column-gap:10px; row-gap:3px; max-width:736px; margin:0 auto 6px; padding:4px 2px; color:var(--m-muted); font-size:11px; line-height:1.5; }
+.conversation-status-context,.conversation-status-session { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; flex:1 1 auto; }
+.status-model { flex:0 1 auto; max-width:60%; padding:3px 7px; border-radius:6px; background:var(--m-raised); font-weight:500; color:var(--m-text); }
+.status-directory { flex:1 1 auto; max-width:24ch; font:inherit; }
+.status-title { flex:1 1 auto; max-width:40ch; }
+.status-model,.status-directory,.status-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-status-session .context-ring { flex:0 0 22px; margin-left:auto; }
+.context-ring { color:var(--m-accent); }.context-ring.is-full { color:#d99a55; }.context-ring-track { stroke:var(--m-muted); opacity:.22; }.context-ring-value { stroke:currentColor; transition:stroke-dasharray .25s ease; }
 .chat-compose-wrap > .chat-compose { flex-shrink:0; width:100%; }.chat-compose-wrap > .composer-caption { flex-shrink:0; }
 .chat-compose { max-width:736px; margin:auto; border:1px solid var(--m-border); border-radius:16px; background:var(--m-surface); padding:12px 12px 6px; transition:border-color .15s; }.chat-compose:focus-within { border-color:var(--m-subtle); }
 .chat-compose textarea { display:block; resize:none; width:100%; min-height:54px; max-height:180px; padding:1px 3px; font-size:16px; line-height:1.6; border:0; outline:none; background:none; color:var(--m-text); }.chat-compose textarea::placeholder { color:var(--m-subtle); }

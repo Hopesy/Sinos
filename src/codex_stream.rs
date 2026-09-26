@@ -25,6 +25,10 @@ const PAGE_BYTES: usize = 196_608;
 const ITEM_BYTES: usize = 160_000;
 pub const AUTH_ENV: &str = "SINOS_CODEX_BRIDGE_TOKEN";
 
+#[cfg(test)]
+#[path = "codex_stream_real_tests.rs"]
+mod real_tests;
+
 #[derive(Clone, Serialize)]
 pub struct Event {
     pub sequence: u64,
@@ -132,6 +136,16 @@ impl Journal {
     }
     fn client(&mut self, connection: u64, message: &Value) {
         let method = message["method"].as_str().unwrap_or("");
+        // The TUI also creates hidden threads on this very same connection
+        // (titles, review helpers, etc.). Their successful start responses are
+        // not a navigation action. Binding to them hides the user's real turn
+        // and can expose internal metadata prompts as chat messages.
+        let params = &message["params"];
+        if params["threadSource"].as_str().is_some_and(|source| source != "user")
+            || (params["threadSource"].is_null() && params["ephemeral"] == true && self.root.is_some())
+        {
+            return;
+        }
         if matches!(method, "thread/start" | "thread/resume" | "thread/fork")
             && !message["id"].is_null()
         {
@@ -272,6 +286,9 @@ fn sanitize(message: &mut Value) {
     let Some(params) = message.get_mut("params") else {
         return;
     };
+    if let Some(settings) = params.get_mut("threadSettings").and_then(Value::as_object_mut) {
+        settings.retain(|key, _| matches!(key.as_str(), "model" | "effort" | "cwd"));
+    }
     if let Some(value) = params.get_mut("item") {
         item(value);
     }
@@ -660,6 +677,10 @@ mod tests {
     #[test]
     fn filters_private_data_and_foreign_threads_including_bootstrap() {
         let mut j = bound();
+        j.server(1, &event("thread/settings/updated", json!({"threadSettings":{
+            "model":"visible-model", "cwd":"/work", "effort":"high",
+            "developerInstructions":"internal", "baseInstructions":"private"
+        }})));
         assert!(j
             .server(
                 1,
@@ -692,6 +713,7 @@ mod tests {
             assert!(!text.contains(excluded));
         }
         assert!(text.contains("public"));
+        assert!(text.contains("visible-model"));
     }
     #[test]
     fn pages_are_ordered_replayable_and_thread_switch_resets() {
@@ -783,6 +805,22 @@ mod tests {
         );
         assert_eq!(j.thread_id().as_deref(), Some("root"));
         assert_eq!(j.events.len(), 1);
+    }
+    #[test]
+    fn hidden_threads_on_the_tui_connection_never_replace_the_user_thread() {
+        let mut j = bound();
+        let epoch = j.epoch.clone();
+        for (id, source) in [(10, "feature:thread_title"), (11, "subagent"), (12, "guardian_review")] {
+            j.client(1, &json!({"id":id,"method":"thread/start","params":{"threadSource":source,"ephemeral":true}}));
+            j.server(1, &json!({"id":id,"result":{"thread":{"id":"hidden"}}}));
+            j.server(1, &json!({"method":"item/agentMessage/delta","params":{"threadId":"hidden","itemId":"internal","delta":"hidden title"}}));
+        }
+        assert_eq!(j.thread_id().as_deref(), Some("root"));
+        assert_eq!(j.epoch, epoch);
+        assert_eq!(j.events.len(), 1);
+        j.client(1, &json!({"id":20,"method":"thread/start","params":{"threadSource":"user","ephemeral":true}}));
+        j.server(1, &json!({"id":20,"result":{"thread":{"id":"new-user-thread"}}}));
+        assert_eq!(j.thread_id().as_deref(), Some("new-user-thread"));
     }
     #[test]
     fn helper_connections_cannot_duplicate_events_or_claim_another_connections_rpc() {

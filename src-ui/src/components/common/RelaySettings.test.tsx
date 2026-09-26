@@ -20,6 +20,12 @@ it('tests the entered relay without creating an invitation, and clears stale res
   render(<RelaySettings />);
   const input = screen.getByLabelText('Cloudflare 中继地址');
   await waitFor(() => expect((input as HTMLInputElement).value).toBe(relayUrl));
+  expect(input.getAttribute('type')).toBe('password');
+  fireEvent.click(screen.getByRole('button', { name: '显示中继地址' }));
+  expect(input.getAttribute('type')).toBe('url');
+  fireEvent.click(screen.getByRole('button', { name: '隐藏中继地址' }));
+  expect(input.getAttribute('type')).toBe('password');
+  expect(screen.getByRole('button', { name: '测试连接' }).textContent).toBe('');
   fireEvent.change(input, { target: { value: 'https://custom.example' } });
   fireEvent.click(screen.getByRole('button', { name: '测试连接' }));
   await screen.findByText('中继服务可达 · 125 ms');

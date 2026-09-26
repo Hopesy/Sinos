@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { IMAGE_CHUNK, imageMessage, imagePrompt, imageProjection, prepareImage, uploadImage } from './images';
+import { IMAGE_CHUNK, imageMessage, imagePrompt, imageProjection, prepareImage, sameImagePrompt, uploadImage } from './images';
 import { mergeConversationTimeline, projectConversation } from './conversationProjection';
 import { RemoteClient, RemoteError } from './client';
 import type { ImageAttachment } from './types';
@@ -11,6 +11,22 @@ it('hides only exact known attachment references and preserves other file paths'
   expect(imageMessage(prompt, []).text).toBe(prompt);
   expect(imageMessage(prompt + '\n- C:\\other.png', [meta]).images).toHaveLength(0);
   expect(imagePrompt('', [meta])).toContain('请参考这些图片。');
+});
+
+it('recognizes known image envelopes without relying on terminal line breaks', () => {
+  const second = { ...meta, id: 'second', reference: 'C:\\Temp\\sinos-mobile-images\\second.png' };
+  const images = [meta, second], text = '第一行\n第二行';
+  const prompt = imagePrompt(text, images), flattened = prompt.replace(/\n/g, '');
+  for (const echo of [prompt, flattened, prompt.replace(/\n/g, '\r\n'), flattened.replace(/C:\\/g, '\\\\?\\C:\\'), flattened.replace(/\\/g, '/')]) {
+    expect(imageMessage(echo, images).images).toEqual(images);
+    expect(sameImagePrompt(prompt, echo, images)).toBe(true);
+  }
+  for (const echo of [flattened + '- ', flattened + '- C:\\unknown.png', flattened + ' additional prose']) {
+    expect(imageMessage(echo, images).images).toEqual([]);
+    expect(sameImagePrompt(prompt, echo, images)).toBe(false);
+  }
+  expect(sameImagePrompt(prompt, imagePrompt(text, [second, meta]), images)).toBe(false);
+  expect(sameImagePrompt('a b', 'ab', images)).toBe(false);
 });
 it('uploads bounded chunks and resumes a timed-out upload from the desktop offset', async () => {
   const blob = new Blob([new Uint8Array(IMAGE_CHUNK * 2 + 40)]);
@@ -57,4 +73,17 @@ it('merges the terminal image footer once while preserving independent assistant
   expect(imageProjection(separate, [], [meta])).toEqual(separate);
   const noHistory = projectConversation([`› ${imagePrompt('', [meta])}`].join('').split('\n'));
   expect(imageProjection(noHistory, [], [meta]).events).toHaveLength(1);
+});
+
+it('folds flat and split terminal image echoes into the pending message once', () => {
+  const prompt = imagePrompt('第一行\n第二行', [meta]);
+  const pending = { id: 'pending-1', role: 'user' as const, content: prompt };
+  const compact = { events: [{ id: 'user', kind: 'user' as const, text: prompt.replace(/\n/g, '') }], question: null };
+  expect(mergeConversationTimeline(imageProjection(compact, [prompt], [meta]), [pending])).toEqual([{ source: 'message', message: pending }]);
+  const split = { events: [
+    { id: 'user', kind: 'user' as const, text: '第一行第二行' },
+    { id: 'header', kind: 'assistant' as const, text: '参考图片：' },
+    { id: 'path', kind: 'assistant' as const, text: `- ${meta.reference}` },
+  ], question: null };
+  expect(mergeConversationTimeline(imageProjection(split, [prompt], [meta]), [pending])).toEqual([{ source: 'message', message: pending }]);
 });
