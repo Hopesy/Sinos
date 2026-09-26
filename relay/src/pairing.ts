@@ -20,6 +20,9 @@ export interface PairState {
   phase: PairPhase;
   hostPublicKey: string; // base64url，Electron 一次性公钥
   createdAt: number;
+  /** Temporary shares expire even after being claimed; permanent pairs omit these. */
+  expiresAt?: number;
+  inviteExpiresAt?: number;
   boxedKey?: string; // base64url，手机 box 后的 contentKey（claim 时写入）
   deviceName?: string;
   hostToken?: string; // 配对成功后长期有效，用于重连进房
@@ -49,7 +52,8 @@ export async function pairIdFromPublicKey(publicKeyB64Url: string): Promise<stri
 
 export function isExpired(state: PairState, now: number): boolean {
   // 只有未认领的配对码会过期；authorized 后长期有效（用于重连）
-  return state.phase === 'requested' && now - state.createdAt > PAIR_TTL_MS;
+  return (state.expiresAt !== undefined && now >= state.expiresAt) ||
+    (state.phase === 'requested' && now > (state.inviteExpiresAt ?? state.createdAt + PAIR_TTL_MS));
 }
 
 /** host 发起/轮询 request：无 state 或已过期则新建 requested，否则原样返回 */
@@ -57,10 +61,12 @@ export function request(
   prev: PairState | undefined,
   now: number,
   hostPublicKey: string,
-  requestToken: string
+  requestToken: string,
+  temporaryMs?: number,
 ): PairState {
   if (!prev || isExpired(prev, now)) {
-    return { phase: 'requested', hostPublicKey, requestToken, createdAt: now };
+    return { phase: 'requested', hostPublicKey, requestToken, createdAt: now,
+      ...(temporaryMs ? { expiresAt: now + temporaryMs, inviteExpiresAt: now + Math.min(600_000, temporaryMs) } : {}) };
   }
   return prev;
 }
@@ -103,8 +109,9 @@ export function canFetchCredentials(state: PairState, now: number): boolean {
 export function tokenValid(
   state: PairState | undefined,
   role: 'host' | 'guest',
-  token: string
+  token: string,
+  now = Date.now(),
 ): boolean {
-  if (state?.phase !== 'authorized' || !token) return false;
+  if (state?.phase !== 'authorized' || !token || isExpired(state, now)) return false;
   return role === 'host' ? token === state.hostToken : token === state.deviceToken;
 }

@@ -1003,7 +1003,7 @@ fn save_clipboard_image(data_base64: String, extension: String) -> Result<String
 /// offloaded to `spawn_blocking`. The plugin returns raw RGBA — no original
 /// format — so we re-encode to PNG (screenshots paste as PNG anyway).
 #[tauri::command]
-async fn read_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub(crate) async fn read_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     let app = app.clone();
@@ -1025,15 +1025,10 @@ async fn read_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, S
             return Ok(None);
         }
 
-        // 25 MB cap matches save_clipboard_image — bounds temp-disk usage from
-        // absurdly large clipboard bitmaps before we even attempt PNG deflate.
-        const MAX_BYTES: usize = 25 * 1024 * 1024;
-        if rgba.len() > MAX_BYTES {
-            return Err(format!(
-                "Clipboard image too large: {} bytes (max {})",
-                rgba.len(),
-                MAX_BYTES
-            ));
+        // A normal 4K screenshot is already 32 MB as raw RGBA. Bound decoded
+        // pixels separately, then apply the 25 MB attachment limit after PNG encoding.
+        if rgba.len() > 128 * 1024 * 1024 {
+            return Err("IMAGE_TOO_LARGE".into());
         }
 
         let tmp_dir = std::env::temp_dir().join("coffee-cli").join("pasted-images");
@@ -1064,7 +1059,9 @@ async fn read_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, S
                 .map_err(|e| format!("png encode: {}", e))?;
         }
 
-        std::fs::write(&path, buf.into_inner())
+        let encoded = buf.into_inner();
+        if encoded.len() > 25 * 1024 * 1024 { return Err("IMAGE_TOO_LARGE".into()); }
+        std::fs::write(&path, encoded)
             .map_err(|e| format!("write image file: {}", e))?;
 
         Ok(Some(path.to_string_lossy().to_string()))
@@ -3373,10 +3370,12 @@ pub(crate) fn read_mobile_chat(tool: String, cwd: String, token: Option<String>,
         return Ok(serde_json::json!({"bound":false}));
     };
     let title = session.name.clone();
+    let cwd = session.cwd.clone();
     let source_id = session.id.clone();
     let read = read_chat_session_blocking(session, cursor, revision.as_deref(), before)?;
     let mut value = serde_json::to_value(read).map_err(|e| e.to_string())?;
     value["bound"] = true.into(); value["title"] = title.into(); value["sourceId"] = source_id.into();
+    value["cwd"] = cwd.into();
     Ok(value)
 }
 
@@ -5954,6 +5953,9 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             stop_fs_watcher,
             save_clipboard_image,
             read_clipboard_image,
+            crate::clipboard_images::clipboard_has_image,
+            crate::clipboard_images::read_clipboard_images,
+            crate::clipboard_images::prepare_image_paths,
             list_directory,
             read_text_file,
             read_editor_file,

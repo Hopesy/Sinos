@@ -16,6 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 const DEFAULT_RELAY: &str = "https://sinos-relay.zhlhopefil.workers.dev";
 static HOST: OnceLock<Arc<RelayHost>> = OnceLock::new();
+#[path = "relay_share.rs"]
+pub(crate) mod sharing;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,8 +37,10 @@ struct Device {
     stopped: AtomicBool,
     online: AtomicBool,
     state: RwLock<String>,
+    share: Option<Arc<crate::remote_share::ShareScope>>,
 }
 impl Device {
+    fn active(&self) -> bool { !self.stopped.load(Ordering::SeqCst) && self.share.as_ref().map(|share| share.active(now_ms())).unwrap_or(true) }
     fn saved_credential(&self) -> Credential {
         let mut credential = self.credential.clone();
         credential.device_name = self.name.read().unwrap().clone();
@@ -73,6 +77,8 @@ struct RelayHost {
     error: Mutex<Option<String>>,
     pairing_lock: tokio::sync::Mutex<()>,
     credential_lock: tokio::sync::Mutex<()>,
+    shares: Mutex<HashMap<String, Arc<sharing::TemporaryShare>>>,
+    share_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Serialize)]
@@ -140,7 +146,7 @@ pub async fn relay_test_connection(relay_url: String) -> Result<RelayConnectionT
     tokio::task::spawn_blocking(move || test_relay_connection(&relay_url))
         .await.map_err(|_| "连接测试中断，请重试".to_string())?
 }
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -263,6 +269,8 @@ pub fn start(remote: RemoteState) {
         error: Mutex::new(None),
         pairing_lock: tokio::sync::Mutex::new(()),
         credential_lock: tokio::sync::Mutex::new(()),
+        shares: Mutex::new(HashMap::new()),
+        share_lock: tokio::sync::Mutex::new(()),
     });
     if HOST.set(manager.clone()).is_err() {
         return;
@@ -543,6 +551,7 @@ impl RelayHost {
             stopped: AtomicBool::new(stopped),
             online: AtomicBool::new(false),
             state: RwLock::new("connecting".into()),
+            share: None,
         });
         let id = device.credential.pair_id.clone();
         if let Some(old) = self.devices.write().unwrap().insert(id, device.clone()) {
@@ -555,11 +564,11 @@ impl RelayHost {
     }
     async fn run_device(self: Arc<Self>, device: Arc<Device>) {
         let mut attempt = 0u32;
-        while !device.stopped.load(Ordering::SeqCst) {
+        while device.active() {
             *device.state.write().unwrap() = "connecting".into();
             let result = self.run_socket(device.clone()).await;
             device.online.store(false, Ordering::SeqCst);
-            if device.stopped.load(Ordering::SeqCst) {
+            if !device.active() {
                 break;
             }
             *device.state.write().unwrap() = "offline".into();
@@ -599,16 +608,16 @@ impl RelayHost {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if device.stopped.load(Ordering::SeqCst) { let _ = sink.close().await; return Ok(()); }
+                    if !device.active() { let _ = sink.close().await; return Ok(()); }
                     if last_seen.elapsed() > Duration::from_secs(25) { return Err("HEARTBEAT_TIMEOUT".into()); }
                     sink.send(Message::Text("ping".into())).await.map_err(|_| "SEND_FAILED")?;
                 }
                 Some((reply, allow_chunks)) = outgoing.recv() => {
-                    if device.stopped.load(Ordering::SeqCst) { return Ok(()); }
+                    if !device.active() { return Ok(()); }
                     // Drop work from a replaced phone connection.
                     if reply["channel"] != channel { continue; }
                     for frame in crypto::seal_reply(&key, &reply, allow_chunks)? {
-                        if device.stopped.load(Ordering::SeqCst) { return Ok(()); }
+                        if !device.active() { return Ok(()); }
                         sink.send(Message::Binary(frame.into())).await.map_err(|_| "SEND_FAILED")?;
                     }
                 }
@@ -633,7 +642,7 @@ impl RelayHost {
                         }
                         Message::Binary(frame) => {
                             let Ok(request) = crypto::open(&key, &frame) else { continue };
-                            if device.stopped.load(Ordering::SeqCst) { return Ok(()); }
+                            if !device.active() { return Ok(()); }
                             let seq = request["seq"].as_u64().unwrap_or(0);
                             if request["channel"] != channel || seq <= received_seq { continue; }
                             received_seq = seq;
@@ -644,9 +653,9 @@ impl RelayHost {
                             // order. Spawning one task per key can reorder them.
                             if matches!(request["action"].as_str(), Some("session.input" | "session.prompt" | "session.answer" | "session.queue_action" | "session.images" | "session.pause" | "session.kill" | "session.launch" | "workspace.save" | "terminal.resize")) {
                                 let allow_chunks = request["acceptChunks"].as_bool().unwrap_or(false);
-                                let response = crate::remote_server::relay_request(self.remote.clone(), request).await;
+                                let response = crate::remote_server::relay_request(self.remote.clone(), request, device.share.clone()).await;
                                 for frame in crypto::seal_reply(&key, &response, allow_chunks)? {
-                                    if device.stopped.load(Ordering::SeqCst) { return Ok(()); }
+                                    if !device.active() { return Ok(()); }
                                     sink.send(Message::Binary(frame.into())).await.map_err(|_| "SEND_FAILED")?;
                                 }
                                 continue;
@@ -657,9 +666,9 @@ impl RelayHost {
                             let remote = self.remote.clone(); let tx = replies.clone(); let active = device.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
-                                if active.stopped.load(Ordering::SeqCst) { return; }
+                                if !active.active() { return; }
                                 let allow_chunks = request["acceptChunks"].as_bool().unwrap_or(false);
-                                let response = crate::remote_server::relay_request(remote, request).await;
+                                let response = crate::remote_server::relay_request(remote, request, active.share.clone()).await;
                                 let _ = tx.send((response, allow_chunks)).await;
                             });
                         }
@@ -683,7 +692,7 @@ mod tests {
     fn device_rename_preserves_connection_identity_and_survives_later_saves() {
         let device = Device {
             credential: Credential { pair_id: "same-pair".into(), relay_url: DEFAULT_RELAY.into(), token: "test-token".into(), content_key: "test-key".into(), device_name: "Android 手机".into(), paired_at: 123, revoked: false },
-            name: RwLock::new("Android 手机".into()), stopped: AtomicBool::new(false), online: AtomicBool::new(true), state: RwLock::new("connected".into()),
+            name: RwLock::new("Android 手机".into()), stopped: AtomicBool::new(false), online: AtomicBool::new(true), state: RwLock::new("connected".into()), share: None,
         };
         device.rename(" 我的 Pixel · Chrome ".into(), |saved| {
             assert_eq!(saved.device_name, "我的 Pixel · Chrome");

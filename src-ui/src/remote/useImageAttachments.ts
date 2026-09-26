@@ -4,10 +4,10 @@ import type { ImageAttachment } from './types';
 import { imageError, imageId, loadImageDraft, prepareImage, saveImageDraft, uploadImage, type ImageDraft } from './images';
 
 export interface DraftPreview extends ImageDraft { url: string }
-export function useImageAttachments(client: RemoteClient, session: string, enabled: boolean, online: boolean) {
+export function useImageAttachments(client: RemoteClient, session: string, enabled: boolean, online: boolean, persistent = true) {
   const [items, setItems] = useState<DraftPreview[]>([]);
   const [known, setKnown] = useState<ImageAttachment[]>([]);
-  const [loaded, setLoaded] = useState(!enabled);
+  const [loaded, setLoaded] = useState(!enabled || !persistent);
   const [preparing, setPreparing] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
@@ -17,18 +17,19 @@ export function useImageAttachments(client: RemoteClient, session: string, enabl
   function remember(images: ImageAttachment[]) { setKnown(previous => [...new Map([...previous, ...images].map(image => [image.id, image])).values()]); }
   function persist(next: DraftPreview[]) {
     current.current = next; setItems(next);
+    if (!persistent) return;
     void saveImageDraft(session, next.map(({ id, name, blob }) => ({ id, name, blob }))).catch(() => {
       if (alive.current) setNotice('图片仅保留在当前页面，刷新前请先发送。');
     });
   }
   useEffect(() => {
     alive.current = true; let disposed = false;
-    if (enabled) void loadImageDraft(session).then(drafts => {
+    if (enabled && persistent) void loadImageDraft(session).then(drafts => {
       if (disposed) return;
       current.current = drafts.map(item => ({ ...item, url: URL.createObjectURL(item.blob) })); setItems(current.current);
     }).catch(() => {}).finally(() => { if (!disposed) setLoaded(true); });
     return () => { disposed = true; alive.current = false; upload.current?.abort(); for (const item of current.current) URL.revokeObjectURL(item.url); current.current = []; };
-  }, [session, enabled]);
+  }, [session, enabled, persistent]);
   useEffect(() => {
     if (!enabled || !online) return;
     let disposed = false; const controller = new AbortController();

@@ -28,6 +28,12 @@ pub const AUTH_ENV: &str = "SINOS_CODEX_BRIDGE_TOKEN";
 #[cfg(test)]
 #[path = "codex_stream_real_tests.rs"]
 mod real_tests;
+#[cfg(test)]
+#[path = "codex_picker_tests.rs"]
+mod picker_tests;
+#[cfg(all(test, windows))]
+#[path = "codex_selection_real_tests.rs"]
+mod selection_real_tests;
 
 #[derive(Clone, Serialize)]
 pub struct Event {
@@ -174,7 +180,9 @@ impl Journal {
                     self.root = Some(id.to_owned());
                     self.owner = Some(connection);
                     self.online = true;
-                    let params = json!({"threadId":id,"model":result["model"],"effort":result["reasoningEffort"],"cwd":result["cwd"],"status":result["thread"]["status"]});
+                    let thread = &result["thread"];
+                    let field = |key: &str| result.get(key).filter(|value| !value.is_null()).unwrap_or(&thread[key]).clone();
+                    let params = json!({"threadId":id,"model":field("model"),"effort":field("reasoningEffort"),"cwd":field("cwd"),"title":thread["name"],"status":thread["status"]});
                     self.bootstrap = Some(params.clone());
                     self.push(json!({"method":"sinos/thread","params":params}));
                     // Reattaching an active turn needs the content emitted before attachment.
@@ -219,6 +227,7 @@ impl Journal {
                 | "thread/tokenUsage/updated"
                 | "thread/settings/updated"
                 | "thread/status/changed"
+                | "thread/name/updated"
                 | "thread/reverted"
                 | "thread/compacted"
                 | "error"
@@ -241,6 +250,8 @@ impl Journal {
                 }
             } else if method == "thread/status/changed" {
                 bootstrap["status"] = params["status"].clone();
+            } else if method == "thread/name/updated" {
+                bootstrap["title"] = params["threadName"].clone();
             }
         }
         if method == "turn/started" && !self.complete {
@@ -462,6 +473,36 @@ fn server_args(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Codex 0.157's in-app /resume creates a new remote AppServerSession without
+/// copying remote_cwd_override. Its picker then sends thread/list with cwd=null,
+/// even though the TUI was launched with --cd. Repair only this secondary
+/// history connection. Startup `resume --all`, agent lists, and clients which
+/// send their own cwd filter (including their later All toggle) stay untouched.
+#[derive(Default)]
+struct PickerScope {
+    explicit_filter: bool,
+    cwd: Option<String>,
+}
+impl PickerScope {
+    fn repair(&mut self, connection: u64, journal: &Journal, request: &mut Value) -> bool {
+        if request["method"] != "thread/list" { return false; }
+        let Some(params) = request.get_mut("params").and_then(Value::as_object_mut) else { return false; };
+        if params.get("cwd").is_some_and(|cwd| !cwd.is_null()) {
+            self.explicit_filter = true;
+            return false;
+        }
+        if self.explicit_filter || journal.root.is_none() || journal.owner == Some(connection)
+            || !params.get("sourceKinds").and_then(Value::as_array).is_some_and(|sources| sources.iter().any(|source| source == "cli"))
+        { return false; }
+        if self.cwd.is_none() {
+            self.cwd = journal.bootstrap.as_ref().and_then(|state| state["cwd"].as_str()).filter(|cwd| !cwd.is_empty()).map(str::to_owned);
+        }
+        let Some(cwd) = &self.cwd else { return false; };
+        params.insert("cwd".into(), Value::String(cwd.clone()));
+        true
+    }
+}
+
 pub fn start(
     program: &str,
     args: &[String],
@@ -582,6 +623,7 @@ pub fn start(
                             let Ok(Ok((engine, _))) = tokio::time::timeout(Duration::from_secs(2), tokio_tungstenite::connect_async(request)).await else { return; };
                             let (mut ui_send, mut ui_read) = socket.split();
                             let (mut engine_send, mut engine_read) = engine.split();
+                            let mut picker_scope = PickerScope::default();
                             loop {
                                 tokio::select! {
                                     message = engine_read.next() => {
@@ -596,9 +638,14 @@ pub fn start(
                                         if !matches!(tokio::time::timeout(Duration::from_secs(3), ui_send.send(message)).await, Ok(Ok(()))) || closing { break; }
                                     },
                                     message = ui_read.next() => {
-                                        let Some(Ok(message)) = message else { break; };
+                                        let Some(Ok(mut message)) = message else { break; };
                                         if let Message::Text(text) = &message {
-                                            if let Ok(value) = serde_json::from_str::<Value>(text) { if let Ok(mut j) = journal.lock() { j.client(id, &value); } }
+                                            if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                                                if let Ok(mut j) = journal.lock() {
+                                                    if picker_scope.repair(id, &j, &mut value) { message = Message::Text(value.to_string().into()); }
+                                                    j.client(id, &value);
+                                                }
+                                            }
                                         }
                                         let closing = message.is_close();
                                         if !matches!(tokio::time::timeout(Duration::from_secs(3), engine_send.send(message)).await, Ok(Ok(()))) || closing { break; }
@@ -747,6 +794,22 @@ mod tests {
         assert_eq!(next.events.len(), 1);
         assert_eq!(next.thread_id.as_deref(), Some("new-root"));
     }
+    #[test]
+    fn thread_metadata_and_renames_survive_replay_without_cross_thread_updates() {
+        let mut j = Journal::default();
+        j.client(1, &json!({"id":1,"method":"thread/resume","params":{}}));
+        j.server(1, &json!({"id":1,"result":{"thread":{"id":"root","cwd":"/actual-project","name":"Saved title","model":"test-model","status":{"type":"idle"}}}}));
+        assert_eq!(j.events[0].0.message["params"]["cwd"], "/actual-project");
+        assert_eq!(j.events[0].0.message["params"]["title"], "Saved title");
+        assert!(j.server(1, &json!({"method":"thread/name/updated","params":{"threadId":"other","threadName":"Wrong title"}})).is_none());
+        j.server(1, &event("thread/name/updated", json!({"threadName":"Renamed title"})));
+        assert_eq!(j.bootstrap.as_ref().unwrap()["title"], "Renamed title");
+        let page = j.page(None, 0);
+        assert_eq!(page.events.last().unwrap().message["params"]["threadName"], "Renamed title");
+        bind(&mut j, "next");
+        assert!(j.bootstrap.as_ref().unwrap()["title"].is_null());
+    }
+
     #[test]
     fn oversize_and_revert_require_history_until_a_new_turn() {
         let mut j = bound();

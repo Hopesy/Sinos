@@ -22,7 +22,9 @@ export function errorMessage(error: unknown): string {
     if (/TOO_LARGE/.test(error.message)) return '文件超过 512 KB，请在电脑端打开。';
     if (/BINARY|ENCODING/.test(error.message)) return '这个文件不是 UTF-8 文本，请在电脑端打开。';
     if (/OUTSIDE_WORKSPACE/.test(error.message)) return '只能访问当前会话项目内的文件。';
-    if (/cwd/.test(error.message)) return '工作目录不存在，请检查电脑上的项目路径。';
+    if (error.message === 'CWD_NOT_DIRECTORY') return '这个路径是文件，请指定一个文件夹。';
+    if (error.message.startsWith('CWD_CREATE_FAILED')) return '无法创建文件夹，请检查路径和电脑上的目录权限。';
+    if (/cwd/i.test(error.message)) return '无法使用这个工作目录，请检查电脑上的项目路径。';
     return '操作未完成，请重试。';
   }
   return '连接暂时中断，请保持电脑运行，连接恢复后再试。';
@@ -95,7 +97,7 @@ export class RemoteClient {
   }
 }
 
-export interface ChatRead { bound: boolean; title?: string; sourceId?: string; data: string; cursor: number | null; history_cursor: number | null; has_older: boolean; revision: string; append: boolean; prepend: boolean; unchanged: boolean }
+export interface ChatRead { bound: boolean; title?: string; cwd?: string; sourceId?: string; data: string; cursor: number | null; history_cursor: number | null; has_older: boolean; revision: string; append: boolean; prepend: boolean; unchanged: boolean }
 
 export function readPairingToken(): string {
   const pair = new URLSearchParams(window.location.hash.slice(1)).get('pair');

@@ -1,5 +1,23 @@
 /* TierTerminal.css — Pure terminal container styles */
 
+.terminal-image-notice {
+    position: absolute;
+    right: 16px;
+    top: 12px;
+    z-index: 110;
+    max-width: min(420px, calc(100% - 32px));
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-1);
+    background: var(--bg-panel, #202020);
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    box-shadow: 0 4px 16px #0002;
+}
+.terminal-image-notice.is-error { color: var(--danger, #df6767); }
+
 /* ─── Shell Layout ──────────────────────────────────────────── */
 .tier-terminal {
     display: flex;

@@ -36,6 +36,17 @@ pub(crate) struct RemoteState {
     static_dir: Option<PathBuf>,
     token: Arc<RwLock<String>>,
 }
+impl RemoteState {
+    pub(crate) fn session_running(&self, id: &str) -> bool {
+        self.sessions.lock().map(|sessions| sessions.contains_key(id)).unwrap_or(false)
+    }
+    pub(crate) fn share_runtime(&self, id: &str) -> Option<std::sync::Weak<Mutex<crate::remote_runtime::Runtime>>> {
+        self.sessions.lock().ok()?.get(id).map(|session| Arc::downgrade(&session.mobile_runtime))
+    }
+    pub(crate) fn share_session_running(&self, scope: &crate::remote_share::ShareScope) -> bool {
+        self.share_runtime(&scope.session_id).is_some_and(|runtime| runtime.ptr_eq(&scope.runtime))
+    }
+}
 
 static REMOTE_TOKEN: OnceLock<Arc<RwLock<String>>> = OnceLock::new();
 
@@ -98,6 +109,7 @@ struct SessionSnapshot {
 struct StateResponse {
     sessions: Vec<SessionSnapshot>,
     device_name: String,
+    default_cwd: Option<String>,
     capabilities: Vec<&'static str>,
 }
 
@@ -280,6 +292,7 @@ async fn chat(
 pub(crate) async fn relay_request(
     mut state: RemoteState,
     request: serde_json::Value,
+    share: Option<Arc<crate::remote_share::ShareScope>>,
 ) -> serde_json::Value {
     use serde_json::json;
     use tower::ServiceExt;
@@ -287,6 +300,18 @@ pub(crate) async fn relay_request(
         let action = request["action"].as_str().unwrap_or("");
         let id = request["sessionId"].as_str().unwrap_or("");
         let params = &request["params"];
+        if let Some(scope) = &share {
+            scope.authorize(&request, crate::relay_host::now_ms()).map_err(|error| (403, error.to_string()))?;
+            if !state.share_session_running(scope) { return Err((410, "SHARE_ENDED".into())); }
+            if action == "state" {
+                let sessions: Vec<_> = snapshot_sessions(&state.sessions).into_iter().filter(|session| session.id == scope.session_id).collect();
+                return Ok(json!({"sessions":sessions,"device_name":"共享会话","capabilities":["activity","answer_text","answer_multiselect","image_attachments_v1","codex_events_v1","claude_events_v1"],"share":{"mode":scope.mode,"expiresAt":scope.expires_at}}));
+            }
+            if action == "tools" { return Ok(json!([])); }
+        }
+        if action.starts_with("session.share_") {
+            return crate::relay_host::sharing::handle(action, id, params).await.map_err(|error| (400, error));
+        }
         if id.len() > 128 || !id.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':')) { return Err((400, "INVALID_SESSION".to_string())); }
         if action == "terminal.read" {
             let mut offset = params["offset"].as_u64().unwrap_or(0);
@@ -533,10 +558,11 @@ async fn state_snapshot(
     }
     Json(StateResponse {
         sessions: snapshot_sessions(&state.sessions),
+        default_cwd: crate::remote_launch::desktop().map(|path| path.to_string_lossy().into_owned()),
         device_name: std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "Sinos Desktop".into()),
-        capabilities: vec!["activity", "message_queue", "answer_text", "answer_multiselect", "image_attachments_v1", "codex_events_v1", "claude_events_v1"],
+        capabilities: vec!["activity", "message_queue", "answer_text", "answer_multiselect", "image_attachments_v1", "codex_events_v1", "claude_events_v1", "temporary_shares_v1"],
     })
     .into_response()
 }
@@ -564,15 +590,15 @@ async fn launch(
     if crate::tools::find(&request.tool).is_none() {
         return (StatusCode::BAD_REQUEST, "unknown tool").into_response();
     }
-    if let Some(cwd) = request.cwd.as_deref() {
-        if !FsPath::new(cwd).is_dir() {
-            return (StatusCode::BAD_REQUEST, "cwd is not a directory").into_response();
-        }
-    }
+    let cwd = match tokio::task::spawn_blocking(move || crate::remote_launch::prepare_directory(request.cwd.as_deref())).await {
+        Ok(Ok(cwd)) => cwd,
+        Ok(Err(error)) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "CWD_UNAVAILABLE").into_response(),
+    };
     let session_id = uuid::Uuid::new_v4().to_string();
     let payload = crate::launch::LaunchRequest {
         tool: request.tool,
-        cwd: request.cwd,
+        cwd: Some(cwd),
         session_id: Some(session_id.clone()),
     };
     match state.app.emit("launch-request", payload) {

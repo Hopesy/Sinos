@@ -8,7 +8,7 @@ vi.mock('./highlightCode', () => ({ highlightCode: highlight }));
 afterEach(() => { cleanup(); vi.useRealTimers(); highlight.mockClear(); });
 
 it('hides an empty code card until actual streamed content arrives', async () => {
-  const view = render(<ConversationCode code={' \n '} language="text" />);
+  const view = render(<ConversationCode code={' \n \u200b\u2060\u2800'} language="text" />);
   expect(view.container.textContent).toBe('');
   expect(view.container.querySelector('pre, button')).toBeNull();
   expect(highlight).not.toHaveBeenCalled();

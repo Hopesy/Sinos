@@ -720,8 +720,6 @@ function ConversationContent({
     });
   };
 
-  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
-
   const selectionText = (): string => {
     const root = scrollRef.current;
     const selection = window.getSelection();
@@ -734,7 +732,7 @@ function ConversationContent({
     return proxy.value.slice(proxy.selectionStart, proxy.selectionEnd);
   };
 
-  const contextMenuHandlers = useTerminalContextMenu(selectionText, setCtxMenu);
+  const { contextMenuHandlers, copyMenuSelection, closeMenu: closeCtxMenu } = useTerminalContextMenu(selectionText, setCtxMenu);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -1385,10 +1383,8 @@ function ConversationContent({
           menu={ctxMenu}
           onClose={closeCtxMenu}
           onCopy={() => {
-            const text = ctxMenu.text || selectionText();
-            if (text) void clipboardWrite(text);
+            copyMenuSelection(ctxMenu);
             if (selectAllProxyRef.current) selectAllProxyRef.current.value = '';
-            closeCtxMenu();
           }}
           onPaste={async () => {
             const imagePath = await clipboardReadImage();

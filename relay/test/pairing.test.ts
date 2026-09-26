@@ -25,3 +25,18 @@ test('room IDs are stable and bound to the public key', async () => {
   assert.equal(a, await pairIdFromPublicKey('a'));
   assert.notEqual(a, await pairIdFromPublicKey('b'));
 });
+
+test('temporary shares allow one claim, keep the original deadline and expire reconnect tokens', () => {
+  const now = 1_000_000;
+  const invite = request(undefined, now, 'share-public', 'owner-secret', 3_600_000);
+  assert.equal(invite.inviteExpiresAt, now + 600_000);
+  assert.equal(invite.expiresAt, now + 3_600_000);
+  assert.equal(claim(invite, now + 600_001, 'box', 'guest').ok, false);
+  const paired = claim(invite, now + 10, 'box', 'guest');
+  assert(paired.ok);
+  assert.equal(claim(paired.next, now + 11, 'another-box', 'other').ok, false);
+  assert.equal(request(paired.next, now + 12, 'share-public', 'owner-secret', 14_400_000).expiresAt, invite.expiresAt);
+  assert.equal(tokenValid(paired.next, 'guest', paired.next.deviceToken!, now + 3_599_999), true);
+  assert.equal(tokenValid(paired.next, 'guest', paired.next.deviceToken!, now + 3_600_000), false);
+  assert.equal(tokenValid(paired.next, 'host', paired.next.hostToken!, now + 3_600_000), false);
+});

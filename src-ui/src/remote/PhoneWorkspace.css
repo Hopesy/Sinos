@@ -15,6 +15,8 @@ html { font-size: 15px; }
 .phone-heading { flex:1; min-width:0; border:0; background:none; text-align:left; padding:4px 8px; }
 .phone-heading strong { font-size:14px; font-weight:600; display:block; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
 .phone-heading > span { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--m-muted); margin-top:2px; }
+.phone-project-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; unicode-bidi:plaintext; }
+.phone-heading .status-dot { flex-shrink:0; }
 .status-dot.is-online { box-shadow:none; }
 .phone-network { display:flex; align-items:center; gap:8px; padding:7px 16px; background:var(--m-raised); font-size:11px; color:var(--m-muted); }
 .phone-network > span:nth-child(2) { flex:1; }
@@ -55,10 +57,12 @@ html { font-size: 15px; }
 .conversation-status { display:flex; flex-wrap:wrap; align-items:center; column-gap:10px; row-gap:3px; max-width:736px; margin:0 auto 6px; padding:4px 2px; color:var(--m-muted); font-size:11px; line-height:1.5; }
 .conversation-status-context,.conversation-status-session { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; flex:1 1 auto; }
 .status-model { flex:0 1 auto; max-width:60%; padding:3px 7px; border-radius:6px; background:var(--m-raised); font-weight:500; color:var(--m-text); }
-.status-directory { flex:1 1 auto; max-width:24ch; font:inherit; }
-.status-title { flex:1 1 auto; max-width:40ch; }
-.status-model,.status-directory,.status-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.conversation-status-session .context-ring { flex:0 0 22px; margin-left:auto; }
+
+
+.status-model { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-status-session { flex:0 0 auto; margin-left:auto; gap:5px; }
+.context-percent { font-variant-numeric:tabular-nums; }
+.conversation-status-session .context-ring { flex:0 0 22px; }
 .context-ring { color:var(--m-accent); }.context-ring.is-full { color:#d99a55; }.context-ring-track { stroke:var(--m-muted); opacity:.22; }.context-ring-value { stroke:currentColor; transition:stroke-dasharray .25s ease; }
 .chat-compose-wrap > .chat-compose { flex-shrink:0; width:100%; }.chat-compose-wrap > .composer-caption { flex-shrink:0; }
 .chat-compose { max-width:736px; margin:auto; border:1px solid var(--m-border); border-radius:16px; background:var(--m-surface); padding:12px 12px 6px; transition:border-color .15s; }.chat-compose:focus-within { border-color:var(--m-subtle); }

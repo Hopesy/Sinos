@@ -42,6 +42,8 @@ export function projectCodex(lines: string[], rich: string[], cursor: number, re
       hidden.add(i);
       const model = /^│\s*model:\s*(.*?)\s*(?:\/model.*)?│?\s*$/i.exec(line)?.[1];
       if (model) status = { ...status, model: model.replace(/\s+│$/, ''), lines: status?.lines || [] };
+      const cwd = /^│\s*directory:\s*(.*?)\s*│?\s*$/i.exec(line)?.[1];
+      if (cwd) status = { ...status, cwd, lines: status?.lines || [] };
       if (/^╰[─━]+╯/.test(line.trim())) header = false;
     }
   });
@@ -62,7 +64,7 @@ export function projectCodex(lines: string[], rich: string[], cursor: number, re
     if (text) {
       const parts = text.split(/\s+·\s+/);
       const model = /^(?:gpt-|o[134](?:\b|[-.])|codex)/i.test(parts[0]) ? parts.shift() : undefined;
-      status = { model: model || status?.model, lines: parts.filter(part => !/\? for shortcuts|esc to|tab to/i.test(part)) };
+      status = { ...status, model: model || status?.model, lines: parts.filter(part => !/\? for shortcuts|esc to|tab to/i.test(part)) };
     }
     break;
   }

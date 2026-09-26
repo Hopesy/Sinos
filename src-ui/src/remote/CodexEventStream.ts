@@ -4,7 +4,7 @@ import type { ActivityPhase } from './types';
 
 type Row = Record<string, unknown>;
 export interface CodexPage { epoch: string; cursor: number; reset: boolean; online: boolean; complete: boolean; has_more?: boolean; thread_id: string | null; events: { sequence: number; message: Row }[] }
-export interface CodexLive { available: boolean; retained?: boolean; threadId?: string; messages: ChatMessage[]; status?: CodexStatus; activity?: ActivityPhase }
+export interface CodexLive { available: boolean; retained?: boolean; threadId?: string; title?: string; messages: ChatMessage[]; status?: CodexStatus; activity?: ActivityPhase }
 const snake = (value: unknown) => String(value || '').replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 
 /** App-server v2 ThreadItem is camelCase and differs from rollout TurnItem. */
@@ -35,6 +35,7 @@ export class CodexEventStream {
   private items = new Map<string, Row>();
   private messages = new Map<string, ChatMessage[]>();
   private status?: CodexStatus;
+  private title?: string;
   private activity?: ActivityPhase;
   private complete = false;
   private threadId?: string;
@@ -43,7 +44,7 @@ export class CodexEventStream {
     if (!page.reset && page.epoch === this.epoch && !page.events.length && this.snapshot && this.snapshot.available === (page.online && page.complete && this.complete && !page.has_more && Boolean(this.threadId))) return this.snapshot;
     if (page.epoch !== this.epoch || page.reset) {
       this.epoch = page.epoch; this.cursor = 0; this.items.clear(); this.messages.clear();
-      this.status = undefined; this.activity = undefined; this.threadId = page.thread_id || undefined; this.complete = page.complete;
+      this.status = undefined; this.title = undefined; this.activity = undefined; this.threadId = page.thread_id || undefined; this.complete = page.complete;
     }
     const dirty = new Set<string>();
     const put = (item: Row) => {
@@ -59,8 +60,11 @@ export class CodexEventStream {
       if (!object(params) || (params.threadId && params.threadId !== page.thread_id)) continue;
       if (method === 'sinos/thread') {
         this.threadId = String(params.threadId);
+        this.title = typeof params.title === 'string' ? params.title.trim() || undefined : undefined;
         this.status = codexStatus({ type: 'turn_context', payload: params }, this.status);
         this.activity = threadActivity(params.status);
+      } else if (method === 'thread/name/updated') {
+        this.title = typeof params.threadName === 'string' ? params.threadName.trim() || undefined : undefined;
       } else if (method === 'thread/status/changed') {
         this.activity = threadActivity(params.status);
       } else if (method === 'thread/settings/updated' && object(params.threadSettings)) {
@@ -114,7 +118,7 @@ export class CodexEventStream {
       const item = this.items.get(id); if (item) this.messages.set(id, itemMessages(item));
     }
     this.snapshot = { available: page.online && page.complete && this.complete && !page.has_more && Boolean(this.threadId), threadId: this.threadId,
-      messages: [...this.messages.values()].flat(), status: this.status, activity: this.activity };
+      messages: [...this.messages.values()].flat(), title: this.title, status: this.status, activity: this.activity };
     return this.snapshot;
   }
 }

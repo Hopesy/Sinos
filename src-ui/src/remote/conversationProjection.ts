@@ -15,7 +15,7 @@ export interface ConversationEvent {
 }
 export interface ConversationChoice { label: string; input: string; checked?: boolean }
 export interface ConversationQuestion { id: string; text: string; choices: ConversationChoice[]; kind?: 'choice' | 'multi' | 'text'; cursor?: number }
-export interface ConversationProjection { events: ConversationEvent[]; question: ConversationQuestion | null; activity?: 'working' | 'waiting' | 'idle'; terminalStatus?: TerminalStatus }
+export interface ConversationProjection { events: ConversationEvent[]; question: ConversationQuestion | null; activity?: 'working' | 'waiting' | 'idle'; title?: string; terminalStatus?: TerminalStatus }
 
 function codeLines(lines: string[]) {
   const result = new Set<number>();

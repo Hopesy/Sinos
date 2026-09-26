@@ -15,6 +15,7 @@ let decoderId = 0;
 export class TerminalConversation {
   private terminal: Terminal;
   private activity: ConversationProjection['activity'];
+  private title?: string;
   private tool: string | null | undefined;
   private status: ConversationProjection['terminalStatus'];
   private events: ConversationProjection['events'] = [];
@@ -30,7 +31,10 @@ export class TerminalConversation {
     this.terminal.unicode.activeVersion = '11';
     this.terminal.onTitleChange(title => {
       const parsed = tool === 'claude' ? parseClaudeTerminalTitle(title) : tool === 'codex' ? parseCodexTerminalTitle(title) : tool === 'grok' ? parseGrokTerminalTitle(title) : tool === 'omp' ? parseOmpTerminalTitle(title) : null;
-      if (parsed) this.activity = parsed.status === 'working' ? 'working' : parsed.status === 'wait_input' ? 'waiting' : 'idle';
+      if (parsed) {
+        this.activity = parsed.status === 'working' ? 'working' : parsed.status === 'wait_input' ? 'waiting' : 'idle';
+        this.title = parsed.displayTitle;
+      }
     });
   }
   write(data: string): Promise<ConversationProjection> {
@@ -46,7 +50,7 @@ export class TerminalConversation {
       }, 16);
     }));
   }
-  reset() { this.terminal.reset(); this.activity = undefined; this.status = undefined; this.events = []; }
+  reset() { this.terminal.reset(); this.activity = undefined; this.title = undefined; this.status = undefined; this.events = []; }
   resize(cols: number, rows: number) { this.terminal.resize(cols, rows); }
   dispose() { this.disposed = true; clearTimeout(this.repaint); this.pending.splice(0).forEach(done => done({ events: [], question: null })); this.terminal.dispose(); }
   private project() {
@@ -144,9 +148,9 @@ export class TerminalConversation {
         return { ...event, id };
       });
       this.events = result.events;
-      if (result.terminalStatus) this.status = { model: result.terminalStatus.model || this.status?.model, lines: result.terminalStatus.lines.length ? result.terminalStatus.lines : this.status?.lines || [] };
+      if (result.terminalStatus) this.status = { ...this.status, ...result.terminalStatus, model: result.terminalStatus.model || this.status?.model, lines: result.terminalStatus.lines.length ? result.terminalStatus.lines : this.status?.lines || [] };
       result.terminalStatus = this.status;
     }
-    return { ...result, activity: this.activity };
+    return { ...result, title: this.title, activity: this.activity };
   }
 }

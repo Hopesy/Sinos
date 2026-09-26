@@ -10,6 +10,52 @@
 // If you need a new context menu or keyboard shortcut that touches
 // the clipboard, import from here. Do not re-derive.
 
+import { isAndroidApp, SinosMobile } from '../remote/native/bridge';
+
+/** Compatibility path for phone browsers without a usable async clipboard.
+ * Keep the temporary selection inside the active modal: showModal() makes the
+ * rest of the document inert. Never use this path inside Tauri or Android. */
+function browserSelectionCopy(text: string): boolean {
+  if (typeof document.execCommand !== 'function') return false;
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+  const inputSelection = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement
+    ? { start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
+  const dialog = focused?.closest('dialog[open]') ?? Array.from(document.querySelectorAll('dialog[open]')).at(-1);
+  const textarea = document.createElement('textarea');
+  textarea.value = text; textarea.readOnly = true; textarea.tabIndex = -1;
+  textarea.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;pointer-events:none;font-size:16px;';
+  (dialog || document.body).appendChild(textarea);
+  try {
+    textarea.focus({ preventScroll: true }); textarea.select(); textarea.setSelectionRange(0, text.length);
+    return document.execCommand('copy');
+  } catch { return false; }
+  finally {
+    textarea.remove();
+    try {
+      if (focused?.isConnected) {
+        focused.focus({ preventScroll: true });
+        if (inputSelection?.start != null && inputSelection.end != null && (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement)) {
+          focused.setSelectionRange(inputSelection.start, inputSelection.end, inputSelection.direction || undefined);
+        }
+      }
+      if (selection) { selection.removeAllRanges(); for (const range of ranges) selection.addRange(range); }
+    } catch { /* Focus changes must not turn a successful copy into a failure. */ }
+  }
+}
+
+async function browserWrite(text: string): Promise<void> {
+  // Call synchronously within the click handler, before any dynamic import or
+  // await can consume the browser's transient user activation.
+  let failure: unknown = new Error('CLIPBOARD_UNAVAILABLE');
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return; }
+    catch (error) { failure = error; }
+  }
+  if (!browserSelectionCopy(text)) throw failure;
+}
+
 /** Tauri uses its native plugin; the phone uses the browser on an explicit tap.
  * Legacy callers remain best-effort. Callers showing a success message can
  * request rejection so a denied write is never presented as successful. */
@@ -19,9 +65,8 @@ export async function clipboardWrite(text: string, options?: { throwOnError: boo
       const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
       await writeText(text);
     } else {
-      const { isAndroidApp, SinosMobile } = await import('../remote/native/bridge');
       if (isAndroidApp) await SinosMobile.clipboardWrite({ value: text });
-      else await navigator.clipboard.writeText(text);
+      else await browserWrite(text);
     }
   } catch (error) { if (options?.throwOnError) throw error; }
 }
@@ -35,7 +80,6 @@ export async function clipboardRead(): Promise<string> {
       const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
       return (await readText()) ?? '';
     }
-    const { isAndroidApp, SinosMobile } = await import('../remote/native/bridge');
     if (isAndroidApp) return (await SinosMobile.clipboardRead()).value;
     return await navigator.clipboard.readText();
   } catch { return ''; }
@@ -48,7 +92,20 @@ export async function clipboardRead(): Promise<string> {
  *  backend (arboard), so unlike `navigator.clipboard.read()` it never
  *  triggers a WebView2 permission prompt. */
 export async function clipboardReadImage(): Promise<string | null> {
-  if (!('__TAURI_INTERNALS__' in window)) return null;
-  try { const { commands } = await import('../tauri'); return await commands.readClipboardImage(); }
+  try { return (await clipboardReadImages())[0] ?? null; }
   catch { return null; }
+}
+
+/** Metadata probe for right-click image priority; errors must not overwrite the clipboard. */
+export async function clipboardHasImage(): Promise<boolean> {
+  if (!('__TAURI_INTERNALS__' in window)) return false;
+  const { commands } = await import('../tauri');
+  return commands.clipboardHasImage();
+}
+
+/** Screenshot PNG or copied image files. Keep errors visible to paste UI. */
+export async function clipboardReadImages(): Promise<string[]> {
+  if (!('__TAURI_INTERNALS__' in window)) return [];
+  const { commands } = await import('../tauri');
+  return commands.readClipboardImages();
 }

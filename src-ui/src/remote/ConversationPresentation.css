@@ -46,6 +46,7 @@
 .conversation-code { margin:16px 0; border:1px solid var(--m-border); border-radius:12px; overflow:hidden; background:var(--m-code-bg); }
 .code-heading,.diff-heading { display:flex; align-items:center; gap:9px; min-height:40px; padding:0 12px; border-bottom:1px solid var(--m-border); color:var(--m-muted); font:11px/1.5 Inter,system-ui,sans-serif; }
 .code-heading > span { text-transform:lowercase; font-weight:600; letter-spacing:.03em; }
+.code-heading select { max-width:55%; min-height:36px; border:0; color:inherit; background:transparent; font:inherit; padding:0 4px; }
 .code-heading button { display:flex; align-items:center; justify-content:center; gap:6px; margin-left:auto; min-width:64px; min-height:44px; padding:4px 6px; border:0; border-radius:6px; background:transparent; color:var(--m-muted); font-size:11px; }
 .code-heading button:active { color:var(--m-text); background:var(--m-raised); }
 .phone-workspace .conversation-code pre { margin:0; border:0; border-radius:0; background:transparent; padding:14px; max-height:360px; overflow:auto; font:12px/1.85 CascadiaMono,monospace; tab-size:2; white-space:pre; }

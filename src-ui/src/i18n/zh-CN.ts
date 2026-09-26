@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const zhCN = {
   ...editorFallback,
+  'menu.paste_image': '粘贴图片',
+  'terminal.image_working': '正在准备粘贴…',
+  'terminal.image_added': '已添加 {count} 张图片，按 Enter 发送',
+  'terminal.image_failed': '添加图片失败，请重新复制或拖入图片',
+  'terminal.image_missing': '图片文件不存在或无法读取，请重新选择',
+  'terminal.image_large': '单张图片不能超过 25 MB',
+  'terminal.image_busy': '剪贴板正被占用，请重试粘贴',
+  'terminal.image_many': '一次最多添加 32 张图片',
   'app.title': 'Sinos CLI',
   'explorer.tab.workspace': '工作区',
   'explorer.tab.history': '会话记录',

@@ -7,6 +7,9 @@ export interface TermContextMenuState {
   y: number;
   hasSelection: boolean;
   text?: string;
+  hasImage?: boolean;
+  /** A TUI-owned selection (e.g. Codex mouse mode) must copy inside that TUI. */
+  copySelection?: () => Promise<void>;
 }
 
 /** Shared read-only surface menu used by both xterm and ConversationView. */
@@ -45,36 +48,32 @@ export function TermContextMenu({ menu, onClose, onCopy, onPaste, onSelectAll }:
   const top = Math.max(4, Math.min(menu.y, window.innerHeight - 116));
 
   return createPortal(
-    <div ref={ref} className="term-ctx-menu" style={{ left, top }}>
+    <div
+      ref={ref} className="term-ctx-menu" style={{ left, top }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
+    >
       <button
         type="button"
         className={`term-ctx-item${menu.hasSelection ? '' : ' disabled'}`}
         disabled={!menu.hasSelection}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          if (menu.hasSelection) onCopy();
-        }}
+        onClick={onCopy}
       >
         <span>{t('menu.copy')}</span><kbd>{mod}+C</kbd>
       </button>
       <button
         type="button"
         className="term-ctx-item"
-        onMouseDown={(event) => {
-          event.preventDefault();
-          onPaste();
-        }}
+        onClick={onPaste}
       >
-        <span>{t('menu.paste')}</span><kbd>{mod}+V</kbd>
+        <span>{t(menu.hasImage ? 'menu.paste_image' : 'menu.paste')}</span><kbd>{mod}+V</kbd>
       </button>
       <div className="term-ctx-sep" />
       <button
         type="button"
         className="term-ctx-item"
-        onMouseDown={(event) => {
-          event.preventDefault();
-          onSelectAll();
-        }}
+        onClick={onSelectAll}
       >
         <span>{t('menu.select_all')}</span><kbd>{mod}+A</kbd>
       </button>

@@ -1,15 +1,15 @@
-export interface TerminalStatus { model?: string; lines: string[]; contextUsed?: number }
+export interface TerminalStatus { model?: string; cwd?: string; lines: string[]; contextUsed?: number }
 
 // Ink's composer rules occupy a whole terminal row. A stale VT wrap flag
 // must not glue one to the prompt/HUD and turn it into a long chat paragraph.
 export const isTerminalRule = (line: string) => /^[\s─━═┄┈]{8,}$/.test(line) && /[─━═┄┈]/.test(line);
-const prompt = /^\s*[❯›>]\s*$/;
+const prompt = /^\s{0,3}[❯›>](?:\s|$)/;
 const hud = /^\s*\[[^\]\n]{1,80}\](?:\s|$)/;
 const effort = /^[◐◑◒◓◔◕◈]\s*(?:low|medium|high|max|xhigh|auto)(?:\s+effort)?\s*[·•]\s*\/effort$/i;
 const hint = /^(?:[⏸⏵▶▸]\s*)?(?:manual mode on|accept edits on|bypass permissions on|plan mode on|\? for shortcuts|esc to interrupt|ctrl\+c to interrupt|shift\+tab\b|.*[←→].*for agents)|^◈.*\/effort|^\d[\d,.kKmM]*\s+tokens\b/i;
 const bar = /[░▒▓█▏▎▍▌▋▊▉▰▱━─]{3,}/g;
 
-/** Only controls adjacent to a bordered, empty CLI composer are status chrome.
+/** Only controls adjacent to a bordered CLI composer are status chrome.
  * Keep code samples and similarly worded assistant output in the timeline. */
 export function claudeChrome(lines: string[], code: Set<number>) {
   const hidden = new Set<number>();
@@ -18,6 +18,13 @@ export function claudeChrome(lines: string[], code: Set<number>) {
   const startupHeader = first >= 0 && /^[\s▐▛▜▝▘█▗▟▄▀·]*Claude Code\s+v\d[\w.+-]*$/.test(lines[first]) && /\b(?:Opus|Sonnet|Haiku|context|API Usage Billing)\b/i.test(lines[first + 1] || '');
   const previous = (from: number) => { let i = from - 1; while (i >= 0 && !lines[i].trim()) i--; return i; };
   const next = (from: number) => { let i = from + 1; while (i < lines.length && !lines[i].trim()) i++; return i; };
+  // The initial header can arrive in a separate PTY write, before the
+  // composer. Do not expose its indentation as Markdown code for a frame.
+  if (startupHeader) {
+    for (let j = first; j < Math.min(lines.length, first + 3); j++) hidden.add(j);
+    // /effort may be painted one write before the composer border arrives.
+    lines.forEach((line, index) => { if (effort.test(line.trim())) hidden.add(index); });
+  }
   for (let i = 0; i < lines.length; i++) {
     if (!code.has(i) && /[▐▛▜▝▘█].*Claude Code\s+v\d/.test(lines[i]) && lines.slice(i + 1, i + 3).every(line => /[▐▛▜▝▘█]/.test(line))) {
       hidden.add(i); hidden.add(i + 1); hidden.add(i + 2);
@@ -52,7 +59,9 @@ export function claudeChrome(lines: string[], code: Set<number>) {
     }
     // Last composer wins, including an empty footer after /clear or a mode
     // switch; old scrollback must not resurrect an earlier model/status.
-    status = model || details.length ? { model, lines: details } : undefined;
+    const directory = startupHeader ? lines[first + 2]?.replace(/^[\s▐▛▜▝▘█▗▟▄▀·]+/, '').trim() : undefined;
+    const cwd = directory && /^(?:[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/.test(directory) ? directory : undefined;
+    status = model || details.length || cwd ? { model, cwd, lines: details } : undefined;
   }
   return { hidden, status };
 }

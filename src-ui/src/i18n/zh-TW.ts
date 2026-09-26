@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const zhTW = {
   ...editorFallback,
+  'menu.paste_image': '貼上圖片',
+  'terminal.image_working': '正在準備貼上…',
+  'terminal.image_added': '已加入 {count} 張圖片，按 Enter 傳送',
+  'terminal.image_failed': '加入圖片失敗，請重新複製或拖入圖片',
+  'terminal.image_missing': '圖片檔案不存在或無法讀取，請重新選擇',
+  'terminal.image_large': '單張圖片不能超過 25 MB',
+  'terminal.image_busy': '剪貼簿正被占用，請重試貼上',
+  'terminal.image_many': '一次最多加入 32 張圖片',
   'app.title': 'Sinos CLI',
   'explorer.tab.workspace': '工作區',
   'explorer.tab.history': '會話記錄',

@@ -7,7 +7,7 @@ export interface QueuedPrompt { id: string; text: string; revision: number; stat
 export interface QueueSnapshot { messages: QueuedPrompt[]; activity: ActivitySnapshot; held?: boolean }
 export interface RemoteSession { id: string; tool: string | null; cwd: string; running: boolean; paused: boolean; output_chunks: number; cols: number; rows: number; activity?: ActivitySnapshot; queued_count?: number }
 export interface RemoteTool { id: string; displayName: string }
-export interface RemoteState { sessions: RemoteSession[]; device_name: string; capabilities?: string[] }
+export interface RemoteState { sessions: RemoteSession[]; device_name: string; default_cwd?: string; capabilities?: string[]; share?: { mode: 'view' | 'control'; expiresAt: number } }
 export type Connection = 'connecting' | 'online' | 'offline' | 'unauthorized' | 'replaced' | 'paused';
 export type StreamState = 'connecting' | 'live' | 'reconnecting' | 'ended';
 export type ServerMessage = { type: 'reset' } | { type: 'codex' | 'claude'; session_id: string; page: import('./CodexEventStream').CodexPage } | { type: 'output'; session_id: string; data: string; sequence?: number } | { type: 'status'; session_id: string; running: boolean; paused: boolean } | { type: 'error'; message: string };

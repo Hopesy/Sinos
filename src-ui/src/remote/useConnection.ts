@@ -28,7 +28,7 @@ export function useConnection(client: RemoteClient) {
           try { const available = await client.tools(controller.signal); if (!disposed) { setTools(available); haveTools = true; } } catch { /* Retry without marking a healthy state offline. */ }
         }
       } catch (error) {
-        const unauthorized = error instanceof RemoteError && error.status === 401;
+        const unauthorized = error instanceof RemoteError && (error.status === 401 || ((error.status === 403 || error.status === 410) && /^SHARE_/.test(error.message)));
         const replaced = error instanceof RemoteError && error.message === 'CONNECTION_REPLACED';
         const paused = error instanceof RemoteError && error.message === 'CONNECTION_PAUSED';
         const starting = !connectedOnce && !unauthorized && !paused && Date.now() - started < 10000;

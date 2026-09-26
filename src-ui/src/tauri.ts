@@ -251,6 +251,9 @@ export const commands = {
    *  returning its absolute path (or null when the clipboard has no image).
    *  Uses the native backend so WebView2 never shows a permission prompt. */
   readClipboardImage: () => invoke<string | null>('read_clipboard_image'),
+  clipboardHasImage: () => invoke<boolean>('clipboard_has_image'),
+  readClipboardImages: () => invoke<string[]>('read_clipboard_images'),
+  prepareImagePaths: (paths: string[]) => invoke<string[]>('prepare_image_paths', { paths }),
 
   listDirectory: (path: string) => invoke<DirEntryInfo[]>('list_directory', { path }),
   listSystemFonts: () => invoke<FontInfo[]>('list_system_fonts'),

@@ -16,6 +16,34 @@ function read(data = '', revision = '1'): ChatRead { return { bound: true, data,
 function mount() { return render(<ChatView client={client} session={session} online toolName="Claude Code" onTitle={vi.fn()} insert="" onInserted={vi.fn()} />); }
 beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); live.codex = { available: false, messages: [] }; live.claude = { available: false, turns: [] }; live.projection = { events: [], question: null }; live.answer.mockReset().mockResolvedValue(undefined); vi.mocked(client.chat).mockReset().mockResolvedValue(read()); vi.mocked(client.prompt).mockReset().mockResolvedValue(undefined); vi.mocked(client.input).mockReset().mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+it('renders a read-only guest conversation and choices without sending controls or private drafts', async () => {
+  localStorage.setItem('sinos-mobile-chat-draft-chat-test', 'owner private draft');
+  live.projection = { events: [{ id: 'reply', kind: 'assistant', text: 'Shared reply' }], question: { id: 'choice', text: 'Continue?', cursor: 0, choices: [{ label: 'Yes', input: '\r' }] } };
+  render(<ChatView client={client} session={session} online toolName="Claude Code" onTitle={vi.fn()} insert="" onInserted={vi.fn()} readOnly ephemeralDrafts />);
+  await act(async () => {});
+  expect(screen.getByText('Shared reply')).toBeTruthy();
+  expect(screen.queryByRole('textbox', { name: '发送消息' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '停止当前生成' })).toBeNull();
+  expect((screen.getByRole('button', { name: /Yes/ }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: /Yes/ }));
+  expect(live.answer).not.toHaveBeenCalled();
+  expect(screen.getByText('等待分享者操作')).toBeTruthy();
+  expect(screen.queryByText('点击选项即可确认')).toBeNull();
+  expect(localStorage.getItem('sinos-mobile-chat-draft-chat-test')).toBe('owner private draft');
+});
+
+it('lets a controlling guest submit while keeping the owner draft untouched', async () => {
+  localStorage.setItem('sinos-mobile-chat-draft-chat-test', 'owner private draft');
+  render(<ChatView client={client} session={session} online toolName="Claude Code" onTitle={vi.fn()} insert="" onInserted={vi.fn()} ephemeralDrafts />);
+  await act(async () => {});
+  const input = screen.getByRole('textbox', { name: '发送消息' });
+  expect((input as HTMLTextAreaElement).value).toBe('');
+  fireEvent.change(input, { target: { value: 'guest request' } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '发送' })); });
+  expect(client.prompt).toHaveBeenCalledExactlyOnceWith('chat-test', 'guest request');
+  expect(localStorage.getItem('sinos-mobile-chat-draft-chat-test')).toBe('owner private draft');
+});
+
 it('renders Claude original Markdown once during streaming and native handoff while retaining approval controls', async () => {
   live.claude = new ClaudeEventStream().apply({ epoch: 'c', cursor: 3, reset: true, online: true, complete: true, has_more: false, thread_id: 'claude-session', events: [
     { sequence: 1, message: { kind: 'session', session: 'claude-session', model: 'Opus', percent: 18 } },
@@ -76,7 +104,8 @@ it('keeps the Codex footer outside history and shows native model/context even w
   const status = screen.getByLabelText('会话状态');
   expect(status.textContent).toContain('gpt-5.4 xhigh');
   expect(screen.getByRole('meter', { name: '上下文占用' }).getAttribute('aria-valuenow')).toBe('20');
-  expect(status.querySelector('.status-directory')?.getAttribute('title')).toBe('/new-project');
+  expect(status.querySelector('.status-directory')).toBeNull();
+  expect(screen.getByText('20%')).toBeTruthy();
   expect(status.closest('.chat-scroll')).toBeNull();
   live.projection = { events: [], question: { id: 'q', text: 'Continue?', choices: [{ label: 'Yes', input: '\r' }] } };
   view.rerender(<ChatView {...props} />);
@@ -236,7 +265,7 @@ it('updates one separate model/status strip while messages grow, with no HUD mes
   const view = mount(); await act(async () => {});
   const strip = screen.getByLabelText('会话状态');
   expect(strip.textContent).toContain('Fable 5.1');
-  expect(strip.querySelector('.status-directory')?.getAttribute('title')).toBe('/project');
+  expect(strip.querySelector('.status-directory')).toBeNull();
   expect(view.container.querySelectorAll('.chat-message')).toHaveLength(1);
   for (let count = 4; count <= 10; count++) {
     live.projection = projectConversation([`Reply ${count}`, '', ...footer(count)], 7, 'claude');

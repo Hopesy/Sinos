@@ -8,13 +8,14 @@
 // unrelated global state changes (agent status, other tabs' folder changes,
 // etc.) don't cascade into this component.
 
-import { memo, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { clipboardRead, clipboardWrite, clipboardReadImage } from '../../lib/clipboard';
+import { clipboardWrite } from '../../lib/clipboard';
+import { createTerminalImageInput, type ImageInputNotice } from '../../lib/terminal-image-input';
 import { subscribeTerminalEvents } from '../../lib/pty-event-bus';
 import { rig } from '../../lib/latency-rig';
 import * as outputScheduler from '../../lib/terminal-output-scheduler';
@@ -28,7 +29,7 @@ import {
 import { usesSelfRenderedCaret } from '../../lib/chat-tools';
 import { createTerminalAgentStatus } from '../../lib/terminal-agent-status';
 import { createTerminalInteractionResponder } from '../../lib/terminal-interaction-response';
-import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
+import { registerFileDropTarget } from '../../lib/file-drop';
 import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
 import { parseOmpTerminalTitle } from '../../lib/omp-terminal-title';
@@ -44,6 +45,7 @@ import { THEME_COLORS } from '../../lib/personalization';
 import { useDataAttr } from '../../lib/use-data-attr';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
 import { selectedSurfaceText, useTerminalContextMenu } from './useTerminalContextMenu';
+import { createCodexTerminalSelection } from '../../lib/codex-terminal-selection';
 import '@xterm/xterm/css/xterm.css';
 import './TierTerminal.css';
 
@@ -479,8 +481,18 @@ function TierTerminalImpl({
 
   // ── Terminal context menu ────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<TermContextMenuState | null>(null);
-  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
-  const contextMenuHandlers = useTerminalContextMenu(() => xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current), setCtxMenu);
+  const [imageNotice, setImageNotice] = useState<ImageInputNotice>(null);
+  const imageInputRef = useRef<ReturnType<typeof createTerminalImageInput> | null>(null);
+  useEffect(() => {
+    if (!imageNotice || imageNotice.kind === 'working') return;
+    const timer = window.setTimeout(() => setImageNotice(null), imageNotice.kind === 'error' ? 6000 : 3500);
+    return () => window.clearTimeout(timer);
+  }, [imageNotice]);
+  const codexSelectionRef = useRef<ReturnType<typeof createCodexTerminalSelection> | null>(null);
+  const { contextMenuHandlers, copyMenuSelection, closeMenu: closeCtxMenu } = useTerminalContextMenu(
+    () => xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current), setCtxMenu,
+    () => codexSelectionRef.current?.read(),
+  );
 
   const t = useT();
 
@@ -554,6 +566,21 @@ function TierTerminalImpl({
         isDarkTheme,
       ),
     });
+
+    const imageInput = createTerminalImageInput({
+      tool,
+      isLive: () => mounted && !processExitedRef.current,
+      bracketedPaste: () => term.modes.bracketedPasteMode,
+      write: async data => {
+        codexSelectionRef.current?.observe(data);
+        await commands.tierTerminalInput(sessionId, data);
+        term.clearSelection(); term.scrollToBottom();
+        if (isActiveRef.current) term.focus();
+      },
+      pasteText: text => term.paste(normalizePasteNewlines(text)),
+      notice: value => { if (mounted) setImageNotice(value); },
+    });
+    imageInputRef.current = imageInput;
 
     const setAgentCursorVisible = (visible: boolean) => {
       if (keepXtermCursor || agentCursorVisibleRef.current === visible) return;
@@ -968,9 +995,9 @@ function TierTerminalImpl({
     // whenever the TUI has mouse reporting on. Claude Code ≥v2.1.143 acts on
     // that right-click by pasting the clipboard ITSELF — so the user got one
     // paste from the TUI plus a second from our menu item (upstream:
-    // anthropics/claude-code#61035). Other tools (Kimi/Codex/OpenCode) don't
-    // bind right-click, which is why only Claude Code duplicated. Dropping
-    // the events here leaves our menu as the single right-click paste path.
+    // anthropics/claude-code#61035). Codex now owns mouse selections and
+    // right-click copy; its explicit copy action below bypasses this filter.
+    // Ordinary right clicks remain owned by the host menu in all other cases.
     // SGR encoding only (`\x1b[<b;x;yM` press / `\x1b[<b;x;ym` release);
     // motion (bit 5) and wheel (bit 6) events are left untouched.
     const stripRightClickMouse = (data: string): string => {
@@ -981,6 +1008,11 @@ function TierTerminalImpl({
         return (btn & 3) === 2 && !(btn & 96) ? '' : seq;
       });
     };
+    const codexSelection = createCodexTerminalSelection(
+      () => tool === 'codex' && mounted && !processExitedRef.current && term.modes.mouseTrackingMode !== 'none',
+      data => commands.tierTerminalInput(sessionId, data),
+    );
+    codexSelectionRef.current = codexSelection;
     // Single entry point for user-typed data on its way to the PTY. term.onData
     // covers xterm's own key handling; the macOS IME symbol-passthrough input
     // listener below calls the same function for IME-committed text that
@@ -988,6 +1020,7 @@ function TierTerminalImpl({
     const forwardInput = (rawData: string) => {
       const data = stripRightClickMouse(rawData);
       if (!data) return;
+      codexSelection.observe(data);
       if (data.includes('\r') || data.includes('\n')) {
         markNotifySoundPromptSubmitted(sessionId, tool);
         activity.submitted();
@@ -1025,6 +1058,10 @@ function TierTerminalImpl({
         }
       }
       if (e.type === 'keydown') {
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && imageInput.busy) {
+          e.preventDefault();
+          return false; // Keep Enter from submitting before the image paste finishes.
+        }
         rig.inputStart();
         // macOS pair-inserting IMEs synthesize a caret-move right after
         // committing （）/“”/‘’ — bounce it back to the textarea (moving the
@@ -1040,9 +1077,17 @@ function TierTerminalImpl({
         const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
         // Copy: Ctrl+C / Cmd+C — only when text is selected (otherwise send SIGINT).
-        if (cmdOrCtrl && e.code === 'KeyC') {
+        if ((cmdOrCtrl || (e.ctrlKey && e.shiftKey)) && e.code === 'KeyC') {
           if (term.hasSelection()) {
+            e.preventDefault();
             clipboardWrite(term.getSelection());
+            return false;
+          }
+          const copySelection = codexSelection.read();
+          if (copySelection) {
+            e.preventDefault();
+            const bounds = wrapRef.current?.getBoundingClientRect();
+            copyMenuSelection({ x: bounds?.left ?? 0, y: bounds?.top ?? 0, hasSelection: true, copySelection });
             return false;
           }
         }
@@ -1054,18 +1099,7 @@ function TierTerminalImpl({
         // clipboard text twice.
         if (cmdOrCtrl && e.code === 'KeyV') {
           e.preventDefault();
-
-          // Image-first paste (issue #89): if the clipboard holds a still
-          // image, persist it as a temp file and paste that path so the AI
-          // CLI can read it off the local filesystem. Routed through the
-          // Native Tauri backend avoids WebView2's per-paste permission prompt
-          // (issue #96, project clipboard rule).
-          (async () => {
-            const imgPath = await clipboardReadImage();
-            if (imgPath) { term.paste(imgPath); return; }
-            const text = await clipboardRead();
-            if (text) term.paste(normalizePasteNewlines(text));
-          })();
+          void imageInput.paste();
           return false;
         }
 
@@ -1076,15 +1110,7 @@ function TierTerminalImpl({
         }
         if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
           e.preventDefault();
-
-          // Same image-first paste as Ctrl+V (issue #89); backend clipboard
-          // read avoids the WebView2 permission prompt (issue #96).
-          (async () => {
-            const imgPath = await clipboardReadImage();
-            if (imgPath) { term.paste(imgPath); return; }
-            const text = await clipboardRead();
-            if (text) term.paste(normalizePasteNewlines(text));
-          })();
+          void imageInput.paste();
           return false;
         }
       }
@@ -1619,6 +1645,8 @@ function TierTerminalImpl({
       term.dispose();
       outputScheduler.unregisterSession(sessionId);
       xtermRef.current = null;
+      codexSelectionRef.current = null;
+      if (imageInputRef.current === imageInput) imageInputRef.current = null;
       webglRef.current = null;
       unlisteners.forEach(u => u());
       // Skip kill if this session was detached to a new window
@@ -1822,7 +1850,7 @@ function TierTerminalImpl({
         return wrapRef.current?.getBoundingClientRect() ?? null;
       },
       insert: (paths) => {
-        getTabActions(sessionId)?.insertText(formatPathsForInsert(paths));
+        void imageInputRef.current?.drop(paths);
       },
     });
   }, [sessionId]);
@@ -2110,7 +2138,7 @@ function TierTerminalImpl({
             // Blurring now would cancel an in-flight composition — let it
             // finish; the next click re-anchors.
             if (imeFrozenRef.current) return;
-            if (xtermRef.current?.hasSelection()) return;
+            if (xtermRef.current?.hasSelection() || codexSelectionRef.current?.read()) return;
             const textarea = termRef.current?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
             if (textarea) {
               textarea.blur();
@@ -2118,7 +2146,14 @@ function TierTerminalImpl({
             }
           }
         }}
-        onPaste={async (e) => {
+        onPasteCapture={async (e) => {
+          if ('__TAURI_INTERNALS__' in window) {
+            // Capture before xterm's native paste listener, so an image and its
+            // alternate text/HTML representation cannot be inserted twice.
+            e.preventDefault(); e.stopPropagation();
+            void imageInputRef.current?.paste();
+            return;
+          }
           // Issue #89: Support pasting images from clipboard into terminal
           // (same as Gambit supports). Save image to temp file and paste path.
           const items = e.clipboardData?.items;
@@ -2175,29 +2210,27 @@ function TierTerminalImpl({
         <TermContextMenu
           menu={ctxMenu}
           onClose={closeCtxMenu}
-          onCopy={() => {
-            const text = ctxMenu.text || xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current);
-            if (text) clipboardWrite(text);
+          onCopy={() => copyMenuSelection(ctxMenu)}
+          onPaste={() => {
             closeCtxMenu();
-          }}
-          onPaste={async () => {
-            // Image-first paste (issue #89), then text. Backend clipboard
-            // read (arboard) avoids the WebView2 permission prompt (issue #96).
-            const imgPath = await clipboardReadImage();
-            if (imgPath) {
-              xtermRef.current?.paste(imgPath);
-              closeCtxMenu();
-              return;
-            }
-            const text = await clipboardRead();
-            if (text && xtermRef.current) xtermRef.current.paste(normalizePasteNewlines(text));
-            closeCtxMenu();
+            void imageInputRef.current?.paste();
           }}
           onSelectAll={() => {
             xtermRef.current?.selectAll();
             closeCtxMenu();
           }}
         />
+      )}
+
+      {imageNotice && (
+        <div className={`terminal-image-notice${imageNotice.kind === 'error' ? ' is-error' : ''}`} role="status" aria-live="polite">
+          {imageNotice.kind === 'working' ? t('terminal.image_working')
+            : imageNotice.kind === 'done' ? t('terminal.image_added', { count: imageNotice.count ?? 1 })
+            : t(imageNotice.error?.includes('IMAGE_TOO_LARGE') ? 'terminal.image_large'
+              : imageNotice.error?.includes('IMAGE_TOO_MANY') ? 'terminal.image_many'
+              : imageNotice.error?.includes('IMAGE_FILE_UNAVAILABLE') ? 'terminal.image_missing'
+              : imageNotice.error?.includes('IMAGE_CLIPBOARD_BUSY') ? 'terminal.image_busy' : 'terminal.image_failed')}
+        </div>
       )}
 
       {/* Gambit — the floating compose window — is rendered once at the App

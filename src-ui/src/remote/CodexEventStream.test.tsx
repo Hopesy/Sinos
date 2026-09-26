@@ -12,6 +12,19 @@ function page(messages: ReturnType<typeof event>[], start = 1, extra: Partial<Co
 }
 const bootstrap = event('sinos/thread', { model: 'gpt-test', effort: 'high', cwd: '/project', status: { type: 'idle' } });
 
+it('restores and updates thread titles and directories before any response, clearing metadata on a thread switch', () => {
+  const stream = new CodexEventStream();
+  const first = stream.apply(page([event('sinos/thread', { title: 'Saved title', cwd: '/first' })]));
+  expect(first.title).toBe('Saved title');
+  expect(first.status?.cwd).toBe('/first');
+  const next = stream.apply(page([event('thread/name/updated', { threadName: 'Renamed title' }), event('thread/settings/updated', { threadSettings: { cwd: '/second' } })], 2));
+  expect(next.title).toBe('Renamed title');
+  expect(next.status?.cwd).toBe('/second');
+  const replay = new CodexEventStream().apply(page([event('sinos/thread', { title: 'Renamed title', cwd: '/second' })]));
+  expect(replay.title).toBe(next.title);
+  expect(stream.apply(page([bootstrap], 1, { epoch: 'new-thread' })).title).toBeUndefined();
+});
+
 it('renders original Markdown before completion, with stable message identity and intact newlines', () => {
   const stream = new CodexEventStream();
   const first = stream.apply(page([bootstrap, event('turn/started', { turn: { id: 'turn', status: 'inProgress' } }), event('item/agentMessage/delta', { itemId: 'reply', delta: '**Changes**\n\n1. First\n2. Second\n   - Nested\n' })]));

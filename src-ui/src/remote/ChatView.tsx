@@ -32,14 +32,17 @@ function remainingPrompts(prompts: SentPrompt[], transcript: ChatTranscriptState
   }).map(prompt => ({ ...prompt, seen: new Set([...prompt.seen, ...acknowledged]) }));
 }
 
-export function ChatView({ client, session, online, toolName, title, onTitle, insert, onInserted, capabilities = [] }: {
+export function ChatView({ client, session, online, toolName, onTitle, onCwd, insert, onInserted, capabilities = [], readOnly = false, ephemeralDrafts = false }: {
   client: RemoteClient; session: RemoteSession; online: boolean; toolName: string;
   onTitle: (title: string) => void; insert: string; onInserted: () => void;
   capabilities?: string[];
-  title?: string;
+  onCwd?: (cwd: string) => void;
+  readOnly?: boolean;
+  ephemeralDrafts?: boolean;
 }) {
   const [transcript, setTranscript] = useState<ChatTranscriptState>({ messages: [], remainder: '', nextLineIndex: 0 });
   const [draft, setDraft] = useState(() => {
+    if (ephemeralDrafts) return '';
     const chat = storageRead(`chat-draft-${session.id}`), terminal = storageRead(`draft-${session.id}`);
     return [chat, terminal !== chat ? terminal : ''].filter(Boolean).join('\n');
   });
@@ -56,12 +59,15 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
   const nativeStream = session.tool === 'codex' ? live.codex : claude;
   const claudeAnchors = useRef(new Map<string, string>());
   const structured = nativeStream?.available || nativeStream?.retained;
-  const codex = session.tool === 'codex' ? { ...transcript.codexStatus, ...(structured ? live.codex.status : {}) } : undefined;
-  const queueEnabled = capabilities.includes('message_queue');
+  const matchingHistory = !nativeStream?.threadId || !read?.sourceId || read.sourceId.endsWith(nativeStream.threadId);
+  const codex = session.tool === 'codex' ? { ...(matchingHistory ? transcript.codexStatus : {}), ...live.codex.status } : undefined;
+  const cwd = codex?.cwd || claude?.cwd || (matchingHistory && read?.cwd) || live.projection.terminalStatus?.cwd || session.cwd;
+  const sessionTitle = (session.tool === 'codex' && live.codex.title) || (matchingHistory && read?.title) || live.projection.title || toolName;
+  const queueEnabled = !readOnly && capabilities.includes('message_queue');
   const autoQueueSupported = session.tool === 'claude' || session.tool === 'codex';
   const queue = useMessageQueue(client, session.id, queueEnabled, online);
   const imageEnabled = capabilities.includes('image_attachments_v1') && (session.tool === 'claude' || session.tool === 'codex');
-  const images = useImageAttachments(client, session.id, imageEnabled, online);
+  const images = useImageAttachments(client, session.id, imageEnabled, online, !ephemeralDrafts);
   const knownImages = useMemo(() => [...new Map([...images.known, ...(queue.snapshot?.messages.flatMap(item => item.attachments || []) || [])].map(image => [image.id, image])).values()], [images.known, queue.snapshot]);
   const conversationMessages = useMemo(() => {
     const native = imageMessages(structured && read?.sourceId && !read.sourceId.endsWith(nativeStream?.threadId || '') ? [] : transcript.messages, knownImages);
@@ -107,6 +113,8 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
   const transcriptRef = useRef(transcript);
   const busy = useRef(false);
   const titleRef = useRef(onTitle); titleRef.current = onTitle;
+  const cwdRef = useRef(onCwd); cwdRef.current = onCwd;
+  useEffect(() => { titleRef.current(sessionTitle); cwdRef.current?.(cwd); }, [sessionTitle, cwd]);
   const sendState = useRef({ phase, online }); sendState.current = { phase, online };
   const pendingRef = useRef<SentPrompt[]>([]);
   const nextPrompt = useRef(0);
@@ -115,11 +123,13 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
     if (insert) { setDraft(value => `${value}${value ? '\n' : ''}${insert}`); onInserted(); requestAnimationFrame(() => textarea.current?.focus()); }
   }, [insert, onInserted]);
   useEffect(() => {
-    storageWrite(`chat-draft-${session.id}`, draft);
-    // Both former entry points now share this one composer, including old drafts.
-    storageWrite(`draft-${session.id}`, '');
+    if (!ephemeralDrafts) {
+      storageWrite(`chat-draft-${session.id}`, draft);
+      // Both former entry points now share this one composer, including old drafts.
+      storageWrite(`draft-${session.id}`, '');
+    }
     if (textarea.current) { textarea.current.style.height = 'auto'; textarea.current.style.height = `${Math.min(180, textarea.current.scrollHeight)}px`; }
-  }, [draft, session.id]);
+  }, [draft, session.id, ephemeralDrafts]);
   useEffect(() => {
     let disposed = false; let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
@@ -139,7 +149,6 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
         const current = retainHistory && previous ? { ...next, history_cursor: previous.history_cursor, has_older: previous.has_older } : next;
         latest.current = current;
         setRead(current);
-        if (next.title) titleRef.current(next.title);
         if (next.bound && !next.unchanged) {
           const changedSource = previous?.sourceId && previous.sourceId !== next.sourceId;
           if (changedSource) messageKeys.current.clear();
@@ -196,6 +205,7 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
     finally { busy.current = false; setLoadingOlder(false); }
   }
   async function send(enqueue = working && queueEnabled) {
+    if (readOnly) return;
     if (!hasContent || preparingImages || sending || !online || session.paused || !session.running || ((question || phase === 'waiting') && !enqueue)) return;
     const text = draft;
     const selected = images.items.map(image => image.id);
@@ -227,7 +237,7 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
     catch (cause) { setError(errorMessage(cause)); throw cause; }
   }
   async function stop() {
-    if (!online || !session.running || session.paused || stopping || phase === 'idle') return;
+    if (readOnly || !online || !session.running || session.paused || stopping || phase === 'idle') return;
     setStopping(true); setError('');
     try { await client.input(session.id, '\x03'); }
     catch (cause) { setError(errorMessage(cause)); }
@@ -267,14 +277,17 @@ export function ChatView({ client, session, online, toolName, title, onTitle, in
     <div className="chat-compose-wrap">
       <div className="chat-interactions">
       {queueEnabled && <MessageQueue messages={queue.snapshot?.messages || []} disabled={!online || queue.busy} canSend={!question && !working && phase !== 'waiting' && !session.paused && session.running} held={Boolean(queue.snapshot?.held)} onAction={queueAction} />}
-      {question && <ConversationQuestion key={question.id} question={question} disabled={!online || live.stream !== 'live' || live.canAnswer === false || session.paused} unsupported={live.answerUnsupported || (question.kind === 'text' && !capabilities.includes('answer_text')) || (question.kind === 'multi' && !capabilities.includes('answer_multiselect'))} answering={live.answering} answered={live.answered === question.id} disconnected={!online || live.stream !== 'live'} onAnswer={async value => { setError(''); try { await live.answer(question.id, value); } catch (cause) { setError(errorMessage(cause)); throw cause; } }} />}
+      {question && <ConversationQuestion key={question.id} question={question} readOnly={readOnly} disabled={readOnly || !online || live.stream !== 'live' || live.canAnswer === false || session.paused} unsupported={live.answerUnsupported || (question.kind === 'text' && !capabilities.includes('answer_text')) || (question.kind === 'multi' && !capabilities.includes('answer_multiselect'))} answering={live.answering} answered={live.answered === question.id} disconnected={!online || live.stream !== 'live'} onAnswer={async value => { if (readOnly) return; setError(''); try { await live.answer(question.id, value); } catch (cause) { setError(errorMessage(cause)); throw cause; } }} />}
       </div><div className="chat-compose">
-      {terminalStatus && <ConversationStatus status={terminalStatus} cwd={codex?.cwd || claude?.cwd || session.cwd} title={read?.title || title} />}
+      {terminalStatus && <ConversationStatus status={terminalStatus} />}
+      {!readOnly && <>
       {images.items.length > 0 && <DraftImages items={images.items} disabled={sending || images.preparing} onRemove={images.remove} />}
       {(images.progress || images.preparing) && <div className="image-upload-status" role="status"><span>{images.progress || '正在处理图片…'}</span>{images.progress && <button onClick={images.cancel}>取消上传</button>}</div>}
       {images.notice && images.items.length > 0 && <p className="image-draft-notice">{images.notice}</p>}
       <textarea ref={textarea} aria-label="发送消息" placeholder={!online ? '电脑离线，仍可继续写下想法…' : question ? '先完成上方确认，也可以继续写草稿…' : '你想构建什么？'} value={draft} onChange={e => setDraft(e.target.value)} rows={2} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
       <div className="chat-compose-tools">{imageEnabled && <ImagePicker disabled={sending || preparingImages || images.items.length >= 4} onSelect={files => void images.select(files)} />}<span className="composer-cli"><span className={`status-dot ${online ? 'is-online' : ''}`} /><span className="cli-name">{toolName}</span></span><span className={`composer-hint phase-${phase}`}>{working && <CircleDashed size={12} className="spin" />}{phaseLabel}</span>{queueEnabled && !working && <button className="composer-queue" aria-label="加入待发送队列" title="加入待发送队列" disabled={!hasContent || preparingImages || sending || !online || !session.running || queue.busy} onClick={() => void send(true)}><ListPlus size={17} /></button>}<button className="composer-stop" aria-label="停止当前生成" title="停止当前生成" disabled={!online || session.paused || !session.running || stopping || phase === 'idle'} onClick={() => void stop()}><Square size={14} /></button><button className="send-hit" aria-label={working && queueEnabled ? "加入队列" : "发送"} title={working && queueEnabled ? autoQueueSupported ? "确认本轮结束后发送" : "加入待发送队列" : "发送"} disabled={!hasContent || preparingImages || sending || !online || session.paused || !session.running || Boolean(question) || phase === 'waiting'} onClick={() => void send()}><span>{working && queueEnabled ? <ListPlus size={19} /> : <ArrowUp size={19} />}</span></button></div>
+      </>}
+      {readOnly && <div className="share-readonly">只读访问，对话会实时更新</div>}
     </div><p className="composer-caption">{!online ? '等待电脑连接 · 草稿自动保存' : working && queueEnabled ? autoQueueSupported ? '新消息会加入队列，确认本轮结束后继续' : '新消息会加入队列，空闲后可选择发送' : '与桌面同步 · 同一个会话'}</p></div>
   </div>;
 }

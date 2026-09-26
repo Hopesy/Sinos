@@ -1,4 +1,12 @@
 export const editorFallback = {
+  'menu.paste_image': 'Paste image',
+  'terminal.image_working': 'Preparing paste…',
+  'terminal.image_added': 'Added {count} image(s). Enter to send.',
+  'terminal.image_failed': 'Could not add image. Copy or drag it again.',
+  'terminal.image_missing': 'The image file is no longer available.',
+  'terminal.image_large': 'Each image must be 25 MB or smaller.',
+  'terminal.image_busy': 'Clipboard is busy. Please paste again.',
+  'terminal.image_many': 'Add up to 32 images at a time.',
   'menu.open_editor': 'Open in editor',
   'editor.loading': 'Loading editor…',
   'editor.reading': 'Reading file…',

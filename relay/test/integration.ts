@@ -40,6 +40,8 @@ try {
   assert.equal((await post('/v1/pair/claim', { publicKey, boxedKey: 'invalid' })).status, 400);
   const box = boxContentKey(key, host.publicKey);
   const boxedKey = [box.ephPublicKey, box.nonce, box.boxed].map(toBase64Url).join('.');
+  // A guest URL must never consume an ordinary permanent-device invitation.
+  assert.equal((await post('/v1/pair/claim', { publicKey, boxedKey, temporaryOnly: true })).status, 403);
   const claim = await post('/v1/pair/claim', { publicKey, boxedKey, deviceName: 'integration-phone' });
   assert.equal(claim.status, 200); const { deviceToken } = await claim.json() as { deviceToken: string };
   assert.equal((await post('/v1/pair/claim', { publicKey, boxedKey })).status, 409);
@@ -61,5 +63,33 @@ try {
   assert.equal((await closedGuest)[0], 1008); assert.equal((await closedHost)[0], 1008);
   const invalid = new WebSocket(`${origin.replace(/^http/, 'ws')}/v1/pair/${pairId}?role=guest&token=${deviceToken}`);
   sockets.push(invalid); assert.equal((await once(invalid, 'close'))[0], 1008);
-  console.log('PASS: owner-bound cancellation, no poll resurrection, single-use claim, NaCl exchange, AES-GCM forwarding, heartbeat, revoke, stale credential rejection');
+
+  const temporary = generatePairKeypair(), temporaryKey = generateContentKey();
+  const temporaryPublicKey = toBase64Url(temporary.publicKey), temporaryOwner = toBase64Url(generateContentKey());
+  assert.equal((await post('/v1/pair/request', { publicKey: temporaryPublicKey, requestToken: temporaryOwner, temporaryMs: 1 })).status, 400);
+  const started = Date.now();
+  const invitation = await (await post('/v1/pair/request', { publicKey: temporaryPublicKey, requestToken: temporaryOwner, temporaryMs: 900000 })).json() as { pairId: string; expiresAt: number; accessExpiresAt: number };
+  assert.ok(invitation.expiresAt >= started + 600000 && invitation.expiresAt < Date.now() + 600001);
+  assert.equal(invitation.accessExpiresAt - invitation.expiresAt, 300000);
+  const temporaryBox = boxContentKey(temporaryKey, temporary.publicKey);
+  const temporaryPayload = [temporaryBox.ephPublicKey, temporaryBox.nonce, temporaryBox.boxed].map(toBase64Url).join('.');
+  const competingClaims = await Promise.all(Array.from({ length: 8 }, () => post('/v1/pair/claim', { publicKey: temporaryPublicKey, boxedKey: temporaryPayload, temporaryOnly: true })));
+  assert.equal(competingClaims.filter(response => response.status === 200).length, 1);
+  assert.equal(competingClaims.filter(response => response.status === 409).length, 7);
+  const temporaryGuest = await competingClaims.find(response => response.status === 200)!.json() as { deviceToken: string };
+  const temporaryHost = await (await post('/v1/pair/request', { publicKey: temporaryPublicKey, requestToken: temporaryOwner, pollOnly: true })).json() as { hostToken: string };
+  const ths = await socket(invitation.pairId, 'host', temporaryHost.hostToken);
+  const tgs = await socket(invitation.pairId, 'guest', temporaryGuest.deviceToken);
+  const disconnected = once(tgs, 'close'); tgs.close(); await disconnected;
+  const reconnected = await socket(invitation.pairId, 'guest', temporaryGuest.deviceToken);
+  const temporaryRead = binary(reconnected);
+  ths.send(await sealFrame(temporaryKey, { text: 'temporary isolated session' }));
+  assert.deepEqual(await openFrame(temporaryKey, await temporaryRead), { text: 'temporary isolated session' });
+  const temporaryClosed = once(reconnected, 'close');
+  assert.equal((await post('/v1/pair/cancel', { publicKey: temporaryPublicKey, requestToken: temporaryOwner })).status, 200);
+  assert.equal((await temporaryClosed)[0], 1008);
+  assert.equal((await post('/v1/pair/request', { publicKey: temporaryPublicKey, requestToken: temporaryOwner, pollOnly: true })).status, 410);
+  const stale = new WebSocket(`${origin.replace(/^http/, 'ws')}/v1/pair/${invitation.pairId}?role=guest&token=${temporaryGuest.deviceToken}`);
+  sockets.push(stale); assert.equal((await once(stale, 'close'))[0], 1008);
+  console.log('PASS: permanent pairing, temporary-only claims, eight concurrent claims with one winner, scoped encrypted channel, guest reconnect, cancellation, no poll resurrection, stale credential rejection');
 } finally { for (const ws of sockets) ws.terminate(); }

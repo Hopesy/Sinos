@@ -42,7 +42,8 @@ export class PairRoom extends DurableObject<Env> {
   /** host 发起 + 轮询：无 state/过期则建 requested；authorized 时在取回窗口内回凭据 */
   private async onRequest(req: Request): Promise<Response> {
     const pairId = req.headers.get('x-pair-id') ?? '';
-    const { publicKey, requestToken, pollOnly } = (await req.json()) as { publicKey: string; requestToken?: string; pollOnly?: boolean };
+    const { publicKey, requestToken, pollOnly, temporaryMs } = (await req.json()) as { publicKey: string; requestToken?: string; pollOnly?: boolean; temporaryMs?: number };
+    if (temporaryMs !== undefined && (!Number.isInteger(temporaryMs) || temporaryMs < 900_000 || temporaryMs > 14_400_000)) return json({ error: 'invalid share duration' }, 400);
     if (typeof requestToken !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(requestToken)) {
       return json({ error: 'invalid request token' }, 400);
     }
@@ -51,8 +52,8 @@ export class PairRoom extends DurableObject<Env> {
     if (prev && prev.requestToken !== requestToken) return json({ error: 'invitation owner mismatch' }, 403);
     // A delayed poll must never resurrect a cancelled or expired invitation.
     if (pollOnly && (!prev || isExpired(prev, now))) return json({ error: 'invitation expired or cancelled' }, 410);
-    const next = request(prev, now, publicKey, requestToken);
-    if (next !== prev) { await this.ctx.storage.put('state', next); await this.ctx.storage.setAlarm(now + 60_000); }
+    const next = request(prev, now, publicKey, requestToken, temporaryMs);
+    if (next !== prev) { await this.ctx.storage.put('state', next); await this.ctx.storage.setAlarm(next.inviteExpiresAt ?? now + 60_000); }
     if (next.phase === 'authorized') {
       // 窗口外不再吐凭据：publicKey 在 QR 里公开，长期可换 token 等于把
       // host 身份长期暴露给任何看过二维码的人
@@ -67,7 +68,7 @@ export class PairRoom extends DurableObject<Env> {
         deviceName: next.deviceName,
       });
     }
-    return json({ pairId, state: 'requested', expiresAt: next.createdAt + 60_000 });
+    return json({ pairId, state: 'requested', expiresAt: next.inviteExpiresAt ?? next.createdAt + 60_000, accessExpiresAt: next.expiresAt });
   }
 
   private async onCancel(req: Request): Promise<Response> {
@@ -83,16 +84,21 @@ export class PairRoom extends DurableObject<Env> {
   /** 手机认领：一次性，成功回 deviceToken */
   private async onClaim(req: Request): Promise<Response> {
     const pairId = req.headers.get('x-pair-id') ?? '';
-    const { boxedKey, deviceName } = (await req.json()) as {
+    const { boxedKey, deviceName, temporaryOnly } = (await req.json()) as {
       boxedKey?: string;
       deviceName?: string;
+      temporaryOnly?: boolean;
     };
     if (typeof boxedKey !== 'string' || !/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{32}\.[A-Za-z0-9_-]{64}$/.test(boxedKey)) return json({ error: 'invalid boxedKey' }, 400);
-    const prev = await this.ctx.storage.get<PairState>('state');
-    const res = claim(prev, Date.now(), boxedKey, typeof deviceName === 'string' ? deviceName.slice(0, 64) : 'phone');
-    if (!res.ok) return json({ error: res.error }, 409);
-    await this.ctx.storage.put('state', res.next);
-    return json({ pairId, state: 'authorized', deviceToken: res.next.deviceToken });
+    return this.ctx.storage.transaction(async storage => {
+      const prev = await storage.get<PairState>('state');
+      if (temporaryOnly && !prev?.expiresAt) return json({ error: 'not a temporary share' }, 403);
+      const res = claim(prev, Date.now(), boxedKey, typeof deviceName === 'string' ? deviceName.slice(0, 64) : 'phone');
+      if (!res.ok) return json({ error: res.error }, 409);
+      await storage.put('state', res.next);
+      if (res.next.expiresAt) await storage.setAlarm(res.next.expiresAt);
+      return json({ pairId, state: 'authorized', deviceToken: res.next.deviceToken });
+    });
   }
 
   /** WSS 进房：校验 token，hibernation accept，通知对端在线状态 */
@@ -129,6 +135,7 @@ export class PairRoom extends DurableObject<Env> {
       } catch {}
     }
     this.ctx.acceptWebSocket(server, [role]);
+    server.serializeAttachment({ expiresAt: state?.expiresAt });
 
     if (role === 'host') {
       this.broadcast('guest', { type: 'host-online' });
@@ -179,10 +186,12 @@ export class PairRoom extends DurableObject<Env> {
   // ── hibernation handlers ──────────────────────────────────────────────
   async alarm(): Promise<void> {
     const state = await this.ctx.storage.get<PairState>('state');
-    if (state?.phase === 'requested') await this.ctx.storage.deleteAll();
+    if (state?.phase === 'requested' || (state?.expiresAt && Date.now() >= state.expiresAt)) await this.revoke();
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const attachment = ws.deserializeAttachment() as { expiresAt?: number } | null;
+    if (attachment?.expiresAt && Date.now() >= attachment.expiresAt) { await this.revoke(); return; }
     const isHost = this.ctx.getTags(ws).includes('host');
     const size = typeof message === 'string' ? message.length : message.byteLength;
     if (size > MAX_FRAME_BYTES) {
