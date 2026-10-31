@@ -4,7 +4,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { AppProvider } from './store/app-state';
 import { App } from './App';
-import { invoke, commands } from './tauri';
+import { commands } from './tauri';
+import { RevealMainWindow } from './components/common/RevealMainWindow';
 import { loadToolInfo } from './lib/tool-info';
 import { onWindowBackground, onWindowForeground } from './lib/window-focus-filter';
 import { IS_MACOS, IS_WINDOWS } from './lib/platform';
@@ -31,6 +32,7 @@ void Promise.all([loadToolInfo(), uiScaleReady]).finally(() => {
     <React.StrictMode>
       <AppProvider>
         <App />
+        <RevealMainWindow />
       </AppProvider>
     </React.StrictMode>
   );
@@ -53,15 +55,6 @@ if (typeof document !== 'undefined' && document.fonts) {
   document.fonts.load('600 14px Inter');
   document.fonts.load('700 14px Inter');
 }
-
-// Window starts with `visible: false` (see tauri.conf.json) to hide the
-// Windows-default chrome flash. Reveal it only after the first paint so
-// the first frame the user sees is the final themed UI.
-void uiScaleReady.finally(() => requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    invoke('show_main_window').catch(() => {});
-  });
-}));
 
 // ── Background-mode throttle ────────────────────────────────────────────
 // When the OS hides the Sinos CLI window (other Space, app switched

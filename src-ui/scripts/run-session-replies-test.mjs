@@ -80,6 +80,12 @@ try {
   assert.deepEqual(unread(), ['claude:shared-token', 'codex:shared-token'], 'tool settings does not acknowledge a covered conversation');
   h.view({ toolSettingsOpen: false, sessionSplit: { type: 'branch', first: { type: 'leaf', sessionId: 'a' }, second: { type: 'leaf', sessionId: 'b' } } });
   assert.deepEqual(unread(), [], 'both visible split panes are acknowledged');
+  h.view({ editorTabActive: true }); startClaude(); finishClaude(); startCodex(); finishCodex('completed');
+  assert.deepEqual(unread(), ['claude:shared-token', 'codex:shared-token'], 'an editor or image tab covering the split retains both unread replies');
+  h.focus(false); h.focus(true);
+  assert.deepEqual(unread(), ['claude:shared-token', 'codex:shared-token'], 'returning focus to the editor does not read hidden replies');
+  h.view({ editorTabActive: false });
+  assert.deepEqual(unread(), [], 'returning to the visible split acknowledges both replies');
   h.view({ sessionSplit: null, settingsOpen: true }); startClaude(); finishClaude();
   assert.deepEqual(unread(), ['claude:shared-token']);
   h.view({ settingsOpen: false });

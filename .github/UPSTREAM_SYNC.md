@@ -66,6 +66,35 @@ commit so subsequent updates can use Git's normal merge base.
   accounts and non-Windows native builds await their respective environments.
   Packaging and public release are separate from this source integration.
 
+### Post-merge regression fixes — 2026-10-31
+
+- Give each native Windows Claude session its own kill-on-close Job Object.
+  Attach the suspended launcher before resuming it so early descendants inherit
+  the job; close, failed initialization and launcher exit release the process
+  tree even when a reader retains the session or a writer holds stdin.
+- Keep every visible split PTY transcript active, with keyboard confirmation
+  routed to the focused pane. Phone subscribers still keep hidden transcripts
+  active when desktop utility pages cover them.
+- Filter DeepSeek Harness from the phone tool list and reject cached launch
+  requests before preparing directories. The phone displays a desktop-only
+  explanation while retaining the launch form.
+- Keep Explorer file previews and filesystem refresh available with Git tracking
+  disabled, while leaving Git polling paused.
+- Preserve unread native replies while editor or image tabs cover conversations;
+  acknowledge them when the conversation panes become visible again.
+- Reveal the main window from a committed React effect after two animation
+  frames, with cancellation for StrictMode cleanup. Both tool-registry and UI
+  scale initialization gate mounting; the existing native fallback remains.
+
+Follow-up validation on Windows: `cargo check --locked`, correctness/suspicious
+Clippy checks, **469 Rust tests passed / 16 ignored**, **349 Vitest tests in 58
+files passed**, **51/51 regression scripts passed**, and focused Changes review
+and session split browser suites passed. Desktop/phone production builds,
+Android frontend build/Capacitor sync, ESLint and `git diff --check` passed.
+The process cleanup regression launches an isolated real Windows process tree,
+holds the input lock during closure, and verifies a separate session survives.
+Version remains `4.0.2`.
+
 ## Historical integration — 2026-09-25
 
 The record below describes the earlier selective integration. Current decisions

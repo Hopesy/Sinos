@@ -33,6 +33,8 @@ window.setTool=tool=>{state={...state,terminals:[{...state.terminals[0],tool}]};
 window.setTaskMode=mode=>{state={...state,taskViewMode:mode};emit()};
 window.getSelection=()=>state.diffSelection;
 window.movePreview=mode=>dispatch({type:'SET_DIFF_MODE',mode});
+window.previewExplorerFile=()=>dispatch({type:'SET_DIFF_SELECTION',selection:{path:'D:/test/README.md',repoRoot:'D:/test',folderPath:'D:/test',rel:'README.md',kind:'file',fileSize:100}});
+window.clearPreview=()=>dispatch({type:'CLEAR_DIFF'});
 window.calls={commits:0,init:0,taskLoads:0,taskSaves:0,gitReads:0,fileReads:0};
 export const isTauri=true;
 export async function invoke(){throw new Error('Unexpected native call in file-review fixture')}
@@ -92,6 +94,14 @@ try{
  await page.evaluate(()=>window.setTool('claude'));await rows.first().waitFor();
  console.log('OK: launchpad with a remembered directory stays idle; real loading, tool launch and close recover correctly');
  const tracking=page.getByRole('switch');await tracking.click();assert.equal(await tracking.getAttribute('aria-checked'),'false');assert.equal(await rows.first().isVisible(),false,'disabling Git tracking hides the file list');await tracking.click();await rows.first().waitFor();assert.equal(await tracking.getAttribute('aria-checked'),'true','tracking can resume from the retained Sinos control');
+ await tracking.click();const pausedGitReads=await page.evaluate(()=>window.calls.gitReads);
+ await page.evaluate(()=>window.previewExplorerFile());await page.locator('.diff-body').waitFor();
+ assert.match(await page.locator('.diff-body').textContent(),/const before = 1/,'Explorer files remain readable while Git tracking is off');
+ assert.equal(await page.getByRole('tab',{name:'文件对比'}).getAttribute('aria-selected'),'true');
+ await page.evaluate(()=>{window.previewAfter=11;window.dispatchEvent(new CustomEvent('fs-refresh',{detail:{dirPath:'D:/test'}}))});
+ await page.waitForFunction(()=>document.querySelector('.diff-body')?.textContent.includes('after = 11'));
+ assert.equal(await page.evaluate(()=>window.calls.gitReads),pausedGitReads,'file preview refresh does not restart Git polling');
+ await page.evaluate(()=>{window.clearPreview();window.previewAfter=3});await tracking.click();await rows.first().waitFor();
  const pickScope=async scope=>{await page.getByRole('combobox').click();await page.getByRole('option',{name:{all:'全部修改',working:'未提交',committed:'本次会话提交'}[scope],exact:true}).click()};
  const typography=await page.evaluate(()=>{
   const reference=document.createElement('div');reference.className='explorer-panel';reference.style.cssText='position:absolute;left:-9999px';reference.innerHTML='<span class="tree-file">字体参考 Aa</span>';document.body.append(reference);

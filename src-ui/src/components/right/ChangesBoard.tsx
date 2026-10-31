@@ -44,6 +44,8 @@ export function ChangesBoard({ selectedPath, diffMode, view, active, idPrefix }:
   const pendingCommits = useRef(new Set<string>());
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const showDetail = active && view === 'detail';
+  // Explorer's ordinary file preview remains available without Git polling.
+  const detailEnabled = tracking || state.diffSelection?.kind === 'file';
   const toggleGroup = (key: string) => setCollapsed(previous => {
     const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
   });
@@ -145,8 +147,8 @@ export function ChangesBoard({ selectedPath, diffMode, view, active, idPrefix }:
     {diffMode === 'tab' && navigation && <div className="changes-tab-navigation"><span>{navigation.position} / {navigation.total}</span><button type="button" onClick={navigation.onPrevious} aria-label={t('changes.previous_file')}>‹</button><button type="button" onClick={navigation.onNext} aria-label={t('changes.next_file')}>›</button></div>}
     <div className="changes-footer"><span className={`changes-footer-dot${ready ? ' is-ready' : ''}`} aria-hidden="true" /><span>{t(ready ? 'changes.auto_update' : 'changes.review')}</span></div>
     </div>
-    <div className="changes-detail-pane" id={`${idPrefix}-detail`} role="tabpanel" aria-labelledby={`${idPrefix}-detail-tab`} hidden={!showDetail || !tracking}>
-      {diffMode === 'overlay' && state.diffSelection && <DiffPanel mode="overlay" {...state.diffSelection} isActive={showDetail && tracking} navigation={navigation} onClose={() => dispatch({ type: 'CLEAR_DIFF' })} onToggleExpanded={() => dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' })} />}
+    <div className="changes-detail-pane" id={`${idPrefix}-detail`} role="tabpanel" aria-labelledby={`${idPrefix}-detail-tab`} hidden={!showDetail || !detailEnabled}>
+      {diffMode === 'overlay' && state.diffSelection && <DiffPanel mode="overlay" {...state.diffSelection} isActive={showDetail && detailEnabled} navigation={navigation} onClose={() => dispatch({ type: 'CLEAR_DIFF' })} onToggleExpanded={() => dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' })} />}
     </div>
     {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
   </div>;

@@ -298,7 +298,7 @@ async fn tool_list(
     if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    Json(crate::tools::list_tools()).into_response()
+    Json(crate::remote_launch::companion_tools()).into_response()
 }
 
 async fn launch(
@@ -309,8 +309,8 @@ async fn launch(
     if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    if crate::tools::find(&request.tool).is_none() {
-        return (StatusCode::BAD_REQUEST, "unknown tool").into_response();
+    if let Err(error) = crate::remote_launch::validate_tool(&request.tool) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
     }
     let cwd = match tokio::task::spawn_blocking(move || crate::remote_launch::prepare_directory(request.cwd.as_deref())).await {
         Ok(Ok(cwd)) => cwd,

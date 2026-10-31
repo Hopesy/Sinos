@@ -1,5 +1,17 @@
 use std::path::{Path, PathBuf};
 
+/// Companion sessions are hosted by the shared PTY transport. DeepSeek Harness
+/// currently uses a separate native conversation host on the desktop.
+pub fn validate_tool(tool: &str) -> Result<(), &'static str> {
+    if crate::tools::find(tool).is_none() { return Err("unknown tool"); }
+    if tool == "dsh" { return Err("TOOL_REQUIRES_DESKTOP"); }
+    Ok(())
+}
+
+pub fn companion_tools() -> Vec<crate::tools::ToolInfo> {
+    crate::tools::list_tools().into_iter().filter(|tool| validate_tool(tool.id).is_ok()).collect()
+}
+
 pub fn desktop() -> Option<PathBuf> {
     dirs::desktop_dir().or_else(|| dirs::home_dir().map(|home| home.join("Desktop")))
 }
@@ -29,6 +41,19 @@ fn prepare(requested: Option<&str>, desktop: &Path, home: Option<&Path>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn companion_tools_only_advertise_launchable_pty_hosts() {
+        let tools = companion_tools();
+        assert!(tools.iter().any(|tool| tool.id == "claude"));
+        assert!(tools.iter().any(|tool| tool.id == "codex"));
+        assert!(!tools.iter().any(|tool| tool.id == "dsh"));
+        assert_eq!(validate_tool("dsh"), Err("TOOL_REQUIRES_DESKTOP"));
+        assert_eq!(validate_tool("unknown"), Err("unknown tool"));
+        for tool in crate::tools::TOOLS {
+            assert_eq!(tools.iter().any(|item| item.id == tool.id), validate_tool(tool.id).is_ok());
+        }
+    }
 
     #[test]
     fn mobile_launch_defaults_to_desktop_and_creates_requested_directories() {

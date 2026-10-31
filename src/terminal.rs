@@ -64,6 +64,28 @@ pub(crate) mod windows_job {
         }
     }
 
+    /// Attach the launcher before it executes, so even its first child inherits
+    /// the session job. Dropping this job ends only this session's process tree.
+    pub(crate) fn spawn_session(command: &mut std::process::Command) -> std::io::Result<(std::process::Child, SessionJob)> {
+        use std::os::windows::process::CommandExt;
+        use windows::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        let mut child = command.creation_flags(CREATE_NO_WINDOW.0 | CREATE_SUSPENDED.0).spawn()?;
+        let Some(job) = session_job(child.id()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other("Could not attach the launcher to its session job"));
+        };
+        // The suspended launcher has a single initial thread and no children.
+        // Use the existing Windows thread-resume implementation before handoff.
+        if let Err(error) = super::set_process_paused(child.id(), false) {
+            drop(job);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other(error));
+        }
+        Ok((child, job))
+    }
+
     fn get_or_create_job() -> Option<HANDLE> {
         JOB.get_or_init(|| unsafe {
             let job = match CreateJobObjectW(None, None) {

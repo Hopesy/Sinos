@@ -32,6 +32,7 @@ interface ConversationViewProps {
   agentStatus?: AgentStatus;
   isActive: boolean;
   isVisible: boolean;
+  isFocused?: boolean;
   onPendingResolved: () => void;
   onPasteToDraft: (text: string) => void;
   hasBg?: boolean;
@@ -79,6 +80,7 @@ function conversationPropsEqual(
     previous.agentStatus === next.agentStatus &&
     previous.isActive === next.isActive &&
     previous.isVisible === next.isVisible &&
+    previous.isFocused === next.isFocused &&
     previous.hasBg === next.hasBg &&
     previous.bgUrl === next.bgUrl &&
     previous.bgType === next.bgType &&
@@ -621,7 +623,7 @@ function ConversationViewImpl(props: ConversationViewProps) {
 }
 
 function ConversationContent({
-  sessionId, tool, folderPath, resumeToken, startedAt, pending, agentStatus, isActive, isVisible,
+  sessionId, tool, folderPath, resumeToken, startedAt, pending, agentStatus, isActive, isVisible, isFocused = isActive,
   onPendingResolved, onPasteToDraft, hasBg, bgUrl, bgType, competingBindings = [],
 }: ConversationViewProps) {
   const interaction = useTerminalInteraction(sessionId);
@@ -1360,7 +1362,7 @@ function ConversationContent({
             key={interaction.fingerprint}
             sessionId={sessionId}
             interaction={interaction}
-            keyboardEnabled={isActive && isVisible}
+            keyboardEnabled={isFocused && isVisible}
           />
         )}
         {!interaction && activityLabel && (

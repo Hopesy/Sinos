@@ -7,6 +7,7 @@ export class RemoteError extends Error {
 
 export function errorMessage(error: unknown): string {
   if (error instanceof RemoteError) {
+    if (error.message === 'TOOL_REQUIRES_DESKTOP') return '此工具请在电脑端使用，手机端暂未开放共享会话。';
     if (error.message === 'UNKNOWN_ACTION') return '电脑端暂不支持此操作，请更新电脑端后再试。';
     if (error.message === 'STALE_INTERACTION') return '这条确认已更新，请查看最新提示后重新选择。';
     if (error.message === 'SESSION_BUSY') return '当前会话仍在处理或等待确认，请稍后发送或加入队列。';

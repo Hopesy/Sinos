@@ -1461,8 +1461,9 @@ export function CenterPanel() {
                         startedAt={t.startedAt}
                         pending={t.chatPending}
                         agentStatus={t.agentStatus}
-                        isActive={mobileWatching.has(t.id) || (t.id === activeTerminalId && !diffTabActive && !editorTabActive && (t.viewMode === 'chat' || Boolean(t.chatPending)))}
-                        isVisible={t.viewMode === 'chat'}
+                        isActive={mobileWatching.has(t.id) || (contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId) && (t.viewMode === 'chat' || Boolean(t.chatPending)))}
+                        isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId) && t.viewMode === 'chat'}
+                        isFocused={contentActive && t.id === activeTerminalId}
                         onPendingResolved={() => dispatch({ type: 'SET_CHAT_PENDING', id: t.id })}
                         onPasteToDraft={(text) => dispatch({ type: 'APPEND_GAMBIT_DRAFT', id: t.id, text })}
                         hasBg={hasBg && t.viewMode === 'chat'}

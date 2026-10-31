@@ -11,7 +11,9 @@ struct Session {
     generation: String,
     native_id: String,
     child: Mutex<Child>,
-    input: Mutex<ChildStdin>,
+    input: Mutex<Option<ChildStdin>>,
+    #[cfg(windows)]
+    job: Mutex<Option<crate::terminal::windows_job::SessionJob>>,
     pending: Mutex<HashMap<String, Reply>>,
     permissions: Mutex<HashMap<String, Value>>,
     stderr: Mutex<String>,
@@ -31,11 +33,20 @@ pub(crate) fn launch_context(app: &tauri::AppHandle, id: &str) -> Option<(crate:
 }
 
 impl Session {
+    fn stop(&self) {
+        // Release the session job even while a reader still owns this Session.
+        // A blocked stdin writer must not delay termination of the process tree.
+        #[cfg(windows)]
+        drop(self.job.lock().unwrap().take());
+        let _ = self.child.lock().unwrap().kill();
+        if let Ok(mut input) = self.input.try_lock() { input.take(); }
+    }
     fn write(&self, value: &Value) -> Result<(), String> {
         self.write_with_delivery(value, None)
     }
     fn write_with_delivery(&self, value: &Value, delivery: Option<&str>) -> Result<(), String> {
         let mut input = self.input.lock().map_err(|e| e.to_string())?;
+        let input = input.as_mut().ok_or("Claude 会话已关闭")?;
         if value["type"] == "user" {
             let prompt = value["message"]["content"].as_array().into_iter().flatten().filter(|block| block["type"] == "text").filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n");
             crate::orchestration::native_input(&self.id, "claude", &self.generation, &prompt, value["uuid"].as_str().unwrap_or(""), delivery)?;
@@ -122,17 +133,21 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
     if let Some((mcp, prompt)) = crate::orchestration::parent_launch(&app, &id, &native_id, &cwd)? {
         command.args(["--mcp-config", &mcp, "--append-system-prompt", &prompt]);
     }
-    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("无法启动 Claude：{e}")))?;
     #[cfg(windows)]
-    crate::terminal::windows_job::assign_pid(child.id());
+    let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command)
+        .map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("无法启动 Claude：{e}")))?;
+    #[cfg(not(windows))]
+    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("无法启动 Claude：{e}")))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let input = child.stdin.take().unwrap();
-    let session = Arc::new(Session { id: id.clone(), generation, native_id, child: Mutex::new(child), input: Mutex::new(input), pending: Mutex::new(HashMap::new()), permissions: Mutex::new(HashMap::new()), stderr: Mutex::new(String::new()), history_path, launch_config: config.clone(), launch_cwd: cwd.clone() });
+    let session = Arc::new(Session { id: id.clone(), generation, native_id, child: Mutex::new(child), input: Mutex::new(Some(input)),
+        #[cfg(windows)] job: Mutex::new(Some(job)),
+        pending: Mutex::new(HashMap::new()), permissions: Mutex::new(HashMap::new()), stderr: Mutex::new(String::new()), history_path, launch_config: config.clone(), launch_cwd: cwd.clone() });
     let sessions = app.state::<ClaudeSessions>();
     {
         let mut map = sessions.0.lock().unwrap();
-        if map.contains_key(&id) { let _ = session.child.lock().unwrap().kill(); return Err("该标签已拥有 Claude 会话".into()); }
+        if map.contains_key(&id) { session.stop(); return Err("该标签已拥有 Claude 会话".into()); }
         map.insert(id.clone(), session.clone());
     }
     let s = session.clone();
@@ -177,6 +192,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
                 _ => std::thread::sleep(Duration::from_millis(200)),
             }
         };
+        s.stop();
         for (_, tx) in s.pending.lock().unwrap().drain() { let _ = tx.send(Err("Claude 进程已退出".into())); }
         emit(&app_watcher, &watcher_id, &s, json!({"type":"coffee_exit","code":status.and_then(|s| s.code()),"detail":s.stderr.lock().unwrap().as_str()}));
         let sessions = app_watcher.state::<ClaudeSessions>();
@@ -189,7 +205,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
             let history = history_page(&session.history_path, None).unwrap_or_else(|_| json!({"data":"","cursor":0}));
             Ok(json!({"sessionId":session.native_id,"initialization":initialization,"history":history,"bypassAvailable":true}))
         },
-        Err(error) => { let _ = session.child.lock().unwrap().kill(); Err(error) }
+        Err(error) => { session.stop(); Err(error) }
     }
 }
 
@@ -276,19 +292,79 @@ pub async fn claude_session_close(sessions: State<'_, ClaudeSessions>, id: Strin
         if map.get(&id).is_some_and(|s| s.generation == generation) { map.remove(&id) } else { None }
     };
     if let Some(s) = session {
-        tauri::async_runtime::spawn_blocking(move || { let _ = s.child.lock().unwrap().kill(); }).await.map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || s.stop()).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 pub fn shutdown(sessions: &ClaudeSessions) {
     let sessions: Vec<_> = sessions.0.lock().unwrap().drain().map(|(_, session)| session).collect();
-    for session in sessions { let _ = session.child.lock().unwrap().kill(); }
+    for session in sessions { session.stop(); }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_closes_launcher_descendants_with_busy_stdin() {
+        use std::os::windows::process::CommandExt;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+        struct OwnedFixture(HANDLE);
+        impl Drop for OwnedFixture {
+            fn drop(&mut self) { unsafe { let _ = TerminateProcess(self.0, 0); let _ = CloseHandle(self.0); } }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("child.ps1");
+        std::fs::write(&script, "[Console]::WriteLine($PID); [Console]::ReadLine() | Out-Null").unwrap();
+        let launcher = directory.path().join("launcher.cmd");
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        std::fs::write(&launcher, format!("@echo off\r\n\"{}\" -NoProfile -NonInteractive -File \"{}\"\r\n", powershell.display(), script.display())).unwrap();
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c"]).arg(&launcher).creation_flags(0x08000000)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let input = child.stdin.take().unwrap();
+        let session = Arc::new(Session {
+            id: "fixture".into(), generation: "fixture".into(), native_id: "fixture".into(), child: Mutex::new(child), input: Mutex::new(Some(input)), job: Mutex::new(Some(job)),
+            pending: Mutex::new(HashMap::new()), permissions: Mutex::new(HashMap::new()), stderr: Mutex::new(String::new()), history_path: directory.path().join("history"), launch_config: Default::default(), launch_cwd: directory.path().into(),
+        });
+        let reading = session.clone();
+        let (pid_tx, pid_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut lines = BufReader::new(stdout).lines();
+            let _ = pid_tx.send(lines.next().unwrap().unwrap().trim().parse::<u32>().unwrap());
+            for _line in lines {}
+            drop(reading);
+        });
+        let pid = pid_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let descendant = OwnedFixture(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid).unwrap() });
+        let mut unrelated_command = Command::new("cmd.exe");
+        unrelated_command.args(["/d", "/c", "pause"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        let (mut unrelated, unrelated_job) = crate::terminal::windows_job::spawn_session(&mut unrelated_command).unwrap();
+        let writing = session.input.lock().unwrap();
+        let stopping = session.clone();
+        let (tx, rx) = mpsc::channel();
+        let stopper = std::thread::spawn(move || { stopping.stop(); let _ = tx.send(()); });
+        let prompt = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let exited = unsafe { WaitForSingleObject(descendant.0, 3000) } == WAIT_OBJECT_0;
+        let unrelated_running = unrelated.try_wait().unwrap().is_none();
+        drop(unrelated_job);
+        unrelated.wait().unwrap();
+        drop(writing);
+        session.stop();
+        drop(descendant); // Always clean up the isolated child, including on regression failure.
+        stopper.join().unwrap();
+        reader.join().unwrap();
+        session.child.lock().unwrap().wait().unwrap();
+        assert!(prompt, "close must not wait for a thread holding stdin");
+        assert!(exited, "closing a Claude tab must terminate the .cmd launcher's descendant");
+        assert!(unrelated_running, "closing one session preserves the other session's process");
+        assert!(session.input.lock().unwrap().is_none(), "close releases the available stdin pipe");
+    }
 
     #[test]
     fn history_pages_preserve_complete_rows_across_boundaries() {

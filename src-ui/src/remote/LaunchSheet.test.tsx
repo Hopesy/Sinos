@@ -30,3 +30,12 @@ it('allows a new nested directory and reports creation errors without closing th
   expect(screen.getByRole('alert').textContent).toContain('无法创建文件夹');
   expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('new project/child');
 });
+it('explains a desktop-only rejection from an older cached tool list', async () => {
+  vi.mocked(client.launch).mockRejectedValue(new RemoteError(400, 'TOOL_REQUIRES_DESKTOP'));
+  const onLaunched = vi.fn();
+  render(<LaunchSheet client={client} tools={[{ id: 'dsh', displayName: 'DeepSeek Harness' }]} sessions={[]} cwd="D:/project" onClose={vi.fn()} onLaunched={onLaunched} />);
+  await act(async () => { fireEvent.click(screen.getByText('启动会话')); });
+  expect(screen.getByRole('alert').textContent).toContain('此工具请在电脑端使用');
+  expect(onLaunched).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: '启动会话' }).hasAttribute('disabled')).toBe(false);
+});

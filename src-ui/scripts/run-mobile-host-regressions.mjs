@@ -53,6 +53,7 @@ function propExpression(component, attribute) {
   return result.getText(center);
 }
 const chatActive = propExpression('ConversationView', 'isActive');
+const chatFocused = propExpression('ConversationView', 'isFocused');
 const projectionActive = propExpression('TierTerminal', 'conversationActive');
 const context = {
   t: { id: 'phone-session', viewMode: 'terminal' }, activeTerminalId: 'other',
@@ -71,6 +72,25 @@ context.t.viewMode = 'terminal';
 assert.equal(evaluate(chatActive, context), false);
 context.t.chatPending = { text: 'queued prompt' };
 assert.equal(evaluate(chatActive, context), true);
+context.t.chatPending = undefined;
+context.t.viewMode = 'chat'; context.activeTerminalId = 'other';
+context.splitVisible = true; context.splitIds = ['other', 'phone-session'];
+assert.equal(evaluate(chatActive, context), true, 'a visible unfocused split transcript continues reading');
+assert.equal(evaluate(chatFocused, context), false, 'the other split cannot consume focused keyboard input');
+let interactionKeyboard;
+function findKeyboard(node) {
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(conversation) === 'TerminalInteractionCard') {
+    interactionKeyboard = node.attributes.properties.find(attribute => attribute.name?.getText(conversation) === 'keyboardEnabled')?.initializer?.expression?.getText(conversation);
+  }
+  ts.forEachChild(node, findKeyboard);
+}
+findKeyboard(conversation); assert.ok(interactionKeyboard);
+assert.equal(evaluate(interactionKeyboard, { isActive: true, isVisible: true, isFocused: false }), false, 'reading another visible pane does not answer its permission prompt');
+assert.equal(evaluate(projectionActive, context), true, 'its terminal projection remains active');
+context.contentActive = false; context.splitVisible = false;
+assert.equal(evaluate(chatActive, context), false, 'utility pages suspend covered desktop transcripts');
+context.mobileWatching.add('phone-session');
+assert.equal(evaluate(chatActive, context), true, 'phone subscribers keep covered transcripts alive');
 
 // The late-listener fix must retain the ID reserved by a phone launch.
 let effect;
