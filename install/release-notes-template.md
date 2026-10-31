@@ -1,79 +1,79 @@
 <details open>
 <summary><b>🇨🇳 简体中文</b></summary>
 
-### Sinos CLI v4.0.2
+### Sinos CLI v4.0.3
 
-- **临时分享会话。** 生成一次性链接，支持只读观看或终端控制，可设置有效期并随时撤销；访客仅能访问指定会话。
-- **移动端展示更完整。** 代码块支持语法高亮，修复启动空白卡片、思考内容重复、图片消息重复和等待状态残留。标题和项目路径集中显示在顶部，上下文用量显示百分比。
-- **会话信息与启动修复。** 正确更新 Claude / Codex 的项目标题和目录；移动端启动默认使用电脑桌面，指定目录不存在时自动创建。Codex `/resume` 默认显示当前项目的历史会话。
-- **PC 图片输入更方便。** 截图后 Ctrl+V、复制图片文件后粘贴、拖入图片或右键“粘贴图片”，支持多图及中文路径。仅显示简短处理提示，图片加入后再按 Enter 发送。
-- **右键复制保留菜单。** 兼容 Codex 自绘选区；选中文字后右键直接复制且菜单仍显示。剪贴板中有图片时避免被自动复制覆盖，仍可手动点击“复制”。
-- **分享与复制体验优化。** 改进分享面板、有效期选择和生成链接反馈，修复手机浏览器及 Android 分享弹窗内的复制。
-- **Android 正式包同步更新：** `Sinos-4.0.2-android-release.apk`，沿用现有签名和配对信息。
+- **全新启动仪式。** Sinos 标识逐段展开，配合主题光晕与启动提示，工作区就绪后平滑进入；适配深浅主题、界面缩放和系统减少动态效果设置。
+- **关闭时收起到托盘。** 在设置的通用页面开启后，点击 X 可保留后台会话；通过托盘恢复窗口或完全退出，选择会在重启后保留。
+- **原生桌面对话与多会话分屏。** 合并上游更新，支持 Claude、Codex、DeepSeek Harness 的原生对话、权限问答和模型控制，以及可嵌套的拖拽分屏。
+- **更完整的工作区。** 更新内置 Agent、任务编排、用量与历史、Git/PR/CI 状态、代码审查和工具技能管理。
+- **启动与关闭更可靠。** 修复 Windows 窗口闪烁、原生会话子进程残留、初始化期间关闭及重连竞态；设置弹窗正确接管快捷键，避免误触后台权限确认和中断。
+- **对话状态更准确。** 修复 DeepSeek 历史覆盖实时状态及失败轮次未读标记，保留分屏与编辑器切换时的会话状态；改进移动端工具筛选和关闭 Git 跟踪后的文件预览。
 
-请同时更新桌面端和 Android App；手机网页版刷新即可使用已部署的新页面。手机连接及临时分享均需要电脑端运行且在线。
+移动连接继续通过 Cloudflare 中继；DeepSeek Harness 使用桌面原生对话。
 
 </details>
 
 <details>
 <summary><b>🇺🇸 English</b></summary>
 
-### Sinos CLI v4.0.2
+### Sinos CLI v4.0.3
 
-- Add one-time session sharing with view or control access, selectable expiry and revocation, restricted to the selected session.
-- Highlight mobile code blocks and fix empty startup cards, repeated thinking/image content and stale waiting indicators. Keep live project metadata in the header and show context percentages.
-- Fix Claude/Codex titles and working directories. Mobile launches default to the desktop and create missing directories. Codex `/resume` retains the current project scope.
-- Paste screenshots or copied image files, drag images into the terminal, or choose “Paste image.” Support multiple images and Unicode paths with brief feedback and no added thumbnail panel. Press Enter after attaching to send.
-- Copy Codex-owned terminal selections on right-click while retaining the menu. Protect clipboard images from automatic text copying; explicit Copy remains available.
-- Improve sharing controls, link-generation feedback and copying inside mobile/Android dialogs.
-- Updated signed Android APK: `Sinos-4.0.2-android-release.apk`, preserving the existing signing identity and pairing data.
+- **A new startup ceremony.** The Sinos mark unfolds over a subtle themed glow before transitioning into the ready workspace. Supports light/dark themes, UI scaling and reduced motion.
+- **Close to the system tray.** Enable this option in General settings to keep sessions running when clicking X. Restore the window or quit from the tray; your choice persists across restarts.
+- **Native conversations and session splits.** Integrate upstream updates for Claude, Codex and DeepSeek Harness conversations, permissions, questions and model controls, with nested drag-and-drop splits.
+- **A richer workspace.** Update the built-in Agent, orchestration, usage and history views, Git/PR/CI status, code review and tool skills management.
+- **More reliable startup and cleanup.** Fix Windows window flashing, surviving native child processes and close/reconnect races during initialization. Settings dialogs own their keyboard input to prevent background permission or interrupt actions.
+- **Accurate conversation state.** Preserve live DeepSeek state during history restoration and count unread replies only after successful turns. Improve split/editor state, mobile tool filtering and file previews with Git tracking disabled.
 
-Update both the desktop and Android apps; refresh the mobile website for the deployed UI. The desktop must remain running and online for mobile connections and shared sessions.
+Mobile connections continue through the Cloudflare relay. DeepSeek Harness uses native desktop conversations.
 
 </details>
 
 <details>
 <summary><b>🇹🇼 繁體中文</b></summary>
 
-### Sinos CLI v4.0.2
+### Sinos CLI v4.0.3
 
-- 新增一次性工作階段分享，支援唯讀觀看或終端控制，可設定期限及撤銷，訪客只能存取指定工作階段。
-- 行動端程式碼區塊支援語法醒目提示，修復啟動空白卡片、思考與圖片訊息重複及等待狀態殘留。標題與路徑集中在頂部，上下文顯示百分比。
-- 修復 Claude / Codex 標題與目錄更新；行動端預設在電腦桌面啟動並自動建立缺少的資料夾。Codex `/resume` 保留目前專案的歷史範圍。
-- PC 支援截圖貼上、複製圖片檔案後貼上、多圖拖入及右鍵「貼上圖片」，相容中文路徑，不新增縮圖區域；加入圖片後按 Enter 傳送。
-- 右鍵直接複製 Codex 選區並保留選單，剪貼簿圖片不會被自動複製覆蓋。改善分享介面及行動端彈窗內複製。
-- Android 正式包：`Sinos-4.0.2-android-release.apk`，沿用現有簽章及配對資訊。
+- **全新啟動儀式。** Sinos 標誌逐段展開，搭配主題光暈與啟動提示，工作區就緒後平滑進入；支援深淺主題、介面縮放與減少動態效果。
+- **關閉時收起至系統匣。** 在一般設定啟用後，點擊 X 可保留背景工作階段；透過系統匣還原視窗或完整結束，選擇會在重新啟動後保留。
+- **原生對話與多工作階段分割。** 合併上游更新，支援 Claude、Codex、DeepSeek Harness 原生對話、權限問答和模型控制，以及可巢狀的拖曳分割。
+- **更完整的工作區。** 更新內建 Agent、任務編排、用量與歷史、Git/PR/CI 狀態、程式碼審查及工具技能管理。
+- **啟動與關閉更可靠。** 修復 Windows 視窗閃爍、子行程殘留及初始化期間關閉與重連競態。設定彈窗接管快捷鍵，避免誤觸背景權限確認與中斷。
+- **對話狀態更準確。** 保留 DeepSeek 歷史載入期間的即時狀態，成功完成後才標記未讀回覆；改善分割畫面、編輯器切換、行動端工具篩選及停用 Git 追蹤後的檔案預覽。
 
-請更新桌面端與 Android App；手機網頁重新整理即可。連線與分享需要電腦持續執行且在線。
+行動連線繼續使用 Cloudflare 中繼；DeepSeek Harness 使用桌面原生對話。
 
 </details>
 
 <details>
 <summary><b>🇯🇵 日本語</b></summary>
 
-### Sinos CLI v4.0.2
+### Sinos CLI v4.0.3
 
-- 閲覧専用または操作可能な一回限りのセッション共有を追加。有効期限と取り消しに対応し、選択したセッションだけにアクセスできます。
-- モバイルのコード強調表示を追加し、空カード、思考・画像の重複、待機表示の残留を修正。プロジェクト情報を上部にまとめ、コンテキスト使用率を表示します。
-- Claude / Codex のタイトルと作業フォルダーを修正。モバイル起動は PC のデスクトップを既定とし、存在しないフォルダーを作成します。Codex `/resume` は現在のプロジェクトを対象にします。
-- PC でスクリーンショット、コピーした画像ファイル、複数画像のドラッグ＆ドロップに対応。画像追加後に Enter で送信します。右クリックコピー後もメニューを保持し、クリップボードの画像を保護します。
-- 共有画面とモバイルのコピー操作を改善。署名済み Android APK：`Sinos-4.0.2-android-release.apk`。
+- **新しい起動画面。** Sinos のマークが順に現れ、テーマに合わせた光とともにワークスペースへ移行します。ライト／ダーク、表示倍率、動きを減らす設定に対応。
+- **閉じるとトレイに格納。** 一般設定で有効にすると、X を押してもセッションがバックグラウンドで継続します。トレイから復元・終了でき、設定は再起動後も保持されます。
+- **ネイティブ会話と分割表示。** 上流の更新を統合し、Claude、Codex、DeepSeek Harness の会話、権限確認、質問、モデル設定と、ドラッグ操作による入れ子の分割に対応。
+- **ワークスペースを拡充。** 内蔵 Agent、タスク連携、使用量と履歴、Git/PR/CI 状態、コードレビュー、ツールのスキル管理を更新。
+- **起動と終了を安定化。** Windows の画面点滅、子プロセスの残留、初期化中の終了・再接続競合を修正。設定画面のキー操作が背景の権限確認や中断に届く問題も修正。
+- **会話状態を正確に保持。** DeepSeek の履歴読み込み中の最新状態を保持し、成功した応答だけを未読として記録。分割表示、エディター切替、モバイルのツール一覧、Git 追跡無効時のファイルプレビューを改善。
 
-デスクトップと Android アプリを更新してください。モバイル Web は再読み込みで更新できます。接続・共有には PC が起動し、オンラインである必要があります。
+モバイル接続は引き続き Cloudflare 中継を使用します。DeepSeek Harness はデスクトップのネイティブ会話で利用できます。
 
 </details>
 
 <details>
 <summary><b>🇰🇷 한국어</b></summary>
 
-### Sinos CLI v4.0.2
+### Sinos CLI v4.0.3
 
-- 보기 전용 또는 제어 권한을 선택할 수 있는 일회성 세션 공유를 추가했습니다. 만료 시간과 취소를 지원하며 선택한 세션에만 접근할 수 있습니다.
-- 모바일 코드 구문 강조를 추가하고 빈 시작 카드, 생각·이미지 메시지 중복 및 남아 있는 대기 표시를 수정했습니다. 프로젝트 정보는 상단에 표시하고 컨텍스트 사용률을 백분율로 보여 줍니다.
-- Claude / Codex 제목과 작업 폴더 갱신을 수정했습니다. 모바일 실행은 PC 바탕 화면을 기본으로 사용하고 없는 폴더를 만듭니다. Codex `/resume`은 현재 프로젝트의 기록을 표시합니다.
-- PC에서 스크린샷 붙여넣기, 복사한 이미지 파일, 여러 이미지 드래그를 지원합니다. 이미지 추가 후 Enter로 전송합니다. 우클릭 복사 후 메뉴를 유지하며 클립보드 이미지를 보호합니다.
-- 공유 화면과 모바일 복사를 개선했습니다. 서명된 Android APK: `Sinos-4.0.2-android-release.apk`.
+- **새로운 시작 화면.** Sinos 로고가 차례로 나타나고 테마에 맞는 은은한 빛과 함께 작업 공간으로 전환됩니다. 밝은/어두운 테마, 화면 배율, 동작 줄이기를 지원합니다.
+- **닫을 때 시스템 트레이에 유지.** 일반 설정에서 켜면 X를 눌러도 세션이 백그라운드에서 계속 실행됩니다. 트레이에서 창을 복원하거나 종료할 수 있으며, 선택은 재시작 후에도 유지됩니다.
+- **네이티브 대화와 세션 분할.** 업스트림 업데이트를 통합하여 Claude, Codex, DeepSeek Harness의 대화, 권한 확인, 질문, 모델 설정과 중첩 드래그 분할을 지원합니다.
+- **더 풍부한 작업 공간.** 내장 Agent, 작업 연계, 사용량과 기록, Git/PR/CI 상태, 코드 검토 및 도구 스킬 관리를 업데이트했습니다.
+- **안정적인 시작과 종료.** Windows 창 깜박임, 자식 프로세스 잔류, 초기화 중 종료·재연결 충돌을 수정했습니다. 설정 창의 키 입력이 배경 권한 승인이나 중단을 실행하는 문제도 수정했습니다.
+- **정확한 대화 상태.** DeepSeek 기록 복원 중 최신 상태를 유지하고 성공한 응답만 읽지 않은 답변으로 표시합니다. 분할 화면, 편집기 전환, 모바일 도구 목록 및 Git 추적을 끈 상태의 파일 미리보기를 개선했습니다.
 
-데스크톱과 Android 앱을 함께 업데이트하세요. 모바일 웹은 새로 고치면 됩니다. 연결 및 공유하려면 PC가 실행 중이며 온라인 상태여야 합니다.
+모바일 연결은 계속 Cloudflare 중계를 사용합니다. DeepSeek Harness는 데스크톱 네이티브 대화에서 이용할 수 있습니다.
 
 </details>
