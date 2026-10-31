@@ -339,9 +339,8 @@ jobs:
             echo "Creating release $TAG (draft)"
             # Releases are created as drafts so the maintainer can review CI
             # artifacts and edit the changelog before users see the new
-            # version. The Worker resolves the latest published release and
-            # exposes a platform version only after that platform's asset is
-            # uploaded, so no static version file needs a follow-up commit.
+            # version. Desktop clients query GitHub Releases directly; publish
+            # only after every required asset has been uploaded and verified.
             NOTES_FILE="$GITHUB_WORKSPACE/install/release-notes-template.md"
             if [ -f "$NOTES_FILE" ]; then
               gh release create "$TAG" --repo "${{ github.repository }}" \

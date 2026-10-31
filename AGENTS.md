@@ -55,8 +55,8 @@
 
 - 更新 `install/release-notes-template.md` 的五种语言内容，所有标题版本必须与本次版本一致；`node src-ui/scripts/run-release-notes-test.mjs` 会检查内置日志与应用版本。每次只简要记录本版本的新增、改进与修复，不沿用旧版完整说明，也不累加旧版本内容。
 - Release 草稿与客户端内置日志使用同一份模板。安装包全部上传并验证后再正式发布；授权发布版本时包含这一步。
-- 客户端更新日志从 `Hopesy/Sinos` 的 GitHub Release 读取；先查询 latest，版本与当前安装版本不符时读取对应 tag，离线时使用内置模板。版本查询由 Worker 根据已发布的安装包动态返回。
-- 发布完成须核对 `Hopesy/Sinos` 的 GitHub latest 指向本版、十个安装包齐全、Release 正文与五语言内置模板一致，并检查 Sinos Worker 的 `/version.json?platform=...` 与 `/download/...` 返回对应平台的已发布安装包。最终报告发布链接、验证结果和未实测范围。
+- 桌面更新只走 `Hopesy/Sinos` 的 GitHub Releases，版本查询、安装包下载和更新日志均使用该仓库。客户端日志先查询 latest，版本与当前安装版本不符时读取对应 tag，离线时使用内置模板。
+- 发布完成须核对 `Hopesy/Sinos` 的 GitHub latest 指向本版、十个安装包齐全、Release 正文与五语言内置模板一致。最终报告发布链接、验证结果和未实测范围。
 - 首次安装或升级按已安装版本展示一次，旧版客户端不能提前展示新版日志。
 
 **版本号自增规则**：
@@ -72,10 +72,8 @@
 
 历史问题：静态 version.json 在 tag push 的瞬间就指向新版，但 CI 构建各平台安装包要 15-20 分钟；用户在这窗口内跑 `install.ps1`，脚本能读到 "Latest: v1.x.y" 但 `/download/windows` 返回 404——糟糕体验。
 
-新架构（`Web-Home/_worker.js` 的 `/version.json` 路由）：
-- CF Worker 查 GitHub API latest release
-- 支持 `?platform=windows|macos-arm|linux-deb|linux-appimage`
-- **只有该平台的安装包实际上传到 GitHub Releases 后，才返回新版号**；否则返回空字符串，install 脚本识别为"无升级"优雅退出
+当前桌面分发链路：
+- GitHub Releases 的草稿在全部安装包上传并核验后公开，客户端查询已公开的 latest release。
 - 两份 install 脚本（`install.ps1` + `install.sh`）直接查询 `Hopesy/Sinos` 的 GitHub latest release，并确认目标平台安装包存在；缺少安装包时提示稍后重试。
 
 结果：发版时**零手动 version.json 维护**，用户侧**零时间差**。
@@ -110,6 +108,6 @@ WebView2 对 `navigator.clipboard.*` 和 `document.execCommand('copy'|'paste')` 
 
 - **分支策略**：只用 `main`，master 已删。install 脚本硬编码 `raw.githubusercontent.com/.../main/...`
 - **安装脚本双位置**：`install/` 和 `Web-Home/` 各一份，改动必须同步两处（CF Worker 路由根据路径分发）
-- **CF Worker 路由**：Sinos 部署的 `/version.json` 动态查询 `Hopesy/Sinos` 已发布安装包；`/download/<platform>` 走 Worker 重定向到同一仓库的 GitHub Releases
+- **桌面分发**：版本与安装包直接使用 `Hopesy/Sinos` 的 GitHub Releases；`Web-Home/_worker.js` 保留的历史路由独立于当前桌面更新流程。移动连接继续使用 Cloudflare 中继。
 - **PTY 锁死根因 #1 已修**（v0.6.1）：child watcher 线程；若复现视为根因 #2（emit/channel backpressure），看 `src/terminal.rs` reader 线程
 - **Hook forwarder 纪律**（v3.2.5+）：`__hook` 全路径 exit 0；`argv[1]` 以 `__` 开头但不认识的子命令也 exit 0（不起 GUI），防止"新配置 + 旧 exe"时 hook 报 exit 1。Claude hook 条目按 Git Bash 是否可探测写两种形态（`claude_hook_entry`）：有 Git Bash → `"shell": "bash"` + 引号命令；没有 → `"shell": "powershell"` + `& "..." __hook`——Windows 上 Claude 检测不到 Git Bash 会 fallback PowerShell，而 PowerShell 把引号开头的命令串当表达式直接 ParserError exit 1。排查 hook 问题用 `COFFEE_HOOK_DEBUG=1`，日志在 `~/.coffee-cli/hooks/hook-debug.log`
