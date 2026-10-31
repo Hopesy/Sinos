@@ -38,7 +38,7 @@ const mock = `
   export const subscribeHidden=()=>()=>{},getHiddenSnapshot=()=>emptySet,hideSession=()=>{window.deleted=true};
   export const subscribePinned=()=>()=>{},getPinnedSnapshot=()=>emptySet,togglePin=()=>{},isPinned=()=>false;
   export const subscribeRenamed=()=>()=>{},getRenamedSnapshot=()=>emptyObject,setCustomName=()=>{};
-  export const useAgentClient=()=>agent,refreshAgentConversations=async()=>{},openAgentConversation=async()=>{};
+  export const useAgentClient=()=>agent,useAgentConversationId=()=>'',refreshAgentConversations=async()=>{},openAgentConversation=async()=>{};
   export const useTextContextMenu=()=>({menu:null,openMenu(){}});
 `;
 await build({
@@ -47,6 +47,7 @@ await build({
   nodePaths: [join(project, 'node_modules')], loader: { '.png': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"development"' },
   plugins: [{ name: 'isolated-history', setup(builder) {
+    builder.onResolve({ filter: /(?:^|\/)agent-client$/ }, () => ({ path: 'mock', namespace: 'fixture' }));
     builder.onResolve({ filter: /(?:store\/app-state|tauri|lib\/(?:history-cache|hidden-sessions|pinned-sessions|renamed-sessions|agent-client|use-text-context-menu))$/ }, () => ({ path: 'mock', namespace: 'fixture' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: mock, resolveDir: project, loader: 'js' }));
     builder.onResolve({ filter: /\.(?:svg|png)\?(?:inline|raw)$/ }, args => ({ path: resolve(args.resolveDir, args.path.split('?')[0]), namespace: 'asset', pluginData: { inline:args.path.endsWith('?inline') } }));
