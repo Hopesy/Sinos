@@ -139,13 +139,6 @@ export type EditorSaveResponse =
   | { status: 'saved'; revision: string; size: number }
   | { status: 'conflict'; current_revision: string | null };
 
-export interface RemotePairingInfo {
-  remoteUrl: string | null;
-  token: string | null;
-  authEnabled: boolean;
-  port: number;
-}
-
 // ─── Typed Commands ──────────────────────────────────────────────────────────
 
 export const commands = {
@@ -233,9 +226,6 @@ export const commands = {
    *  Loaded once at app boot and cached; see `lib/tool-info.ts`. */
   listTools: () => invoke<{ id: string; displayName: string }[]>('list_tools'),
 
-  getRemotePairing: () => invoke<RemotePairingInfo>('get_remote_pairing'),
-  createRemotePairing: () => invoke<RemotePairingInfo>('create_remote_pairing'),
-  revokeRemotePairing: () => invoke<RemotePairingInfo>('revoke_remote_pairing'),
 
   /** Re-run legacy cleanup and non-hook presentation migration for one tool. */
   maintainToolIntegration: (tool: string) =>

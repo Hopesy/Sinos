@@ -40,26 +40,11 @@ export interface RemoteSocket {
   close(): void;
 }
 
-// Native shells can inject their server URL and secure-store credential.
-export class RemoteClient {
-  readonly baseUrl: string;
-  readonly token: string;
-  constructor(baseUrl: string, token: string) { this.baseUrl = baseUrl; this.token = token; }
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    const abort = () => controller.abort();
-    init.signal?.addEventListener('abort', abort, { once: true });
-    if (init.signal?.aborted) controller.abort();
-    try {
-      const response = await fetch(new URL(path, this.baseUrl), {
-        ...init, signal: controller.signal, cache: 'no-store',
-        headers: { ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}), ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
-      });
-      if (!response.ok) throw new RemoteError(response.status, (await response.text()).slice(0, 500));
-      return response.status === 204 ? undefined as T : await response.json() as T;
-    } finally { clearTimeout(timer); init.signal?.removeEventListener('abort', abort); }
-  }
+// Shared companion operations; transports implement encrypted requests and streams.
+export abstract class RemoteClient {
+  abstract request<T>(path: string, init?: RequestInit): Promise<T>;
+  abstract socket(id: string): RemoteSocket;
+
   sessionPath(id: string, action: string, path?: string) {
     return `/api/sessions/${encodeURIComponent(id)}/${action}${path === undefined ? '' : `?path=${encodeURIComponent(path)}`}`;
   }
@@ -88,26 +73,9 @@ export class RemoteClient {
   }
   changes(id: string) { return this.request<Changes>(this.sessionPath(id, 'changes')); }
   diff(id: string, path: string) { return this.request<FileDiff>(this.sessionPath(id, 'diff', path)); }
-  socket(id: string): RemoteSocket {
-    const url = new URL('/api/ws', this.baseUrl);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('session_id', id);
-    if (this.token) url.searchParams.set('token', this.token);
-    return new WebSocket(url);
-  }
 }
 
 export interface ChatRead { bound: boolean; title?: string; cwd?: string; sourceId?: string; data: string; cursor: number | null; history_cursor: number | null; has_older: boolean; revision: string; append: boolean; prepend: boolean; unchanged: boolean }
-
-export function readPairingToken(): string {
-  const pair = new URLSearchParams(window.location.hash.slice(1)).get('pair');
-  if (pair) {
-    try { localStorage.setItem('sinos-remote-token', pair); } catch { /* Connect even without storage. */ }
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    return pair;
-  }
-  try { return localStorage.getItem('sinos-remote-token') || ''; } catch { return ''; }
-}
 
 export function storageRead(key: string, fallback = '') { try { return localStorage.getItem(`sinos-mobile-${key}`) ?? fallback; } catch { return fallback; } }
 export function storageWrite(key: string, value: string) { try { localStorage.setItem(`sinos-mobile-${key}`, value); } catch { /* Quota or private browsing. */ } }

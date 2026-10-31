@@ -11,7 +11,7 @@ vi.mock('./LaunchSheet', () => ({ LaunchSheet: ({ onLaunched }: { onLaunched: (i
 beforeEach(() => { localStorage.clear(); vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('never sends a new-session prompt into the previously selected terminal while startup is pending', async () => {
-  const client = new RemoteClient('http://localhost', '');
+  const client = {} as RemoteClient;
   const view = render(<PhoneWorkspace client={client} />);
   expect(screen.getByRole('textbox', { name: 'composer-old' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '新建会话' }));

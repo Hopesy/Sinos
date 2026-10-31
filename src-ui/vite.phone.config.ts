@@ -9,7 +9,7 @@ export default defineConfig({
   publicDir: resolve(import.meta.dirname, 'public'),
   plugins: [react(), {
     name: 'phone-manifest',
-    transformIndexHtml: html => html.replace('/remote.webmanifest', '/phone.webmanifest').replace('Sinos · 移动工作台', 'Sinos · 移动工作空间'),
+    transformIndexHtml: html => html.replace('Sinos · 移动工作台', 'Sinos · 移动工作空间'),
     generateBundle() {
       this.emitFile({ type: 'asset', fileName: 'phone.webmanifest', source: readFileSync(resolve(import.meta.dirname, 'remote/phone.webmanifest'), 'utf8') });
       this.emitFile({ type: 'asset', fileName: '_headers', source: `/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: no-referrer\n  X-Frame-Options: DENY\n  Content-Security-Policy: ${phoneCsp}\n` });

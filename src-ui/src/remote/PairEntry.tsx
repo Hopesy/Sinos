@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { LockKeyhole, ScanLine, Smartphone } from 'lucide-react';
 import { RemoteApp } from './RemoteApp';
-import { RemoteClient, readPairingToken, storageRead, storageWrite } from './client';
+import { storageRead, storageWrite } from './client';
 import { claimDevice, RelayClient, savedDevice } from './pair/RelayClient';
 import { validateInvite } from './pair/deviceStorage';
 import { defaultDeviceName } from './pair/deviceName';
@@ -20,14 +20,13 @@ export function PairEntry() {
   useMobileViewport();
   const [invite, setInvite] = useState(() => location.hash.includes('pk=') ? location.href : '');
   const [link, setLink] = useState('');
-  const [client, setClient] = useState<RemoteClient | null>(null);
+  const [client, setClient] = useState<RelayClient | null>(null);
   const [name, setName] = useState(() => storageRead('device-name') || defaultDeviceName(navigator.userAgent, isAndroidApp));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     if (invite) { setLoading(false); return; }
-    if (!isAndroidApp && location.pathname.startsWith('/remote')) { setClient(new RemoteClient(location.origin, readPairingToken())); setLoading(false); return; }
     let cancelled = false;
     let relay: RelayClient | undefined;
     void savedDevice().then(saved => {

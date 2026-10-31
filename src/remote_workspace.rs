@@ -13,7 +13,6 @@ const MOBILE_FILE_LIMIT: u64 = 512 * 1024;
 
 #[derive(Deserialize, Default)]
 pub(super) struct WorkspaceQuery {
-    token: Option<String>,
     #[serde(default)]
     path: String,
 }
@@ -29,10 +28,9 @@ pub(super) struct SaveRequest {
 fn workspace(
     state: &RemoteState,
     headers: &HeaderMap,
-    query: &WorkspaceQuery,
     id: &str,
 ) -> Result<PathBuf, Response> {
-    if !authorized(state, headers, query.token.as_deref()) {
+    if !authorized(state, headers) {
         return Err(StatusCode::UNAUTHORIZED.into_response());
     }
     let cwd = state
@@ -102,7 +100,7 @@ pub(super) async fn directory(
     Query(query): Query<WorkspaceQuery>,
     Path(id): Path<String>,
 ) -> Response {
-    let root = match workspace(&state, &headers, &query, &id) {
+    let root = match workspace(&state, &headers, &id) {
         Ok(root) => root,
         Err(response) => return response,
     };
@@ -162,7 +160,7 @@ pub(super) async fn file(
     Query(query): Query<WorkspaceQuery>,
     Path(id): Path<String>,
 ) -> Response {
-    let root = match workspace(&state, &headers, &query, &id) {
+    let root = match workspace(&state, &headers, &id) {
         Ok(root) => root,
         Err(response) => return response,
     };
@@ -195,7 +193,7 @@ pub(super) async fn save(
     Path(id): Path<String>,
     Json(request): Json<SaveRequest>,
 ) -> Response {
-    let root = match workspace(&state, &headers, &query, &id) {
+    let root = match workspace(&state, &headers, &id) {
         Ok(root) => root,
         Err(response) => return response,
     };
@@ -227,10 +225,9 @@ pub(super) async fn save(
 pub(super) async fn changes(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<WorkspaceQuery>,
     Path(id): Path<String>,
 ) -> Response {
-    let root = match workspace(&state, &headers, &query, &id) {
+    let root = match workspace(&state, &headers, &id) {
         Ok(root) => root,
         Err(response) => return response,
     };
@@ -266,7 +263,7 @@ pub(super) async fn diff(
     Query(query): Query<WorkspaceQuery>,
     Path(id): Path<String>,
 ) -> Response {
-    let root = match workspace(&state, &headers, &query, &id) {
+    let root = match workspace(&state, &headers, &id) {
         Ok(root) => root,
         Err(response) => return response,
     };

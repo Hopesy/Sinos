@@ -1765,21 +1765,6 @@ pub(crate) fn resize_terminal_pty(master: &dyn portable_pty::MasterPty, cols: u1
         .map_err(|e| format!("Resize failed: {e}"))
 }
 
-#[tauri::command]
-fn get_remote_pairing() -> crate::remote_server::RemotePairingInfo {
-    crate::remote_server::pairing_info()
-}
-
-#[tauri::command]
-fn create_remote_pairing() -> Result<crate::remote_server::RemotePairingInfo, String> {
-    crate::remote_server::create_pairing_token()
-}
-
-#[tauri::command]
-fn revoke_remote_pairing() -> Result<crate::remote_server::RemotePairingInfo, String> {
-    crate::remote_server::revoke_pairing_token()
-}
-
 // ─── Session Resume API ──────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -5926,9 +5911,6 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             tier_terminal_raw_write,
             tier_terminal_kill,
             tier_terminal_resize,
-            get_remote_pairing,
-            create_remote_pairing,
-            revoke_remote_pairing,
             crate::relay_host::relay_status,
             crate::relay_host::relay_test_connection,
             crate::relay_host::relay_create_pairing,
@@ -5985,12 +5967,10 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             // Current integrations are read-only terminal/title parsers.
             crate::hook_installer::cleanup_all();
 
-            // The remote companion binds to the local Tailscale interface so
-            // tailnet phones can reach it directly. Tailscale Serve remains
-            // optional, while the browser UI still shares the exact same PTY
-            // sessions as Tauri.
+            // Paired phones share desktop sessions through the outbound relay.
+            // Initialize its state and message queue without a local listener.
             let remote_sessions = app.state::<AppState>().terminal_session.clone();
-            crate::remote_server::spawn(app.handle().clone(), remote_sessions);
+            crate::remote_server::start(app.handle().clone(), remote_sessions);
 
             // Per-pane MCP servers are spawned lazily inside
             // `tier_terminal_start` when each multi-agent pane boots

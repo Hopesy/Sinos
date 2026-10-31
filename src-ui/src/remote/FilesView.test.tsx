@@ -5,7 +5,7 @@ import { FilesView } from './FilesView';
 import { RemoteClient, RemoteError } from './client';
 
 const file = { content: 'original\n', revision: 'v1', line_ending: 'lf', has_utf8_bom: false, size: 9 };
-const client = new RemoteClient('http://localhost', 'test');
+const client = { directory: vi.fn(), file: vi.fn(), save: vi.fn() } as unknown as RemoteClient;
 beforeEach(() => {
   localStorage.clear();
   vi.spyOn(client, 'directory').mockResolvedValue({ entries: [{ name: 'App.tsx', path: 'App.tsx', is_dir: false, size: 9 }], truncated: false });

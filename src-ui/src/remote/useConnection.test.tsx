@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RemoteClient, RemoteError } from './client';
 import { useConnection } from './useConnection';
 
-const client = new RemoteClient('http://localhost', 'test');
+const client = { tools: vi.fn(), state: vi.fn() } as unknown as RemoteClient;
 function Harness() { const { connection, state } = useConnection(client); return <span>{connection}:{state.sessions.length}</span>; }
 beforeEach(() => { vi.useFakeTimers(); vi.spyOn(client, 'tools').mockResolvedValue([]); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });

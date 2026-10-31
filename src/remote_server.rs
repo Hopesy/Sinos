@@ -1,16 +1,12 @@
-//! Local HTTP/WebSocket bridge for the mobile companion UI.
+//! In-process companion API for authenticated, encrypted relay requests.
 //!
-//! The desktop surface still uses Tauri IPC. This module exposes the same
-//! in-memory PTY sessions through a server bound to the machine's Tailscale
-//! interface. The phone stays inside the user's tailnet and never connects
-//! directly to an AI provider or to the desktop's ordinary LAN interfaces.
+//! The desktop uses Tauri IPC. Paired phones share its in-memory PTY sessions
+//! through the outbound Cloudflare relay connection. The Axum router below
+//! dispatches decrypted RPC inside this process without a listening socket.
 
 use axum::{
     body::Body,
-    extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        OriginalUri, Path, Query, State,
-    },
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -18,13 +14,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    net::Ipv4Addr,
-    path::{Path as FsPath, PathBuf},
-    sync::{Arc, Mutex, OnceLock, RwLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
-use tokio::net::TcpListener;
+use tauri::{AppHandle, Emitter};
 
 #[path = "remote_workspace.rs"]
 mod workspace;
@@ -33,8 +26,8 @@ mod workspace;
 pub(crate) struct RemoteState {
     sessions: crate::terminal::SharedSession,
     app: AppHandle,
-    static_dir: Option<PathBuf>,
-    token: Arc<RwLock<String>>,
+    // Per-request credential for the private in-process router.
+    rpc_token: String,
 }
 impl RemoteState {
     pub(crate) fn session_running(&self, id: &str) -> bool {
@@ -46,13 +39,6 @@ impl RemoteState {
     pub(crate) fn share_session_running(&self, scope: &crate::remote_share::ShareScope) -> bool {
         self.share_runtime(&scope.session_id).is_some_and(|runtime| runtime.ptr_eq(&scope.runtime))
     }
-}
-
-static REMOTE_TOKEN: OnceLock<Arc<RwLock<String>>> = OnceLock::new();
-
-#[derive(Debug, Deserialize, Default)]
-struct TokenQuery {
-    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,13 +70,6 @@ struct LaunchRequest {
     cwd: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    ok: bool,
-    auth_required: bool,
-    port: u16,
-}
-
 #[derive(Debug, Serialize, Clone)]
 struct SessionSnapshot {
     id: String,
@@ -113,105 +92,15 @@ struct StateResponse {
     capabilities: Vec<&'static str>,
 }
 
-/// Pairing details used by the desktop settings page. The token is only
-/// exposed to the trusted Tauri frontend; the browser companion receives it
-/// through the QR fragment and never gets a token-listing endpoint.
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct RemotePairingInfo {
-    pub remote_url: Option<String>,
-    pub token: Option<String>,
-    pub auth_enabled: bool,
-    pub port: u16,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ClientMessage {
-    Input { data: String },
-    Resize { cols: u16, rows: u16 },
-    Pause { paused: bool },
-    Kill,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ServerMessage {
-    Output {
-        session_id: String,
-        data: String,
-        sequence: u64,
-    },
-    Status {
-        session_id: String,
-        running: bool,
-        paused: bool,
-    },
-    Error {
-        message: String,
-    },
-}
-
-const REMOTE_PORT: u16 = 8787;
-
-/// Start the browser bridge in the Tauri async runtime. Prefer the local
-/// Tailscale IPv4 so a phone on the same tailnet can connect directly. The
-/// loopback fallback keeps desktop-only development working when Tailscale is
-/// offline.
-pub fn spawn(app: AppHandle, sessions: crate::terminal::SharedSession) {
-    let static_dir = resolve_static_dir(&app);
-    let token = Arc::new(RwLock::new(load_remote_token()));
-    let _ = REMOTE_TOKEN.set(token.clone());
-    let state = RemoteState {
-        sessions,
-        app,
-        static_dir,
-        token,
-    };
+/// Initialize the outbound relay and the shared message queue worker.
+pub fn start(app: AppHandle, sessions: crate::terminal::SharedSession) {
+    let state = RemoteState { sessions, app, rpc_token: String::new() };
     crate::relay_host::start(state.clone());
-    start_queue_worker(state.clone());
-
-    tauri::async_runtime::spawn(async move {
-        let bind_host = tailscale_ipv4()
-            .map(|address| address.to_string())
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        let bind = format!("{bind_host}:{REMOTE_PORT}");
-        let listener = match TcpListener::bind(&bind).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                eprintln!("[remote] could not bind {bind}: {error}");
-                return;
-            }
-        };
-
-        eprintln!("[remote] mobile companion listening at http://{bind}/remote");
-        eprintln!(
-            "[remote] mobile pairing URL: {}",
-            pairing_url_for_host(&bind_host)
-        );
-        if state
-            .token
-            .read()
-            .map(|token| token.is_empty())
-            .unwrap_or(true)
-        {
-            eprintln!("[remote] no SINOS_REMOTE_TOKEN set; tailnet access is ACL-only for now");
-        }
-
-        let router = api_router(state.clone())
-            .route("/api/ws", get(websocket))
-            .fallback(static_file)
-            .with_state(state.clone());
-
-        if let Err(error) = axum::serve(listener, router).await {
-            eprintln!("[remote] server stopped: {error}");
-        }
-    });
+    start_queue_worker(state);
 }
 
-fn api_router(_state: RemoteState) -> Router<RemoteState> {
+fn api_router() -> Router<RemoteState> {
     Router::new()
-        .route("/api/health", get(health))
         .route("/api/state", get(state_snapshot))
         .route("/api/tools", get(tool_list))
         .route("/api/launch", post(launch))
@@ -237,7 +126,6 @@ struct ChatQuery {
     cursor: Option<u64>,
     revision: Option<String>,
     before: Option<u64>,
-    token: Option<String>,
 }
 
 async fn chat(
@@ -246,7 +134,7 @@ async fn chat(
     Query(query): Query<ChatQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let binding = state.sessions.lock().ok().and_then(|map| {
@@ -288,7 +176,7 @@ async fn chat(
 }
 
 /// Authenticated, decrypted RPC is restricted to the companion API. Reuse the
-/// same handlers, workspace confinement and revision checks as local access.
+/// session handlers, workspace confinement and revision checks as the desktop.
 pub(crate) async fn relay_request(
     mut state: RemoteState,
     request: serde_json::Value,
@@ -364,12 +252,12 @@ pub(crate) async fn relay_request(
         };
         let uri = if query.is_empty() { route } else { format!("{route}?{query}") };
         let token = crate::pair_crypto::random_token();
-        state.token = Arc::new(RwLock::new(token.clone()));
+        state.rpc_token = token.clone();
         let req = axum::http::Request::builder().method(method).uri(uri)
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(params.to_string())).map_err(|_| (400,"INVALID_REQUEST".into()))?;
-        let response = api_router(state.clone()).with_state(state).oneshot(req).await.map_err(|_| (500,"REQUEST_FAILED".into()))?;
+        let response = api_router().with_state(state).oneshot(req).await.map_err(|_| (500,"REQUEST_FAILED".into()))?;
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), crate::pair_crypto::MAX_RPC_BYTES - 4096).await.map_err(|_| (413,"RESPONSE_TOO_LARGE".into()))?;
         if !status.is_success() { return Err((status.as_u16(), String::from_utf8_lossy(&bytes).chars().take(500).collect())); }
@@ -385,175 +273,11 @@ pub(crate) async fn relay_request(
     }
 }
 
-/// Read the current pairing state for the desktop settings page.
-pub fn pairing_info() -> RemotePairingInfo {
-    let token = REMOTE_TOKEN
-        .get_or_init(|| Arc::new(RwLock::new(load_remote_token())))
-        .read()
-        .ok()
-        .map(|value| value.clone())
-        .unwrap_or_default();
-    RemotePairingInfo {
-        remote_url: configured_remote_url(),
-        auth_enabled: !token.is_empty(),
-        token: (!token.is_empty()).then_some(token),
-        port: REMOTE_PORT,
-    }
-}
-
-/// Generate and persist a new application-level pairing token. Existing QR
-/// codes stop working immediately because all requests are checked against
-/// the shared token on every request.
-pub fn create_pairing_token() -> Result<RemotePairingInfo, String> {
-    let shared = REMOTE_TOKEN
-        .get_or_init(|| Arc::new(RwLock::new(load_remote_token())))
-        .clone();
-    let token = uuid::Uuid::new_v4().simple().to_string();
-    persist_remote_token(&token)?;
-    *shared.write().map_err(|error| error.to_string())? = token;
-    Ok(pairing_info())
-}
-
-/// Invalidate old links and sockets without falling back to unauthenticated access.
-pub fn revoke_pairing_token() -> Result<RemotePairingInfo, String> {
-    create_pairing_token()
-}
-
-fn remote_token_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".coffee-cli").join("remote-token"))
-}
-
-fn load_remote_token() -> String {
-    if let Ok(value) = std::env::var("SINOS_REMOTE_TOKEN") {
-        if !value.trim().is_empty() {
-            return value.trim().to_string();
-        }
-    }
-    remote_token_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
-}
-
-fn persist_remote_token(token: &str) -> Result<(), String> {
-    let Some(path) = remote_token_path() else {
-        return Err("无法定位用户配置目录".to_string());
-    };
-    if token.is_empty() {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    std::fs::write(path, token).map_err(|error| error.to_string())
-}
-
-fn configured_remote_url() -> Option<String> {
-    if let Ok(value) = std::env::var("SINOS_REMOTE_URL") {
-        if let Some(url) = normalize_remote_url(&value) {
-            return Some(url);
-        }
-    }
-    tailscale_serve_url()
-        .and_then(|url| normalize_remote_url(&url))
-        .or_else(|| tailscale_ipv4().map(|address| pairing_url_for_host(&address.to_string())))
-}
-
-fn pairing_url_for_host(host: &str) -> String {
-    format!("http://{host}:{REMOTE_PORT}/remote")
-}
-
-/// Read the machine's Tailscale IPv4 without requiring a browser login or a
-/// Tailscale Serve configuration. The value is validated before it is used as
-/// a bind address, so command output can never become part of the listener.
-fn tailscale_ipv4() -> Option<Ipv4Addr> {
-    let output = std::process::Command::new("tailscale")
-        .args(["ip", "-4"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.trim().parse::<Ipv4Addr>().ok())
-}
-
-fn normalize_remote_url(value: &str) -> Option<String> {
-    let value = value.trim().trim_end_matches('/');
-    if value.is_empty() {
-        return None;
-    }
-    let value = if value.starts_with("http://") || value.starts_with("https://") {
-        value.to_string()
-    } else {
-        format!("https://{value}")
-    };
-    if value.ends_with("/remote") {
-        Some(value)
-    } else {
-        Some(format!("{value}/remote"))
-    }
-}
-
-fn tailscale_serve_url() -> Option<String> {
-    let output = std::process::Command::new("tailscale")
-        .args(["serve", "status", "--json"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let web = value.get("Web")?.as_object()?;
-    let (host, config) = web.iter().next()?;
-    let host = host.trim_end_matches('/');
-    let base = if host.starts_with("http://") || host.starts_with("https://") {
-        host.to_string()
-    } else {
-        format!("https://{host}")
-    };
-    let path = config
-        .get("Handlers")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|handlers| handlers.keys().next())
-        .filter(|path| path.as_str() != "/")
-        .map(|path| path.trim_end_matches('/'))
-        .unwrap_or("");
-    Some(format!("{base}{path}"))
-}
-
-async fn health(
-    State(state): State<RemoteState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    Json(HealthResponse {
-        ok: true,
-        auth_required: state
-            .token
-            .read()
-            .map(|token| !token.is_empty())
-            .unwrap_or(false),
-        port: REMOTE_PORT,
-    })
-    .into_response()
-}
-
 async fn state_snapshot(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     Json(StateResponse {
@@ -570,9 +294,8 @@ async fn state_snapshot(
 async fn tool_list(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     Json(crate::tools::list_tools()).into_response()
@@ -581,10 +304,9 @@ async fn tool_list(
 async fn launch(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
     Json(request): Json<LaunchRequest>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if crate::tools::find(&request.tool).is_none() {
@@ -614,11 +336,10 @@ async fn launch(
 async fn input(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
     Path(id): Path<String>,
     Json(request): Json<InputRequest>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match write_input(&state.sessions, &id, &request.data) {
@@ -630,11 +351,10 @@ async fn input(
 async fn prompt(
     State(state): State<RemoteState>,
     Path(id): Path<String>,
-    Query(query): Query<TokenQuery>,
     headers: HeaderMap,
     Json(request): Json<PromptRequest>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Ok(text) = crate::remote_runtime::image_prompt_text(&request.data, !request.attachments.is_empty()) else { return StatusCode::BAD_REQUEST.into_response(); };
@@ -672,8 +392,8 @@ fn image_error(error: &'static str) -> Response {
     let status = match error { "IMAGE_NOT_FOUND" => StatusCode::NOT_FOUND, "IMAGE_IN_USE" | "IMAGE_CONFLICT" | "IMAGE_OFFSET" => StatusCode::CONFLICT, "IMAGE_TOO_LARGE" | "IMAGE_STORAGE_FULL" => StatusCode::PAYLOAD_TOO_LARGE, "IMAGE_WRITE_FAILED" => StatusCode::INTERNAL_SERVER_ERROR, _ => StatusCode::BAD_REQUEST };
     (status, error).into_response()
 }
-async fn images(State(state): State<RemoteState>, Path(id): Path<String>, Query(query): Query<TokenQuery>, headers: HeaderMap, Json(request): Json<crate::remote_images::ImageRequest>) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) { return StatusCode::UNAUTHORIZED.into_response(); }
+async fn images(State(state): State<RemoteState>, Path(id): Path<String>, headers: HeaderMap, Json(request): Json<crate::remote_images::ImageRequest>) -> Response {
+    if !authorized(&state, &headers) { return StatusCode::UNAUTHORIZED.into_response(); }
     let handles = state.sessions.lock().ok().and_then(|map| map.get(&id).map(|s| (s.mobile_runtime.clone(), s.tool_name.clone())));
     let Some((runtime, tool)) = handles else { return StatusCode::NOT_FOUND.into_response(); };
     if !image_tool(tool.as_deref()) { return image_error("IMAGE_UNSUPPORTED"); }
@@ -689,8 +409,8 @@ async fn images(State(state): State<RemoteState>, Path(id): Path<String>, Query(
     }
 }
 
-async fn queue_state(State(state): State<RemoteState>, Path(id): Path<String>, Query(query): Query<TokenQuery>, headers: HeaderMap) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) { return StatusCode::UNAUTHORIZED.into_response(); }
+async fn queue_state(State(state): State<RemoteState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers) { return StatusCode::UNAUTHORIZED.into_response(); }
     let runtime = state.sessions.lock().ok().and_then(|map| map.get(&id).map(|s| s.mobile_runtime.clone()));
     let Some(runtime) = runtime else { return StatusCode::NOT_FOUND.into_response(); };
     let Ok(mut runtime) = runtime.lock() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); };
@@ -698,8 +418,8 @@ async fn queue_state(State(state): State<RemoteState>, Path(id): Path<String>, Q
     Json(serde_json::json!({"messages":runtime.queue,"activity":runtime.activity,"held":runtime.held()})).into_response()
 }
 
-async fn queue_action(State(state): State<RemoteState>, Path(id): Path<String>, Query(query): Query<TokenQuery>, headers: HeaderMap, Json(request): Json<crate::remote_runtime::QueueRequest>) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) { return StatusCode::UNAUTHORIZED.into_response(); }
+async fn queue_action(State(state): State<RemoteState>, Path(id): Path<String>, headers: HeaderMap, Json(request): Json<crate::remote_runtime::QueueRequest>) -> Response {
+    if !authorized(&state, &headers) { return StatusCode::UNAUTHORIZED.into_response(); }
     let handles = state.sessions.lock().ok().and_then(|map| map.get(&id).map(|s| (s.mobile_runtime.clone(), s.writer_lock.clone(), s.paused.clone())));
     let Some((runtime, writer, paused)) = handles else { return StatusCode::NOT_FOUND.into_response(); };
     tokio::task::spawn_blocking(move || {
@@ -786,11 +506,10 @@ fn start_queue_worker(state: RemoteState) {
 async fn answer(
     State(state): State<RemoteState>,
     Path(id): Path<String>,
-    Query(query): Query<TokenQuery>,
     headers: HeaderMap,
     Json(mut request): Json<AnswerRequest>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     // Text answers use one bounded bracketed paste. Both forms require the
@@ -857,11 +576,10 @@ fn valid_answer_keys(data: &str) -> bool {
 async fn pause(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
     Path(id): Path<String>,
     Json(request): Json<PauseRequest>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match set_paused(&state.sessions, &id, request.paused) {
@@ -873,10 +591,9 @@ async fn pause(
 async fn kill(
     State(state): State<RemoteState>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
     Path(id): Path<String>,
 ) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
+    if !authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let sender = {
@@ -895,118 +612,6 @@ async fn kill(
     }
 }
 
-async fn websocket(
-    ws: WebSocketUpgrade,
-    State(state): State<RemoteState>,
-    headers: HeaderMap,
-    Query(query): Query<WsQuery>,
-) -> Response {
-    if !authorized(&state, &headers, query.token.as_deref()) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    // Recheck the credential for the lifetime of the socket, including rotation.
-    let credential = query.token.clone().or_else(|| {
-        headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(str::to_owned)
-    });
-    ws.on_upgrade(move |socket| websocket_session(socket, state, query.session_id, credential))
-        .into_response()
-}
-
-#[derive(Debug, Deserialize)]
-struct WsQuery {
-    session_id: String,
-    token: Option<String>,
-}
-
-async fn websocket_session(
-    mut socket: WebSocket,
-    state: RemoteState,
-    session_id: String,
-    credential: Option<String>,
-) {
-    let mut output_offset = 0u64;
-    let mut codex_epoch: Option<String> = None;
-    let mut codex_cursor = 0;
-    let mut claude_epoch: Option<String> = None;
-    let mut claude_cursor = 0;
-    loop {
-        if !authorized(&state, &HeaderMap::new(), credential.as_deref()) {
-            let _ = socket.send(server_error("PAIRING_EXPIRED".into())).await;
-            let _ = socket.close().await;
-            return;
-        }
-        tokio::select! {
-            incoming = socket.recv() => {
-                match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        if !authorized(&state, &HeaderMap::new(), credential.as_deref()) { return; }
-                        match serde_json::from_str::<ClientMessage>(&text) {
-                            Ok(ClientMessage::Input { data }) => {
-                                if let Err(error) = write_input(&state.sessions, &session_id, &data) {
-                                    if socket.send(server_error(error)).await.is_err() { break; }
-                                }
-                            }
-                            Ok(ClientMessage::Resize { cols, rows }) => {
-                                if let Err(error) = resize_session(&state.sessions, &session_id, cols, rows) {
-                                    if socket.send(server_error(error)).await.is_err() { break; }
-                                }
-                            }
-                            Ok(ClientMessage::Pause { paused }) => {
-                                if let Err(error) = set_paused(&state.sessions, &session_id, paused) {
-                                    if socket.send(server_error(error)).await.is_err() { break; }
-                                }
-                            }
-                            Ok(ClientMessage::Kill) => {
-                                let sender = state.sessions.lock().ok().and_then(|map| map.get(&session_id).map(|s| s.kill_tx.clone()));
-                                if let Some(sender) = sender { let _ = sender.send(()); }
-                            }
-                            Err(error) => {
-                                if socket.send(server_error(format!("invalid message: {error}"))).await.is_err() { break; }
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) => break,
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(80)) => {
-                if !authorized(&state, &HeaderMap::new(), credential.as_deref()) { return; }
-                let (chunks, running, paused) = read_output(&state.sessions, &session_id, &mut output_offset);
-                if !chunks.is_empty() {
-                    if socket.send(server_output(&session_id, chunks.concat(), output_offset)).await.is_err() { return; }
-                }
-                if let Some(page) = codex_page(&state.sessions, &session_id, codex_epoch.as_deref(), codex_cursor) {
-                    codex_epoch = Some(page.epoch.clone()); codex_cursor = page.cursor;
-                    if socket.send(Message::Text(serde_json::json!({"type":"codex","session_id":session_id,"page":page}).to_string())).await.is_err() { return; }
-                }
-                if let Some(page) = claude_page(&state.sessions, &session_id, claude_epoch.as_deref(), claude_cursor) {
-                    claude_epoch = Some(page.epoch.clone()); claude_cursor = page.cursor;
-                    if socket.send(Message::Text(serde_json::json!({"type":"claude","session_id":session_id,"page":page}).to_string())).await.is_err() { return; }
-                }
-                if socket.send(server_status(&session_id, running, paused)).await.is_err() { return; }
-                if !running { return; }
-            }
-        }
-    }
-}
-
-fn server_output(session_id: &str, data: String, sequence: u64) -> Message {
-    Message::Text(
-        serde_json::to_string(&ServerMessage::Output {
-            session_id: session_id.to_string(),
-            data,
-            sequence,
-        })
-        .unwrap_or_default()
-        .into(),
-    )
-}
-
 fn codex_page(sessions: &crate::terminal::SharedSession, id: &str, epoch: Option<&str>, cursor: u64) -> Option<crate::codex_stream::Page> {
     let journal = sessions.lock().ok()?.get(id)?.codex_bridge.as_ref()?.journal.clone();
     let page = journal.lock().ok()?.page(epoch, cursor);
@@ -1017,26 +622,6 @@ fn claude_page(sessions: &crate::terminal::SharedSession, id: &str, epoch: Optio
     let journal = sessions.lock().ok()?.get(id)?.claude_bridge.as_ref()?.journal.clone();
     let page = journal.lock().ok()?.page(epoch, cursor);
     Some(page)
-}
-
-fn server_status(session_id: &str, running: bool, paused: bool) -> Message {
-    Message::Text(
-        serde_json::to_string(&ServerMessage::Status {
-            session_id: session_id.to_string(),
-            running,
-            paused,
-        })
-        .unwrap_or_default()
-        .into(),
-    )
-}
-
-fn server_error(message: String) -> Message {
-    Message::Text(
-        serde_json::to_string(&ServerMessage::Error { message })
-            .unwrap_or_default()
-            .into(),
-    )
 }
 
 fn snapshot_sessions(sessions: &crate::terminal::SharedSession) -> Vec<SessionSnapshot> {
@@ -1171,90 +756,14 @@ fn set_paused(
     Ok(())
 }
 
-fn authorized(state: &RemoteState, headers: &HeaderMap, query_token: Option<&str>) -> bool {
-    let token = match state.token.read() {
-        Ok(token) => token,
-        Err(_) => return false,
-    };
-    if token.is_empty() {
-        return true;
-    }
-    let supplied = query_token.or_else(|| {
-        headers
-            .get("authorization")
+// Only relay_request constructs requests for this private router after the
+// relay has authenticated and decrypted them. Keep a per-request bearer check.
+fn authorized(state: &RemoteState, headers: &HeaderMap) -> bool {
+    !state.rpc_token.is_empty()
+        && headers.get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
-    });
-    supplied == Some(token.as_str())
-}
-
-async fn static_file(State(state): State<RemoteState>, OriginalUri(uri): OriginalUri) -> Response {
-    let Some(root) = state.static_dir else {
-        return (StatusCode::NOT_FOUND, "remote UI is not built").into_response();
-    };
-    let request_path = uri.path().trim_start_matches('/');
-    let relative =
-        if request_path.is_empty() || request_path == "remote" || request_path == "remote/" {
-            PathBuf::from("remote/index.html")
-        } else {
-            let stripped = request_path.strip_prefix("remote/").unwrap_or(request_path);
-            PathBuf::from(stripped)
-        };
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::ParentDir
-                | std::path::Component::Prefix(_)
-                | std::path::Component::RootDir
-        )
-    }) {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let candidate = root.join(relative);
-    let path = if candidate.is_file() {
-        candidate
-    } else {
-        root.join("remote/index.html")
-    };
-    match std::fs::read(&path) {
-        Ok(bytes) => Response::builder()
-            .header(header::CONTENT_TYPE, content_type(&path))
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        Err(_) => (StatusCode::NOT_FOUND, "remote UI asset not found").into_response(),
-    }
-}
-
-fn content_type(path: &FsPath) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-    {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "webmanifest" => "application/manifest+json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        _ => "application/octet-stream",
-    }
-}
-
-fn resolve_static_dir(app: &AppHandle) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(current) = std::env::current_dir() {
-        candidates.push(current.join("src-ui").join("dist"));
-    }
-    if let Ok(resource) = app.path().resource_dir() {
-        candidates.push(resource.join("src-ui").join("dist"));
-        candidates.push(resource.join("dist"));
-    }
-    candidates.into_iter().find(|path| path.is_dir())
+            == Some(state.rpc_token.as_str())
 }
 
 #[cfg(test)]

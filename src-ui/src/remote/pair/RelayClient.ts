@@ -48,7 +48,7 @@ export class RelayClient extends RemoteClient {
   private key: Uint8Array;
   readonly device: PairedDevice;
   constructor(device: PairedDevice) {
-    super(device.relay, ''); this.device = device; this.key = fromBase64Url(device.contentKey);
+    super(); this.device = device; this.key = fromBase64Url(device.contentKey);
     this.connect(); window.addEventListener('online', this.wake); document.addEventListener('visibilitychange', this.wake);
   }
   private wake = () => { if (!document.hidden && (!this.ws || this.ws.readyState > 1)) { clearTimeout(this.retry); this.connect(); } };
@@ -151,7 +151,7 @@ export class RelayClient extends RemoteClient {
     });
   }
   override request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const url = new URL(path, this.baseUrl);
+    const url = new URL(path, this.device.relay);
     const match = /^\/api\/sessions\/([^/]+)\/([^/]+)$/.exec(url.pathname);
     const routes: Record<string, string> = { images: 'session.images', input: 'session.input', prompt: 'session.prompt', answer: 'session.answer', queue: init.method === 'POST' ? 'session.queue_action' : 'session.queue', pause: 'session.pause', kill: 'session.kill', chat: 'session.chat', directory: 'workspace.list', file: init.method === 'POST' ? 'workspace.save' : 'workspace.read', changes: 'workspace.changes', diff: 'workspace.diff' };
     const action = match ? routes[match[2]] : ({ '/api/state': 'state', '/api/tools': 'tools', '/api/launch': 'session.launch' } as Record<string, string>)[url.pathname];

@@ -1,8 +1,9 @@
 # Sinos mobile relay
 
 Cloudflare Worker + SQLite Durable Object + the standalone phone web app.
-The desktop opens an outbound WebSocket; no inbound port or Tailscale is
-required. Each paired device has its own room and revocable credentials.
+The desktop connects through an outbound WebSocket and dispatches decrypted
+companion requests in process. Each paired device has its own room and
+revocable credentials.
 NaCl box exchanges the content key; all workspace RPC frames use AES-256-GCM.
 The relay stores pairing metadata and forwards ciphertext, without receiving
 the content key. This is derived from EnsoCode (see `../third-party/`).
@@ -29,6 +30,8 @@ For browser review with disposable data, build the phone frontend and start
 `node src-ui/scripts/mobile-preview.mjs` from the repository root. Start
 `npx tsx test/preview-host.ts` here, then open the printed local pairing link.
 That simulator forwards requests only to the loopback fixture server.
+Use `http://127.0.0.1:5174/preview.html` to switch fixture states while keeping
+the paired phone page open separately.
 
 ## Deploy
 

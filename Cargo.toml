@@ -77,7 +77,7 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 # Note: schemars is NOT a direct dep — we use rmcp's re-exported schemars
 # to avoid version conflicts (rmcp 0.8 uses schemars 1.x internally).
 rmcp = { version = "0.8", features = ["server", "macros", "transport-streamable-http-server"] }
-axum = { version = "0.7", features = ["ws"] }
+axum = "0.7"
 uuid = { version = "1", features = ["v4"] }
 
 [profile.release]

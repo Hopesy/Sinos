@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RelayClient } from './RelayClient';
+import { RemoteError } from '../client';
 import { toBase64Url } from './encoding';
 
 class FakeSocket {
@@ -20,6 +21,25 @@ beforeEach(() => {
   client = new RelayClient({ pairId: 'a'.repeat(22), relay: 'https://relay.example', token: 'test', contentKey: toBase64Url(new Uint8Array(32)), name: 'test' });
 });
 afterEach(() => { client.dispose(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it('preserves file paths and revision checks through the relay transport', async () => {
+  const rpc = vi.spyOn(client, 'rpc').mockResolvedValue({ revision: 'v2', size: 3 });
+  const file = { content: 'old', revision: 'v1', line_ending: 'crlf', has_utf8_bom: true, size: 3 };
+  await client.save('one', 'src/a b.ts', 'new', file);
+  expect(rpc).toHaveBeenCalledExactlyOnceWith('workspace.save', 'one', {
+    path: 'src/a b.ts', content: 'new', expected_revision: 'v1', line_ending: 'crlf', has_utf8_bom: true,
+  }, undefined);
+  rpc.mockRejectedValueOnce(new RemoteError(409, 'conflict'));
+  await expect(client.save('one', 'src/a b.ts', 'new', file)).rejects.toMatchObject({ status: 409 });
+});
+
+it('propagates failed input and expired pairing responses to the caller', async () => {
+  const rpc = vi.spyOn(client, 'rpc').mockRejectedValueOnce(new RemoteError(404, 'session not found'));
+  await expect(client.input('a/b', 'hello\r')).rejects.toMatchObject({ status: 404 });
+  expect(rpc).toHaveBeenCalledWith('session.input', 'a/b', { data: 'hello\r' }, undefined);
+  rpc.mockRejectedValueOnce(new RemoteError(401, 'expired'));
+  await expect(client.state()).rejects.toMatchObject({ status: 401 });
+});
 
 it('carries Claude cursors independently and restarts its replay after reconnect', async () => {
   const page = { epoch: 'claude-epoch', cursor: 9, reset: true, online: true, complete: true, has_more: false, thread_id: 'session', events: [] };
