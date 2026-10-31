@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const zhTW = {
   ...editorFallback,
+  'settings.closeBehavior': '關閉主視窗時',
+  'settings.closeExit': '結束應用程式',
+  'settings.closeDock': '保留在 Dock',
+  'settings.closeTray': '收起到系統匣',
+  'settings.closeTray.hint': '收起後工作階段持續執行。點擊系統匣圖示可還原視窗，從選單選擇「結束」可完全關閉。',
+  'settings.closeTray.unavailable': '系統匣暫時無法使用，請先使用一般關閉方式。',
+  'settings.closeTray.error': '讀取或儲存關閉設定失敗，請重試。',
+  'settings.closeTray.retry': '重試',
   'menu.paste_image': '貼上圖片',
   'terminal.image_working': '正在準備貼上…',
   'terminal.image_added': '已加入 {count} 張圖片，按 Enter 傳送',

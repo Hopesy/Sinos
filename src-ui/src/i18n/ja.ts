@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const ja = {
   ...editorFallback,
+  'settings.closeBehavior': 'メインウィンドウを閉じるとき',
+  'settings.closeExit': 'アプリを終了',
+  'settings.closeDock': 'Dock に残す',
+  'settings.closeTray': 'システムトレイに格納',
+  'settings.closeTray.hint': '格納後もセッションは動作します。トレイのアイコンで復元し、メニューの「終了」でアプリを終了できます。',
+  'settings.closeTray.unavailable': 'システムトレイを利用できません。通常の閉じる操作をご利用ください。',
+  'settings.closeTray.error': '設定の読み込みまたは保存に失敗しました。再試行してください。',
+  'settings.closeTray.retry': '再試行',
   'app.title': 'Sinos CLI',
   "orchestration.open_history": "元の会話を開く",
   "orchestration.detach": "独立した会話にする",

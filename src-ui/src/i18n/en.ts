@@ -1,4 +1,12 @@
 export const editorFallback = {
+  'settings.closeBehavior': 'When closing the main window',
+  'settings.closeExit': 'Exit application',
+  'settings.closeDock': 'Keep in Dock',
+  'settings.closeTray': 'Keep in system tray',
+  'settings.closeTray.hint': 'Sessions keep running when tucked away. Click the tray icon to restore, or choose Quit from its menu to exit.',
+  'settings.closeTray.unavailable': 'The system tray is unavailable. Use the regular close behavior until the tray is available.',
+  'settings.closeTray.error': 'Could not read or save this preference. Please try again.',
+  'settings.closeTray.retry': 'Retry',
   'menu.paste_image': 'Paste image',
   'terminal.image_working': 'Preparing paste…',
   'terminal.image_added': 'Added {count} image(s). Enter to send.',

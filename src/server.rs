@@ -593,19 +593,14 @@ fn window_maximize(window: tauri::Window) {
 }
 
 #[tauri::command]
-fn window_close(window: tauri::Window, app: tauri::AppHandle) {
-    let label = window.label().to_string();
-    if label == "main" {
-        // Main window: close entire application (including all detached windows)
-        app.exit(0);
-    } else {
-        // Detached window: just close this one
-        let _ = window.close();
-    }
+fn window_close(window: tauri::Window) -> Result<(), String> {
+    // Custom X and OS close requests share the native lifecycle policy below.
+    window.close().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
+    if !crate::desktop_lifecycle::claim_startup_reveal(&app) { return; }
     #[cfg(debug_assertions)]
     eprintln!("[main-window] frontend ready; revealing desktop window");
     if let Some(window) = app.get_webview_window("main") {
@@ -6139,6 +6134,9 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             pending_launch: Mutex::new(pending_launch),
         })
         .invoke_handler(tauri::generate_handler![
+            crate::desktop_lifecycle::get_close_preference,
+            crate::desktop_lifecycle::set_close_to_tray,
+            crate::desktop_lifecycle::set_tray_language,
             crate::session_directory::check_project_directories,
             crate::claude_session::claude_session_start,
             crate::claude_session::claude_session_history,
@@ -6272,6 +6270,7 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             crate::git::git_commit_files,
         ])
         .setup(|app| {
+            crate::desktop_lifecycle::initialize(app.handle());
             // Presentation and npm-bin maintenance never modifies status hooks.
             crate::hook_installer::maintain_all();
 
@@ -6312,7 +6311,7 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     if let Some(window) = handle.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(false) {
+                        if !window.is_visible().unwrap_or(false) && crate::desktop_lifecycle::claim_startup_reveal(&handle) {
                             eprintln!(
                                 "[main-window] frontend never called show_main_window after 3s — forcing reveal (likely WebView render failure)"
                             );
@@ -6354,25 +6353,17 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Issue #87: on macOS a reflexive Cmd+W / red traffic-light
-            // click should hide the main window to the Dock instead of
-            // quitting the app (standard Mac convention - Safari, VS Code,
-            // etc. all keep running). The app stays alive; clicking the
-            // Dock icon restores it via the Reopen event in `.run()` below.
-            // Cmd+Q still terminates normally because NSApplication
-            // terminate does not dispatch CloseRequested, so this prevent is
-            // never reached on a real quit. Only the main window hides -
-            // detached windows close normally.
-            #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
+                use crate::desktop_lifecycle::{action, CloseAction};
+                match action(window.app_handle(), window.label()) {
+                    CloseAction::CloseDetached => {},
+                    CloseAction::Hide => {
+                        api.prevent_close();
+                        crate::desktop_lifecycle::mark_window_handled(window.app_handle());
+                        if let Err(error) = window.hide() { eprintln!("[tray] Could not hide main window: {error}"); }
+                    },
+                    CloseAction::Exit => { api.prevent_close(); window.app_handle().exit(0); },
                 }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = (window, event);
             }
         })
         .build(tauri::generate_context!())

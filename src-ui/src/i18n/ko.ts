@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const ko = {
   ...editorFallback,
+  'settings.closeBehavior': '기본 창을 닫을 때',
+  'settings.closeExit': '앱 종료',
+  'settings.closeDock': 'Dock에 유지',
+  'settings.closeTray': '시스템 트레이로 숨기기',
+  'settings.closeTray.hint': '숨긴 뒤에도 세션이 계속 실행됩니다. 트레이 아이콘으로 창을 복원하거나 메뉴에서 종료를 선택할 수 있습니다.',
+  'settings.closeTray.unavailable': '시스템 트레이를 사용할 수 없습니다. 일반 닫기 동작을 사용해 주세요.',
+  'settings.closeTray.error': '설정을 읽거나 저장하지 못했습니다. 다시 시도해 주세요.',
+  'settings.closeTray.retry': '다시 시도',
   'app.title': 'Sinos CLI',
   "orchestration.open_history": "원래 대화 열기",
   "orchestration.detach": "독립 세션으로 전환",

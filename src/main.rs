@@ -10,6 +10,7 @@ mod codex_session;
 mod dsh_session;
 mod session_directory;
 mod session_start;
+mod desktop_lifecycle;
 mod opencode_island;
 mod agent;
 mod agent_modes;

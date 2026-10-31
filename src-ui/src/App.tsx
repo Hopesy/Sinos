@@ -390,6 +390,7 @@ export function App() {
   // each component had to inline-style its own CJK workaround.
   useEffect(() => {
     document.documentElement.lang = state.currentLang;
+    void retryInvoke()?.('set_tray_language', { language: state.currentLang }).catch(() => {});
   }, [state.currentLang]);
 
   // Wallpaper image opacity: expose as CSS variable --wallpaper-opacity

@@ -2,6 +2,14 @@ import { editorFallback, type I18nKey } from './en';
 
 export const zhCN = {
   ...editorFallback,
+  'settings.closeBehavior': '关闭主窗口时',
+  'settings.closeExit': '退出应用',
+  'settings.closeDock': '保留在 Dock',
+  'settings.closeTray': '收起到系统托盘',
+  'settings.closeTray.hint': '收起后会话继续运行。点击托盘图标可恢复窗口，在托盘菜单中选择“退出”可彻底关闭应用。',
+  'settings.closeTray.unavailable': '系统托盘暂不可用，请先使用常规关闭方式。',
+  'settings.closeTray.error': '读取或保存关闭设置失败，请重试。',
+  'settings.closeTray.retry': '重试',
   'menu.paste_image': '粘贴图片',
   'terminal.image_working': '正在准备粘贴…',
   'terminal.image_added': '已添加 {count} 张图片，按 Enter 发送',
