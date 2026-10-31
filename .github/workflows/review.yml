@@ -31,9 +31,15 @@ jobs:
         run: |
           npm ci
           npm run build
-          npx eslint src
+          npm run lint
           npm test
-          npm run test:regressions
+          npm audit --audit-level=high --omit=dev
+      - name: Install test browser
+        working-directory: src-ui
+        run: npx playwright install --with-deps --only-shell chromium
+      - name: Browser interaction regression tests
+        working-directory: src-ui
+        run: npm run test:browser
 
   native:
     strategy:
@@ -55,5 +61,7 @@ jobs:
           key: review-${{ matrix.platform }}
       - name: Native check
         run: cargo check --locked
+      - name: Native static analysis
+        run: cargo clippy --locked --all-targets --all-features -- -D clippy::correctness -D clippy::suspicious
       - name: Native regression tests
         run: cargo test --locked --no-fail-fast

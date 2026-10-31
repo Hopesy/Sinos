@@ -1,449 +1,153 @@
-// ChangesBoard.tsx — git working-tree changes for the active tab's folder.
-//
-// Sourced from `useGitStatus()` (which refreshes `git_changes` from filesystem
-// events plus a polling backstop). Three top-level states drive the view:
-//   • no_git   → "install git" prompt (feature unavailable).
-//   • not_repo → "not a git repo" prompt + an "initialize here" button.
-//   • ok       → files grouped into 未提交 (Uncommitted) + 未跟踪 (Untracked).
-//               When the working tree is clean, the last commit (HEAD) is
-//               shown as a 已提交 (Committed) group instead of an empty panel,
-//               so the board isn't blank right after a commit.
-//
-// Layout (unchanged from the snapshot version): full-height list, click a row
-// → DiffPanel mounts as a bottom overlay (~55%); ⤢ promotes it to a
-// full-window modal; ⤓ back to half; × / Esc closes. Right-click a row = the
-// read-only file-actions menu.
-
+// Read-only review of the active workspace: pending files and session commits.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAppState, normalizeProjectPath, resolveDiffContext, type DiffSelection } from '../../store/app-state';
+import { useAppState, resolveDiffContext, normalizeProjectPath, type DiffSelection } from '../../store/app-state';
 import { useGitStatus, useGitPollingGate } from '../../lib/git-status';
+import { gitFolderKey, useProjectGitStatuses } from '../../lib/project-git-status';
 import { commands, type GitFileEntry } from '../../tauri';
 import { useT } from '../../i18n/useT';
-import { VirtualList } from '../common/VirtualList';
-import { ContextMenu } from '../left/Explorer';
-import type { CtxMenuState } from '../left/Explorer';
+import { ScrollPanel } from '../common/ScrollPanel';
+import { ContextMenu, ThemedIcon, type CtxMenuState } from '../left/Explorer';
+import { getFileIconSrc } from '../../lib/file-icons';
 import { beginExplorerDrag } from '../../lib/explorer-drag';
+import { HistoryGitMark } from './HistoryGitMark';
 import { DiffPanel } from './DiffPanel';
+import { ChangesScopePicker, type ChangeScope } from './ChangesScopePicker';
 import './ChangesBoard.css';
 
-interface ChangesBoardProps {
-  selectedPath: string | null;
-  diffMode: 'overlay' | 'tab';
+interface ChangesBoardProps { selectedPath: string | null; diffMode: 'overlay' | 'tab'; view: 'changes' | 'detail'; active: boolean; idPrefix: string; }
+type FileItem = { type: 'file'; key: string; entry: GitFileEntry; kind: 'uncommitted' | 'untracked' | 'committed'; commitHash?: string };
+type RenderItem = FileItem | { type: 'header'; key: string; label: string; count: number } | { type: 'commit'; key: string; hash: string; message: string };
+function Chevron({ open }: { open: boolean }) {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d={open ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'} /></svg>;
 }
 
-const DIFF_HEIGHT_KEY = 'coffee:diff-half-height';
-const DIFF_HEIGHT_MIN = 20;
-const DIFF_HEIGHT_MAX = 90;
-const DIFF_HEIGHT_DEFAULT = 55;
-
-function loadStoredDiffHeight(): number {
-  try {
-    const raw = localStorage.getItem(DIFF_HEIGHT_KEY);
-    if (!raw) return DIFF_HEIGHT_DEFAULT;
-    const n = parseFloat(raw);
-    if (!Number.isFinite(n)) return DIFF_HEIGHT_DEFAULT;
-    return Math.min(DIFF_HEIGHT_MAX, Math.max(DIFF_HEIGHT_MIN, n));
-  } catch {
-    return DIFF_HEIGHT_DEFAULT;
-  }
-}
-
-// One group of changed files. `kind` travels with the group so a selected
-// row knows which diff to ask git for (uncommitted = HEAD↔worktree,
-// untracked = no blob, committed = <hash>~1↔<hash>). `commitHash` scopes the
-// committed diff to a specific session commit.
-type Group = { tag: 'uncommitted' | 'untracked' | 'committed'; label: string; entries: GitFileEntry[]; kind: 'uncommitted' | 'untracked' | 'committed'; commitHash?: string };
-
-// A commit's display fields (mirrors CommitMeta from tauri.ts).
-type CommitRow = { hash: string; message: string; author: string; time: number };
-
-// A flattened render item — section header, a (toggleable) commit header, or
-// a file row — so one progressive loader / scroller covers all groups (a freshly
-// `git init`'d repo can list thousands of untracked files).
-type RenderItem =
-  | { type: 'header'; key: string; label: string; count: number }
-  | { type: 'commit-header'; key: string; commit: CommitRow; toggleable: boolean }
-  | { type: 'file'; key: string; entry: GitFileEntry; group: Group };
-
-// Selection is encoded as "<group-tag>\x00<abs-path>" so the same file
-// appearing in both Staged and Unstaged stays two distinct, separately
-// clickable rows. Parent (TaskBoard) treats the string as opaque.
-// Committed rows use a 3-segment form — "<tag>\x00<hash>\x00<path>" — so two
-// session commits that touch the SAME file stay distinct rows when both are
-// expanded (a 2-segment key would collide and leave stale/duplicated rows on
-// collapse). See TaskBoard's selectedChangePath for the matching encoder.
-const selKey = (tag: string, path: string) => `${tag}\x00${path}`;
-
-// Relative time for a commit (epoch seconds) — Intl.RelativeTimeFormat yields
-// locale-correct "5分钟前" / "3 hours ago" with zero per-locale string tables.
-// Session commits cluster in minutes-to-hours, so we want finer granularity
-// than HistoryBoard's just-now/today/yesterday scheme (which would label every
-// commit in a burst "刚刚"). <60s reuses time.just_now; >=1 week falls back to
-// a locale short date.
-function formatCommitTime(epochSec: number, t: ReturnType<typeof useT>, lang: string): string {
-  const diffSec = Math.max(0, Math.floor((Date.now() / 1000) - epochSec));
-  if (diffSec < 60) return t('time.just_now') || 'Just now';
-  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
-  if (diffSec < 3600) return rtf.format(-Math.floor(diffSec / 60), 'minute');
-  if (diffSec < 86400) return rtf.format(-Math.floor(diffSec / 3600), 'hour');
-  if (diffSec < 604800) return rtf.format(-Math.floor(diffSec / 86400), 'day');
-  return new Date(epochSec * 1000).toLocaleDateString(lang, { month: 'short', day: 'numeric' });
-}
-
-export function ChangesBoard({ selectedPath, diffMode }: ChangesBoardProps) {
+export function ChangesBoard({ selectedPath, diffMode, view, active, idPrefix }: ChangesBoardProps) {
   const t = useT();
   const { state, dispatch } = useAppState();
-  const activeSession = state.terminals.find(s => s.id === state.activeTerminalId);
-  const activeFolderPath = resolveDiffContext(activeSession)?.folderPath ?? null;
-  const gitTrackingDisabled = !!activeFolderPath && state.gitTrackingDisabledPaths.includes(normalizeProjectPath(activeFolderPath));
+  const activeSession = state.terminals.find(session => session.id === state.activeTerminalId);
+  const folder = resolveDiffContext(activeSession)?.folderPath ?? '';
   const changes = useGitStatus();
-  // Drive git polling only while this panel is on screen — ChangesBoard
-  // unmounts when its tab is inactive, so this gates the expensive git query.
-  useGitPollingGate();
-  const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [diffHeight, setDiffHeight] = useState<number>(loadStoredDiffHeight);
-  const [initializing, setInitializing] = useState(false);
-  // Session-commit expand state + lazy file cache. Expanding a session commit
-  // fetches its files via `gitCommitFiles` (cached), so the poll stays cheap
-  // (one `git log` for metadata) and per-commit file cost is paid only on
-  // expand.
+  const tracking = !folder || !state.gitTrackingDisabledPaths.includes(normalizeProjectPath(folder));
+  useGitPollingGate(active && tracking);
+  const setTracking = (enabled: boolean) => dispatch({ type: 'SET_GIT_TRACKING', path: folder, enabled });
+  const ready = changes?.state === 'ok';
+  const repoRoot = ready ? changes.repo_root : '';
+  const statuses = useProjectGitStatuses(active && tracking && ready && folder ? [{ folder }] : []);
+  const project = statuses.get(gitFolderKey(folder)), pr = project?.pull_request;
+  const [scope, setScope] = useState<ChangeScope>('all');
+  const [query, setQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expandedCommits, setExpandedCommits] = useState<Set<string>>(new Set());
   const [commitFiles, setCommitFiles] = useState<Map<string, GitFileEntry[]>>(new Map());
-
-  const startResize = (e: React.PointerEvent) => {
-    if (diffMode === 'tab') return;
-    const container = containerRef.current;
-    if (!container) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = container.getBoundingClientRect();
-    const onMove = (ev: PointerEvent) => {
-      const fromBottomPx = rect.bottom - ev.clientY;
-      const pct = (fromBottomPx / rect.height) * 100;
-      setDiffHeight(Math.min(DIFF_HEIGHT_MAX, Math.max(DIFF_HEIGHT_MIN, pct)));
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  };
-
-  useEffect(() => {
-    try { localStorage.setItem(DIFF_HEIGHT_KEY, String(diffHeight)); } catch { /* Best-effort operation; failure is non-fatal. */ }
-  }, [diffHeight]);
-
-  const repoRoot = changes?.state === 'ok' ? changes.repo_root : null;
-
-  // Select one Git-backed file change. A single click keeps the lightweight
-  // bottom preview; a double click promotes the exact same Git diff to the
-  // center diff tab. The selection carries the change kind/commit hash so
-  // DiffPanel can resolve the correct Git revisions (working tree, untracked
-  // file, or <commit>~1 ↔ <commit>) instead of opening the file editor.
-  const selectDiff = (entry: GitFileEntry, group: Group, openTab = false) => {
-    const folderPath = resolveDiffContext(activeSession)?.folderPath ?? '';
-    const selection: DiffSelection = {
-      repoRoot: repoRoot ?? '',
-      folderPath,
-      path: entry.path,
-      rel: entry.rel,
-      kind: group.kind,
-      commitHash: group.commitHash,
-      added: entry.added,
-      deleted: entry.deleted,
-    };
-    dispatch({ type: 'SET_DIFF_SELECTION', selection });
-    if (openTab) dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' });
-  };
-
-  // Flatten to render items: session commits made this window (if any), then
-  // uncommitted / untracked below when the tree is dirty. An old project just
-  // opened has no session commits and (when clean) shows the empty/clean state
-  // — HEAD is NOT surfaced as a fallback (matches VSCode/GitHub Desktop: a
-  // Changes view shows working-tree changes, not history).
+  const [commitErrors, setCommitErrors] = useState<Set<string>>(new Set());
+  const pendingCommits = useRef(new Set<string>());
+  const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  const showDetail = active && view === 'detail';
+  const toggleGroup = (key: string) => setCollapsed(previous => {
+    const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
+  });
+  const needle = query.trim().toLocaleLowerCase();
   const items = useMemo<RenderItem[]>(() => {
-    if (!changes || changes.state !== 'ok') return [];
+    if (!ready) return [];
     const out: RenderItem[] = [];
-
-    // Session commits only — no HEAD fallback. An old repo opened this window
-    // contributes nothing here until the agent makes a commit.
-    const commits: CommitRow[] = changes.session_commits.map(c => ({ hash: c.hash, message: c.message, author: c.author, time: c.time }));
-    if (commits.length) {
-      out.push({ type: 'header', key: 'h-committed', label: t('changes.committed') || 'Committed', count: commits.length });
-    }
-    for (const c of commits) {
-      // Session commits are collapsed-by-default + lazy on expand.
-      const expanded = expandedCommits.has(c.hash);
-      const files = expanded ? (commitFiles.get(c.hash) ?? []) : [];
-      out.push({ type: 'commit-header', key: `commit-${c.hash}`, commit: c, toggleable: true });
-      for (const entry of files) {
-        // 3-segment key (committed\x00<hash>\x00<path>) — see selKey. Two
-        // session commits touching the same file must not share a key, or
-        // React reconciles them as one row and expand/collapse goes wrong.
-        out.push({ type: 'file', key: `committed\x00${c.hash}\x00${entry.path}`, entry, group: { tag: 'committed', label: '', entries: [], kind: 'committed', commitHash: c.hash } });
-      }
-    }
-
-    // Uncommitted + untracked — below the commits, when the tree is dirty.
-    const uncommitted = changes.uncommitted;
-    const untracked = changes.untracked;
-    if (uncommitted.length) {
-      out.push({ type: 'header', key: 'h-uncommitted', label: t('changes.uncommitted') || 'Uncommitted', count: uncommitted.length });
-      for (const entry of uncommitted) {
-        out.push({ type: 'file', key: selKey('uncommitted', entry.path), entry, group: { tag: 'uncommitted', label: '', entries: [], kind: 'uncommitted' } });
-      }
-    }
-    if (untracked.length) {
-      out.push({ type: 'header', key: 'h-untracked', label: t('changes.untracked') || 'Untracked', count: untracked.length });
-      for (const entry of untracked) {
-        out.push({ type: 'file', key: selKey('untracked', entry.path), entry, group: { tag: 'untracked', label: '', entries: [], kind: 'untracked' } });
+    const append = (kind: 'uncommitted' | 'untracked', entries: GitFileEntry[]) => {
+      const filtered = entries.filter(entry => !needle || entry.rel.toLocaleLowerCase().includes(needle));
+      if (!filtered.length) return;
+      out.push({ type: 'header', key: kind, label: t(`changes.${kind}`), count: filtered.length });
+      if (!collapsed.has(kind)) filtered.forEach(entry => out.push({ type: 'file', key: `${kind}\x00${entry.path}`, entry, kind }));
+    };
+    if (scope !== 'committed') { append('uncommitted', changes.uncommitted); append('untracked', changes.untracked); }
+    if (scope !== 'working' && changes.session_commits.length) {
+      out.push({ type: 'header', key: 'committed', label: t('changes.session_commits'), count: changes.session_commits.length });
+      if (!collapsed.has('committed')) for (const commit of changes.session_commits) {
+        out.push({ type: 'commit', key: `commit-${commit.hash}`, hash: commit.hash, message: commit.message });
+        if (expandedCommits.has(commit.hash)) for (const entry of commitFiles.get(commit.hash) ?? []) {
+          if (!needle || entry.rel.toLocaleLowerCase().includes(needle)) out.push({ type: 'file', key: `committed\x00${commit.hash}\x00${entry.path}`, entry, kind: 'committed', commitHash: commit.hash });
+        }
       }
     }
     return out;
-  }, [changes, t, expandedCommits, commitFiles]);
+  }, [ready, changes, scope, needle, collapsed, expandedCommits, commitFiles, t]);
 
-  // Resolve the selected row back to its entry + group (or drop it if it
-  // vanished from the list — staged, reverted, tab switched).
-  const selectedFile = useMemo(() => {
-    if (!selectedPath) return null;
-    const hit = items.find(it => it.type === 'file' && it.key === selectedPath);
-    return hit && hit.type === 'file' ? hit : null;
-  }, [items, selectedPath]);
-  const effectiveSelected = selectedFile ? selectedPath : null;
-
-  const toggleCommit = (hash: string) => {
-    if (!repoRoot) return;
-    // Collapse: just flip the Set.
-    if (expandedCommits.has(hash)) {
-      setExpandedCommits(prev => { const n = new Set(prev); n.delete(hash); return n; });
-      return;
-    }
-    // Expand: fetch files (if not cached) BEFORE flipping the Set — keep the
-    // updater pure (React.StrictMode double-invokes updaters in dev, which
-    // would double-fire the IPC if it lived inside the setter).
-    if (!commitFiles.has(hash)) {
-      commands.gitCommitFiles(repoRoot, hash)
-        .then(files => setCommitFiles(m => new Map(m).set(hash, files)))
-        .catch(() => setCommitFiles(m => new Map(m).set(hash, []))); // stable empty, not pending-forever
-    }
-    setExpandedCommits(prev => { const n = new Set(prev); n.add(hash); return n; });
+  // Navigation follows the current filtered scope, including collapsed groups.
+  const navigationFiles = useMemo<FileItem[]>(() => {
+    if (!ready) return [];
+    const out: FileItem[] = [];
+    const add = (kind: FileItem['kind'], entries: GitFileEntry[], commitHash?: string) => {
+      for (const entry of entries) if (!needle || entry.rel.toLocaleLowerCase().includes(needle)) out.push({ type: 'file', key: commitHash ? `committed\x00${commitHash}\x00${entry.path}` : `${kind}\x00${entry.path}`, entry, kind, commitHash });
+    };
+    if (scope !== 'committed') { add('uncommitted', changes.uncommitted); add('untracked', changes.untracked); }
+    if (scope !== 'working') for (const commit of changes.session_commits) add('committed', commitFiles.get(commit.hash) ?? [], commit.hash);
+    return out;
+  }, [ready, changes, scope, needle, commitFiles]);
+  const selectedIndex = navigationFiles.findIndex(file => file.key === selectedPath && repoRoot === state.diffSelection?.repoRoot);
+  const selectFile = (file: FileItem) => {
+    const selection: DiffSelection = { repoRoot, folderPath: folder, path: file.entry.path, rel: file.entry.rel, kind: file.kind, commitHash: file.commitHash, added: file.entry.added, deleted: file.entry.deleted };
+    dispatch({ type: 'SET_DIFF_SELECTION', selection });
   };
-
-  const handleInit = async () => {
-    if (!activeFolderPath || initializing) return;
-    setInitializing(true);
-    try {
-      await commands.gitInit(activeFolderPath);
-      window.dispatchEvent(new CustomEvent('fs-refresh', { detail: { dirPath: activeFolderPath } }));
-    } catch { /* Best-effort operation; failure is non-fatal. */ }
-    setInitializing(false);
+  const navigation = selectedIndex < 0 ? undefined : {
+    position: selectedIndex + 1, total: navigationFiles.length,
+    onPrevious: () => selectFile(navigationFiles[(selectedIndex - 1 + navigationFiles.length) % navigationFiles.length]),
+    onNext: () => selectFile(navigationFiles[(selectedIndex + 1) % navigationFiles.length]),
   };
-
-  const setGitTracking = (enabled: boolean) => {
-    if (activeFolderPath) {
-      dispatch({ type: 'SET_GIT_TRACKING', path: activeFolderPath, enabled });
-      if (!enabled) dispatch({ type: 'CLEAR_DIFF' });
+  const toggleCommit = async (hash: string) => {
+    if (expandedCommits.has(hash) && !commitErrors.has(hash)) {
+      setExpandedCommits(previous => { const next = new Set(previous); next.delete(hash); return next; }); return;
     }
+    setExpandedCommits(previous => new Set(previous).add(hash));
+    if (commitFiles.has(hash) || pendingCommits.current.has(hash)) return;
+    pendingCommits.current.add(hash);
+    setCommitErrors(previous => { const next = new Set(previous); next.delete(hash); return next; });
+    try { const files = await commands.gitCommitFiles(repoRoot, hash); setCommitFiles(previous => new Map(previous).set(hash, files)); }
+    catch { setCommitErrors(previous => new Set(previous).add(hash)); }
+    finally { pendingCommits.current.delete(hash); }
   };
-
-  const { totalAdded, totalDeleted } = useMemo(() => {
-    let totalAdded = 0;
-    let totalDeleted = 0;
-    if (changes?.state === 'ok') {
-      for (const entries of [changes.uncommitted, changes.untracked]) {
-        for (const e of entries) { totalAdded += e.added; totalDeleted += e.deleted; }
-      }
-    }
-    return { totalAdded, totalDeleted };
-  }, [changes]);
-
-  // ── Prompt / empty states ────────────────────────────────────────────────
-  if (gitTrackingDisabled) {
-    return (
-      <div className="task-empty changes-tracking-disabled">
-        <div className="task-empty-text">{t('changes.tracking_disabled')}</div>
-        {activeFolderPath && (
-          <button className="changes-tracking-toggle" role="switch" aria-checked={false} onClick={() => setGitTracking(true)}>
-            <span className="changes-tracking-switch" aria-hidden="true" />
-            <span>{t('changes.tracking_enable')}</span>
-          </button>
-        )}
-      </div>
-    );
-  }
-  if (!changes) {
-    return <div className="task-empty"><div className="task-empty-text">{t('diff.loading') || 'Loading…'}</div></div>;
-  }
-  if (changes.state === 'no_git') {
-    return (
-      <div className="task-empty">
-        <div className="task-empty-text">
-          {t('changes.no_git') || 'Git is not installed — code diff, branches and other git features are unavailable.'}
-        </div>
-      </div>
-    );
-  }
-  if (changes.state === 'not_repo') {
-    return (
-      <div className="task-empty">
-        <div className="task-empty-text">
-          {t('changes.not_repo') || 'This folder is not a Git repository.'}
-        </div>
-        {activeFolderPath && (
-          <button className="changes-init-btn" onClick={handleInit} disabled={initializing}>
-            {initializing
-              ? (t('changes.initializing') || 'Initializing…')
-              : (t('changes.init_here') || 'Initialize Git here')}
-          </button>
-        )}
-      </div>
-    );
-  }
-  // changes.state === 'ok' from here (no_git / not_repo / null returned above).
-  // Header total = sum of the listed (uncommitted) changes — coherent with the
-  // file list below. Committed files (the 已提交 group, shown only when clean)
-  // don't count toward pending totals. Untracked entries carry 0/0 so they
-  // don't inflate it.
-  // The resize handle sits at the overlay's top edge. In tab mode the overlay
-  // isn't rendered here (the diff lives in the center tab), so hide the handle.
-  const handleStyle = diffMode === 'tab' ? { display: 'none' as const } : { bottom: `${diffHeight}%` };
-
-  return (
-    <div className="changes-fullview" ref={containerRef}>
-      <div className="changes-branch-header">
-        <span className="changes-branch" title={changes.branch}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6"/><path d="M18 6a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/>
-          </svg>
-          <span className="changes-branch-name">{changes.branch}</span>
-        </span>
-        <span className="changes-branch-actions">
-          {(totalAdded > 0 || totalDeleted > 0) && (
-            <span className="changes-branch-stats">
-              <span className="diff-add">+{totalAdded}</span>
-              <span className="diff-del">-{totalDeleted}</span>
-            </span>
-          )}
-          <button className="changes-tracking-toggle" role="switch" aria-checked={true} onClick={() => setGitTracking(false)} title={t('changes.tracking_disable')}>
-            <span className="changes-tracking-switch is-on" aria-hidden="true" />
-            <span className="changes-tracking-label">{t('changes.tracking')}</span>
-          </button>
-        </span>
-      </div>
-      {items.length === 0 ? (
-        <div className="task-empty"><div className="task-empty-text">{t('changes.clean') || 'No changes — working tree clean.'}</div></div>
-      ) : (
-       <>
-      <VirtualList key={activeFolderPath} items={items} renderItem={it => {
-            if (it.type === 'header') {
-              return (
-                <div key={it.key} className="changes-group-header">
-                  <span className="changes-group-label">{it.label}</span>
-                  <span className="changes-group-count">{it.count}</span>
-                </div>
-              );
-            }
-            if (it.type === 'commit-header') {
-              const c = it.commit;
-              return (
-                <div
-                  key={it.key}
-                  className={`changes-commit-row${it.toggleable ? ' changes-commit-toggleable' : ''}`}
-                  role={it.toggleable ? 'button' : undefined}
-                  tabIndex={it.toggleable ? 0 : undefined}
-                  onClick={it.toggleable ? () => toggleCommit(c.hash) : undefined}
-                  onKeyDown={it.toggleable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCommit(c.hash); } } : undefined}
-                >
-                  <span className="changes-commit-hash">{c.hash}</span>
-                  <span className="changes-commit-subject" data-tip={c.message}>{c.message}</span>
-                  <span className="changes-commit-time">{formatCommitTime(c.time, t, state.currentLang || 'en')}</span>
-                </div>
-              );
-            }
-            const { entry, group } = it;
-            const basename = entry.rel.split('/').pop() || entry.rel;
-            const dir = entry.rel === basename ? '' : entry.rel.slice(0, -basename.length - 1);
-            return (
-              <div
-                key={it.key}
-                className={`changes-row ${effectiveSelected === it.key ? 'selected' : ''}`}
-                onClick={(event) => {
-                  // React dispatches a second click with detail=2 before the
-                  // dblclick event. Ignore that second click so a double
-                  // click cannot briefly clear the selected Git diff.
-                  if (event.detail > 1) return;
-                  // Toggle off when re-clicking the already-selected row.
-                  if (effectiveSelected === it.key) {
-                    dispatch({ type: 'CLEAR_DIFF' });
-                    return;
-                  }
-                  selectDiff(entry, group);
-                }}
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  // Double-click is intentionally Git-diff-only. It must not
-                  // open Monaco/the file editor: the row belongs to the Git
-                  // modification record, so the requested action is the
-                  // corresponding read-only diff.
-                  selectDiff(entry, group, true);
-                }}
-                onMouseDown={(e) => beginExplorerDrag(entry.path, e)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  const workspaceRoot = repoRoot ?? resolveDiffContext(activeSession)?.folderPath ?? '';
-                  setCtxMenu({
-                    x: e.clientX,
-                    y: e.clientY,
-                    absolutePath: entry.path,
-                    relativePath: entry.rel,
-                    isDir: false,
-                    compact: true,
-                    onOpenEditor: workspaceRoot
-                      ? () => dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot })
-                      : undefined,
-                  });
-                }}
-              >
-                <span className={`changes-status changes-status-${entry.status === '?' ? 'untracked' : entry.status.toLowerCase()}`}>
-                  {entry.status}
-                </span>
-                <span className="changes-name">{basename}</span>
-                <span className="changes-path">{dir}</span>
-                <span className="changes-stats">
-                  <span className="diff-add">+{entry.added}</span>
-                  {group.kind !== "untracked" && <span className="diff-del">-{entry.deleted}</span>}
-                </span>
-              </div>
-            );
-          }} />
-      {diffMode === 'overlay' && state.diffSelection && (
-        <>
-          <div className="diff-resize-handle" style={handleStyle} onPointerDown={startResize} aria-label="Resize diff" />
-          <DiffPanel
-            mode="overlay"
-            path={state.diffSelection.path}
-            repoRoot={state.diffSelection.repoRoot}
-            rel={state.diffSelection.rel}
-            kind={state.diffSelection.kind}
-            commitHash={state.diffSelection.commitHash}
-            onClose={() => dispatch({ type: 'CLEAR_DIFF' })}
-            onToggleExpanded={() => dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' })}
-            heightPercent={diffHeight}
-            added={state.diffSelection.added}
-            deleted={state.diffSelection.deleted}
-          />
-        </>
-      )}
-       </>
-      )}
-      {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
+  // Preserve progressive loading for large working trees.
+  const [visibleCount, setVisibleCount] = useState(80);
+  useEffect(() => { setVisibleCount(80); }, [items.length, query, scope]);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current; if (!sentinel) return;
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) setVisibleCount(count => Math.min(items.length, count + 80)); }, { rootMargin: '300px' });
+    observer.observe(sentinel); return () => observer.disconnect();
+  }, [items.length, visibleCount]);
+  const pending = ready ? [...changes.uncommitted, ...changes.untracked] : [];
+  const count = pending.length;
+  const totalAdded = pending.reduce((sum, entry) => sum + entry.added, 0), totalDeleted = pending.reduce((sum, entry) => sum + entry.deleted, 0);
+  const emptyKey = !folder ? 'changes.choose_workspace' : !changes ? 'diff.loading' : changes.state === 'error' ? 'diff.error' : changes.state === 'no_git' ? 'changes.no_git' : changes.state === 'not_repo' ? 'changes.no_history' : needle ? 'changes.no_matches' : scope === 'committed' ? 'changes.empty' : 'changes.clean';
+  return <div className="changes-fullview">
+    {!showDetail && folder && <button type="button" className="changes-tracking-toggle" role="switch" aria-checked={tracking} onClick={() => setTracking(!tracking)}>
+      <span className={`changes-tracking-switch${tracking ? ' is-on' : ''}`} aria-hidden="true" />
+      <span>{t(tracking ? 'changes.tracking' : 'changes.tracking_enable')}</span>
+    </button>}
+    {!showDetail && !tracking && <div className="changes-empty" role="status">{t('changes.tracking_disabled')}</div>}
+    <div className="changes-list-view" id={`${idPrefix}-changes`} role="tabpanel" aria-labelledby={`${idPrefix}-changes-tab`} hidden={showDetail || !tracking}>
+    {ready && <>
+      <div className="changes-branch-header"><span className="changes-branch" title={changes.branch}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M6 3v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM15 6a9 9 0 0 0-9 9" /></svg><span className="changes-branch-name">{changes.branch}</span></span><span className="changes-baseline">{scope === 'committed' ? t('changes.session_commits') : 'HEAD → ' + t('changes.working_tree')}</span></div>
+      {pr && <div className="changes-pr-row"><button type="button" className={`changes-pr-link is-${pr.state}`} onClick={() => { void commands.openUrl(pr.url).catch(console.error); }}><HistoryGitMark status={project} /><span>PR #{pr.number}</span><span className="changes-pr-state">{t(`history.git.${pr.state}`)}</span></button>{pr.ci && <span className={`changes-ci is-${pr.ci}`}>{t(`history.git.ci_${pr.ci}`)}</span>}</div>}
+      <div className="changes-summary"><ChangesScopePicker value={scope} onChange={setScope} /><span className="changes-branch-stats">{scope === 'committed' ? <span>{t('changes.commit_count', { count: changes.session_commits.length })}</span> : <><span>{t('changes.file_count', { count })}</span><span className="diff-add">+{totalAdded}</span><span className="diff-del">−{totalDeleted}</span></>}</span></div>
+      <div className="changes-search" role="search" aria-label={t('changes.filter')}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></svg><input ref={searchInput} type="text" role="searchbox" value={query} onChange={event => setQuery(event.target.value)} placeholder={t('changes.filter')} aria-label={t('changes.filter')} />{query && <button type="button" className="changes-search-clear" aria-label={t('changes.clear_filter')} onMouseDown={event => event.preventDefault()} onClick={() => { setQuery(''); searchInput.current?.focus(); }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button>}</div>
+    </>}
+    <ScrollPanel className="changes-scroll"><div className="changes-list">
+      {items.length === 0 && <div className="changes-empty" role="status">{t(emptyKey)}</div>}
+      {items.slice(0, visibleCount).map(item => {
+        if (item.type === 'header') return <button type="button" className="changes-group-header" key={item.key} aria-expanded={!collapsed.has(item.key)} onClick={() => toggleGroup(item.key)}><Chevron open={!collapsed.has(item.key)} /><span>{item.label}</span><span className="changes-group-count">{item.count}</span></button>;
+        if (item.type === 'commit') return <div key={item.key}><button type="button" className="changes-commit-row" aria-expanded={expandedCommits.has(item.hash)} onClick={() => { void toggleCommit(item.hash); }}><Chevron open={expandedCommits.has(item.hash)} /><span className="changes-commit-subject" title={item.message}>{item.message}</span><span className="changes-commit-hash">{item.hash}</span></button>{expandedCommits.has(item.hash) && !commitFiles.has(item.hash) && <span className="changes-commit-loading">{t(commitErrors.has(item.hash) ? 'diff.error' : 'diff.loading')}</span>}</div>;
+        const { entry } = item, basename = entry.rel.split('/').pop() || entry.rel, dir = entry.rel.slice(0, -basename.length).replace(/\/$/, '');
+        const selected = selectedPath === item.key && repoRoot === state.diffSelection?.repoRoot;
+        return <button type="button" key={item.key} className={`changes-row${selected ? ' selected' : ''}`} aria-pressed={selected} title={entry.rel} onClick={() => selectFile(item)} onDoubleClick={() => { selectFile(item); dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' }); dispatch({ type: 'SET_DIFF_TAB_ACTIVE', active: true }); }} onMouseDown={event => beginExplorerDrag(entry.path, event)} onContextMenu={event => { event.preventDefault(); setCtxMenu({ x: event.clientX, y: event.clientY, absolutePath: entry.path, relativePath: entry.rel, isDir: false, compact: true, onOpenEditor: repoRoot ? () => dispatch({ type: 'OPEN_EDITOR', path: entry.path, workspaceRoot: repoRoot }) : undefined }); }}>
+          <span className="changes-file-icon" aria-hidden="true"><ThemedIcon src={getFileIconSrc(basename.split('.').pop() || '', state.iconTheme)} alt="" /></span><span className="changes-file-label"><span className="changes-name">{basename}</span>{dir && <span className="changes-path">{dir}</span>}</span><span className="changes-stats"><span className="diff-add">+{entry.added}</span><span className="diff-del">−{entry.deleted}</span></span><span className={`changes-status changes-status-${entry.status === '?' ? 'untracked' : entry.status.toLowerCase()}`}>{entry.status}</span>
+        </button>;
+      })}
+      {visibleCount < items.length && <div ref={sentinelRef} className="changes-sentinel" aria-hidden="true" />}
+    </div></ScrollPanel>
+    {diffMode === 'tab' && navigation && <div className="changes-tab-navigation"><span>{navigation.position} / {navigation.total}</span><button type="button" onClick={navigation.onPrevious} aria-label={t('changes.previous_file')}>‹</button><button type="button" onClick={navigation.onNext} aria-label={t('changes.next_file')}>›</button></div>}
+    <div className="changes-footer"><span className={`changes-footer-dot${ready ? ' is-ready' : ''}`} aria-hidden="true" /><span>{t(ready ? 'changes.auto_update' : 'changes.review')}</span></div>
     </div>
-  );
+    <div className="changes-detail-pane" id={`${idPrefix}-detail`} role="tabpanel" aria-labelledby={`${idPrefix}-detail-tab`} hidden={!showDetail || !tracking}>
+      {diffMode === 'overlay' && state.diffSelection && <DiffPanel mode="overlay" {...state.diffSelection} isActive={showDetail && tracking} navigation={navigation} onClose={() => dispatch({ type: 'CLEAR_DIFF' })} onToggleExpanded={() => dispatch({ type: 'SET_DIFF_MODE', mode: 'tab' })} />}
+    </div>
+    {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
+  </div>;
 }

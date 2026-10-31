@@ -1,0 +1,272 @@
+import { useSyncExternalStore } from 'react';
+import { directoryFailure } from './session-directory';
+import { recordSessionReply } from './session-replies';
+import { readLaunchControls, setSessionControls, clearSessionControls } from './session-controls';
+import { invoke, type ToolConfigEntry } from '../tauri';
+import { emptyClaudeState, reduceClaudeEvent, object, list, text, type ClaudeState, type ClaudeModel, type ClaudeCommand, type Json } from './claude-protocol';
+
+interface Client {
+  state: ClaudeState;
+  generation: string;
+  listeners: Set<() => void>;
+  starting?: Promise<unknown>;
+  owners: number;
+  closeTimer?: ReturnType<typeof setTimeout>;
+  publishTimer?: ReturnType<typeof setTimeout>;
+  cwd?: string | null;
+  restarting?: boolean;
+  connecting?: boolean;
+  startupExit?: string;
+  interruptAt?: number;
+}
+const clients = new Map<string, Client>();
+let listening: Promise<unknown> | undefined;
+const EMPTY = emptyClaudeState();
+
+function client(id: string): Client {
+  let c = clients.get(id);
+  if (!c) { c = { state: emptyClaudeState(), generation: crypto.randomUUID(), listeners: new Set(), owners: 0 }; clients.set(id, c); }
+  return c;
+}
+function publish(c: Client, immediate = false) {
+  if (immediate) { clearTimeout(c.publishTimer); c.publishTimer = undefined; c.listeners.forEach(fn => fn()); }
+  else if (!c.publishTimer) c.publishTimer = setTimeout(() => { c.publishTimer = undefined; c.listeners.forEach(fn => fn()); }, 40);
+}
+function listen() {
+  return listening ??= import('@tauri-apps/api/event').then(({ listen }) => listen<{ id: string; generation: string; event: Json }>('claude-session-event', ({ payload }) => {
+    const c = clients.get(payload.id);
+    if (!c || c.generation !== payload.generation) return;
+    if (payload.event.type === 'coffee_exit') clearSessionControls(payload.id, c.generation);
+    if (c.connecting && !c.state.ready && payload.event.type === 'coffee_exit') { c.startupExit = text(payload.event.detail) || 'Claude process exited'; return; }
+    const wasBusy = c.state.busy;
+    c.state = reduceClaudeEvent(c.state, payload.event);
+    if (wasBusy && !c.state.busy && payload.event.type === 'result' && payload.event.subtype === 'success'
+      && payload.event.is_error !== true && !c.state.interrupted) recordSessionReply(payload.id, 'claude', c.state.nativeId);
+    publish(c, ['control_request', 'result', 'coffee_exit'].includes(text(payload.event.type)));
+  }));
+}
+export function useClaudeSession(id: string): ClaudeState;
+export function useClaudeSession<T>(id: string, select: (state: ClaudeState) => T): T;
+export function useClaudeSession(id: string, select: (state: ClaudeState) => unknown = state => state) {
+  return useSyncExternalStore(fn => { const c = client(id); c.listeners.add(fn); return () => { c.listeners.delete(fn); }; }, () => select(clients.get(id)?.state ?? EMPTY), () => select(EMPTY));
+}
+export function getClaudeSession(id: string): ClaudeState { return clients.get(id)?.state ?? EMPTY; }
+export function getClaudeConnection(id: string) {
+  const c = clients.get(id);
+  return c && c.owners > 0 ? { generation: c.generation, state: c.state, ready: c.state.ready && !c.connecting && !c.restarting, inputBusy: c.state.busy || !!c.restarting } : undefined;
+}
+
+async function readSettings(id: string, c: Client) {
+  const settings = await invoke<Json>('claude_session_control', { id, generation: c.generation, request: { subtype: 'get_settings' } });
+  const applied = object(settings.applied), effective = object(settings.effective);
+  const selected = text(applied.model) || text(effective.model) || c.state.models[0]?.resolvedModel || 'default';
+  c.state = { ...c.state, model: selected, effort: text(applied.effort) || text(applied.effortLevel) || text(effective.effortLevel), ultracode: typeof applied.ultracode === 'boolean' ? applied.ultracode : effective.ultracode === true, thinking: effective.alwaysThinkingEnabled !== false };
+}
+
+async function initializeClaude(id: string, c: Client, cwd: string | null, resumeToken?: string, ready = true) {
+  await listen();
+  clearSessionControls(id, c.generation);
+  const controls = readLaunchControls('claude'), generation = c.generation;
+  const result = await invoke<{ sessionId: string; initialization: Json; history: { data: string; cursor: number }; bypassAvailable?: boolean }>('claude_session_start', { id, generation: c.generation, cwd, resumeToken: resumeToken ?? null });
+  const restoreHistory = !c.state.messages.length;
+  if (restoreHistory) for (const line of result.history.data.split(/\r?\n/)) {
+    try { const row = object(JSON.parse(line)); c.state = reduceClaudeEvent(c.state, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ }
+  }
+  const init = result.initialization;
+  c.state = { ...c.state, nativeId: result.sessionId, historyCursor: restoreHistory ? result.history.cursor : c.state.historyCursor, models: list(init.models) as ClaudeModel[], commands: list(init.commands) as ClaudeCommand[], permissionMode: text(init.current_permission_mode) || 'default', bypassAvailable: result.bypassAvailable === true };
+  await readSettings(id, c);
+  if (c.startupExit) throw new Error(c.startupExit);
+  c.state = { ...c.state, ready, status: ready ? 'idle' : 'starting', error: undefined, errorKey: undefined };
+  void controls.then(value => {
+    if (clients.get(id) === c && c.owners && c.generation === generation && (c.state.ready || !ready && !c.startupExit && !c.state.error)) setSessionControls(id, generation, value);
+  });
+  publish(c, true);
+}
+
+export function retainClaudeSession(id: string, cwd: string | null, resumeToken?: string): () => void {
+  const c = client(id);
+  c.cwd = cwd;
+  clearTimeout(c.closeTimer); c.owners++;
+  if (!c.starting) {
+    c.connecting = true;
+    c.starting = (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { await initializeClaude(id, c, cwd, resumeToken); return; }
+        catch (error) {
+          if (directoryFailure(error) || attempt === 2) { c.state = { ...c.state, status: 'error', error: String(error), errorKey: undefined, ready: false }; publish(c, true); return; }
+          const generation = c.generation;
+          clearSessionControls(id, generation);
+          c.generation = crypto.randomUUID();
+          await invoke('claude_session_close', { id, generation }).catch(() => {});
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+          if (!c.owners) return;
+          c.startupExit = undefined;
+          c.state = { ...c.state, ready: false, status: 'starting', error: undefined, errorKey: undefined };
+        }
+      }
+    })().finally(() => { c.connecting = false; });
+  }
+  return () => {
+    c.owners--;
+    if (!c.owners) c.closeTimer = setTimeout(() => {
+      if (c.owners) return;
+      void (c.starting ?? Promise.resolve()).finally(() => invoke('claude_session_close', { id, generation: c.generation })).catch(() => {});
+      clearTimeout(c.publishTimer);
+      clearSessionControls(id, c.generation);
+      clients.delete(id);
+    }, 300);
+  };
+}
+
+export async function sendClaudeMessage(id: string, prompt: string, orchestrationDelivery?: string): Promise<boolean> {
+  const c = client(id);
+  if (!c.state.ready || c.restarting) return false;
+  const snapshot = c.state;
+  const pendingId = `pending:${crypto.randomUUID()}`, now = Date.now();
+  c.state = { ...c.state, busy: true, interrupted: false, pendingTurns: c.state.pendingTurns + 1, status: c.state.busy ? c.state.status : 'working', error: undefined, errorKey: undefined, startedAt: c.state.busy ? c.state.startedAt : now, endedAt: undefined,
+    messages: orchestrationDelivery ? c.state.messages : [...c.state.messages, { id: pendingId, renderKey: pendingId, role: 'user', content: prompt, timestamp: now }] };
+  publish(c, true);
+  try { await invoke('claude_session_send', { id, generation: c.generation, text: prompt, orchestrationDelivery }); return true; }
+  catch (error) { c.state = { ...c.state, busy: snapshot.busy, pendingTurns: Math.max(0, c.state.pendingTurns - 1), status: snapshot.status, messages: c.state.messages.filter(m => m.id !== pendingId), ...(orchestrationDelivery ? {} : { error: String(error), errorKey: undefined }) }; publish(c, true); return false; }
+}
+
+export async function loadClaudeHistory(id: string): Promise<void> {
+  const c = client(id);
+  if (!c.state.historyCursor || c.state.loadingHistory) return;
+  c.state = { ...c.state, loadingHistory: true }; publish(c, true);
+  try {
+    const page = await invoke<{ data: string; cursor: number }>('claude_session_history', { id, generation: c.generation, before: c.state.historyCursor });
+    let older = { ...emptyClaudeState(), orphanToolResults: c.state.orphanToolResults };
+    for (const line of page.data.split(/\r?\n/)) { try { const row = object(JSON.parse(line)); older = reduceClaudeEvent(older, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ } }
+    const ids = new Set(older.messages.map(m => m.id));
+    const messages = [...older.messages, ...c.state.messages.filter(m => !ids.has(m.id))];
+    c.state = { ...c.state, messages, orphanToolResults: older.orphanToolResults, historyCursor: page.cursor };
+  } catch (error) { c.state = { ...c.state, error: String(error), errorKey: undefined }; }
+  finally { c.state = { ...c.state, loadingHistory: false }; publish(c, true); }
+}
+
+export async function controlClaude(id: string, request: Json): Promise<Json> {
+  const c = client(id);
+  if (!c.state.ready && (request.subtype !== 'interrupt' || !c.state.nativeId)) throw new Error('Claude 尚未就绪');
+  if (request.subtype === 'set_permission_mode' && request.mode === 'bypassPermissions' && !c.state.bypassAvailable) return restartWithBypass(id, c);
+  const interrupting = request.subtype === 'interrupt' && c.state.busy, generation = c.generation;
+  if (interrupting) {
+    // A wedged turn can acknowledge interrupt yet never emit `result` (#170): a deliberate second press, or the grace period, replaces the process.
+    // A quick double press (Esc Esc) is not deliberate and must not kill a turn that would stop on its own.
+    if (c.state.interruptRequested) { if (Date.now() - (c.interruptAt ?? 0) >= FORCE_STOP_REPRESS_MS) forceStop(id, c, generation); return {}; }
+    c.interruptAt = Date.now();
+    c.state = { ...c.state, interruptRequested: true }; publish(c, true);
+    setTimeout(() => forceStop(id, c, generation), FORCE_STOP_GRACE_MS);
+  }
+  let errorKey: ClaudeState['errorKey'];
+  try {
+    const result = await invoke<Json>('claude_session_control', { id, generation, request });
+    const patch: Partial<ClaudeState> = request.subtype === 'interrupt' ? {} : { error: c.state.ready ? undefined : c.state.error, errorKey: c.state.ready ? undefined : c.state.errorKey };
+    if (request.subtype === 'set_model') patch.model = text(request.model);
+    if (request.subtype === 'set_permission_mode') patch.permissionMode = text(request.mode);
+    if (request.subtype === 'apply_flag_settings') {
+      const settings = object(request.settings);
+      if (settings.effortLevel) patch.effort = text(settings.effortLevel);
+      if (typeof settings.ultracode === 'boolean') patch.ultracode = settings.ultracode;
+      if (typeof settings.alwaysThinkingEnabled === 'boolean') patch.thinking = settings.alwaysThinkingEnabled;
+    }
+    if (request.subtype === 'set_model' || request.subtype === 'apply_flag_settings') {
+      let settings: Json;
+      try { settings = await invoke<Json>('claude_session_control', { id, generation: c.generation, request: { subtype: 'get_settings' } }); }
+      catch (error) { c.state = { ...c.state, ready: false }; errorKey = 'claude.error.settings_readback'; throw error; }
+      const applied = object(settings.applied);
+      if (typeof applied.model === 'string') patch.model = applied.model;
+      if (typeof applied.effort === 'string') patch.effort = applied.effort;
+      if (typeof applied.ultracode === 'boolean') patch.ultracode = applied.ultracode;
+    }
+    c.state = { ...c.state, ...patch }; publish(c, true); return result;
+  } catch (error) {
+    if (interrupting && c.generation !== generation) return {}; // force stop already replaced the process
+    c.state = { ...c.state, ...(interrupting ? { interruptRequested: false } : {}), error: String(error), errorKey }; publish(c, true); throw error;
+  }
+}
+
+const FORCE_STOP_GRACE_MS = 5000, FORCE_STOP_REPRESS_MS = 1500;
+
+/** Stop must always land: end the turn locally, kill the wedged process and resume its transcript in place. */
+function forceStop(id: string, c: Client, generation: string) {
+  if (clients.get(id) !== c || c.generation !== generation || c.restarting || !c.state.busy || !c.state.interruptRequested) return;
+  c.restarting = true;
+  const previous = c.state;
+  const ended = reduceClaudeEvent(c.state, { type: 'result', subtype: 'error_during_execution', usage: c.state.usage as Json, modelUsage: c.state.modelUsage as Json });
+  c.state = { ...ended, busy: false, pendingTurns: 0, ready: false, status: 'starting' };
+  c.generation = crypto.randomUUID();
+  publish(c, true);
+  c.starting = (async () => {
+    try {
+      clearSessionControls(id, generation);
+      await invoke('claude_session_close', { id, generation });
+      await initializeClaude(id, c, c.cwd ?? null, previous.messages.length ? previous.nativeId : undefined, false);
+      await restoreControls(id, c, previous, previous.permissionMode);
+      c.state = { ...c.state, ready: true, status: 'idle', requests: [] };
+    } catch (error) { c.state = { ...c.state, ready: false, error: String(error), errorKey: 'claude.error.restart' }; }
+    finally { c.restarting = false; publish(c, true); }
+  })();
+}
+
+/** Re-applies the controls a replaced process would otherwise lose. */
+async function restoreControls(id: string, c: Client, previous: ClaudeState, mode: string): Promise<Json> {
+  const request = (request: Json) => invoke<Json>('claude_session_control', { id, generation: c.generation, request });
+  if (previous.model) await request({ subtype: 'set_model', model: previous.model });
+  await request({ subtype: 'apply_flag_settings', settings: { ...(previous.effort ? { effortLevel: previous.effort } : {}), ultracode: previous.ultracode, alwaysThinkingEnabled: previous.thinking } });
+  const result = await request({ subtype: 'set_permission_mode', mode });
+  await readSettings(id, c);
+  c.state = { ...c.state, permissionMode: mode };
+  return result;
+}
+
+function waitUntilIdle(c: Client): Promise<void> {
+  if (!c.state.busy) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error) => { clearTimeout(timer); c.listeners.delete(update); if (error) reject(error); else resolve(); };
+    const update = () => { if (!c.state.busy) finish(); };
+    const timer = setTimeout(() => finish(new Error('Claude did not finish interrupting the current turn')), 20000);
+    c.listeners.add(update);
+  });
+}
+
+function restartWithBypass(id: string, c: Client): Promise<Json> {
+  if (c.restarting) return Promise.reject(new Error('Claude is restarting'));
+  c.restarting = true;
+  const restart = (async () => {
+    let closed = false;
+    const previousGeneration = c.generation;
+    try {
+      const config = await invoke<ToolConfigEntry>('get_tool_config', { tool: 'claude' });
+      const flag = '--allow-dangerously-skip-permissions';
+      if (!config.extra_args.includes(flag) && !config.command.includes(flag)) await invoke('set_tool_config', { tool: 'claude', entry: { ...config, extra_args: [...config.extra_args, flag] } });
+      if (c.state.busy) { await controlClaude(id, { subtype: 'interrupt' }); await waitUntilIdle(c); }
+      const previous = c.state;
+      c.state = { ...c.state, ready: false, status: 'starting', error: undefined, errorKey: undefined };
+      publish(c, true);
+      c.generation = crypto.randomUUID();
+      await invoke('claude_session_close', { id, generation: previousGeneration });
+      clearSessionControls(id, previousGeneration);
+      closed = true;
+      // Empty sessions have no native transcript to resume yet.
+      await initializeClaude(id, c, c.cwd ?? null, previous.messages.length ? previous.nativeId : undefined, false);
+      const result = await restoreControls(id, c, previous, 'bypassPermissions');
+      c.state = { ...c.state, ready: true, status: 'idle', bypassAvailable: true, requests: [] };
+      publish(c, true);
+      return result;
+    } catch (error) {
+      if (!closed) c.generation = previousGeneration;
+      c.state = { ...c.state, ready: closed ? false : c.state.ready, error: String(error), errorKey: 'claude.error.restart' };
+      publish(c, true);
+      throw error;
+    } finally { c.restarting = false; }
+  })();
+  c.starting = restart;
+  return restart;
+}
+
+export async function respondClaude(id: string, requestId: string, response: Json): Promise<void> {
+  const c = client(id);
+  await invoke('claude_session_respond', { id, generation: c.generation, requestId, response });
+  c.state = { ...c.state, requests: c.state.requests.filter(r => r.id !== requestId), status: 'working' }; publish(c, true);
+}

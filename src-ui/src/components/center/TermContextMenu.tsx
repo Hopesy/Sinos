@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../../i18n/useT';
 
@@ -12,48 +12,53 @@ export interface TermContextMenuState {
   copySelection?: () => Promise<void>;
 }
 
-/** Shared read-only surface menu used by both xterm and ConversationView. */
-export function TermContextMenu({ menu, onClose, onCopy, onPaste, onSelectAll }: {
+/** Shared menu for terminal and conversation output. */
+export function TermContextMenu({ menu, onClose, onCopy, onPaste, onSelectAll, link }: {
   menu: TermContextMenuState;
   onClose: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onSelectAll: () => void;
+  link?: { local: boolean; onOpen: () => void; onCopy: () => void; onReveal: () => void };
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const isMac = navigator.platform.toUpperCase().includes('MAC');
   const t = useT();
   const mod = isMac ? '⌘' : 'Ctrl';
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (node) {
+      node.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - node.offsetWidth - 4))}px`;
+      node.style.top = `${Math.max(4, Math.min(menu.y, window.innerHeight - node.offsetHeight - 4))}px`;
+    }
     const close = (event: MouseEvent) => {
       if (ref.current && !ref.current.contains(event.target as Node)) onClose();
     };
     const closeKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); }
     };
-    // Delay so the triggering mousedown does not immediately close the menu.
-    const timer = window.setTimeout(() => {
-      document.addEventListener('mousedown', close);
-      document.addEventListener('keydown', closeKey);
-    }, 0);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', closeKey, true);
     return () => {
-      window.clearTimeout(timer);
       document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', closeKey);
+      document.removeEventListener('keydown', closeKey, true);
     };
-  }, [onClose]);
-
-  const left = Math.max(4, Math.min(menu.x, window.innerWidth - 164));
-  const top = Math.max(4, Math.min(menu.y, window.innerHeight - 116));
+  }, [onClose, menu.x, menu.y]);
 
   return createPortal(
     <div
-      ref={ref} className="term-ctx-menu" style={{ left, top }}
+      ref={ref} className="term-ctx-menu" style={{ left: menu.x, top: menu.y, maxWidth: 'calc(100vw - 8px)', maxHeight: 'calc(100vh - 8px)', overflowY: 'auto' }}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
       onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
     >
+      {link && <>
+        <button type="button" className="term-ctx-item" onClick={link.onOpen}>{t('conversation.open_link')}</button>
+        {link.local && <button type="button" className="term-ctx-item" onClick={link.onReveal}>{t('menu.show_in_folder')}</button>}
+        <button type="button" className="term-ctx-item" onClick={link.onCopy}>{t('conversation.copy_link')}</button>
+        <div className="term-ctx-sep" />
+      </>}
       <button
         type="button"
         className={`term-ctx-item${menu.hasSelection ? '' : ' disabled'}`}

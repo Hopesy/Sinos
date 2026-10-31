@@ -3,23 +3,24 @@
 // Why this exists:
 //   - get_native_history parses up to N jsonl/json files; doing it lazily on
 //     HistoryBoard mount makes the tab feel frozen on first open.
-//   - Instead, App.tsx prefetches on startup and the result is stored here,
-//     so switching to the History tab is instantaneous from the user's POV.
+//   - Restore the last successful list from localStorage immediately, then
+//     scan in the background when HistoryBoard first opens. The snapshot
+//     survives app restarts without scanning session files during startup.
 //
 // The store follows the useSyncExternalStore contract so React subscribers
 // re-render automatically when status/sessions change.
 //
 // Refresh strategy (issue: "会话记录列表始终是第一次打开软件时的,要重启才能看到新的"):
-//   `prefetchHistory` is idempotent (no-ops after the first load) — it does NOT
-//   re-fetch. `refreshHistory` is the non-idempotent counterpart: debounced +
+//   `prefetchHistory` starts one live fetch even after restoring a snapshot.
+//   `refreshHistory` is the non-idempotent counterpart: debounced +
 //   throttled + inFlight-guarded, it silently swaps in fresh data without
 //   flipping to the loading skeleton (no flicker). Triggers wired up across
 //   the app:
 //     • Explorer — clicking the 会话记录 tab (re-entering the History view).
 //     • App.tsx `initHistoryAutoRefresh` — window-foreground (alt-tab back) +
 //       a 60s background poll while foregrounded.
-//   `refreshHistory` no-ops until the initial prefetch has run (status ===
-//   'idle'), so users who never open the History tab pay zero polling cost.
+//   `refreshHistory` no-ops until the initial prefetch has run, so users who
+//   never open the History tab pay zero scanning cost.
 
 import { commands, isTauri } from '../tauri';
 import type { SavedSession } from '../tauri';
@@ -32,7 +33,33 @@ interface HistoryState {
   status: HistoryStatus;
 }
 
-let state: HistoryState = { sessions: [], status: 'idle' };
+const HISTORY_STORAGE_KEY = 'cc-history-cache-v1';
+
+function readPersistedHistory(): SavedSession[] | null {
+  if (!isTauri) return null;
+  try {
+    const sessions: unknown = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) ?? 'null');
+    if (!Array.isArray(sessions) || !sessions.every(s =>
+      s && ['id', 'name', 'tool', 'cwd', 'saved_at'].every(key => typeof s[key] === 'string')
+      && (s.session_token === null || typeof s.session_token === 'string')
+      && (s.created_at === undefined || s.created_at === null || typeof s.created_at === 'string')
+      && (s.file_path === undefined || s.file_path === null || typeof s.file_path === 'string')
+      && (s.turn_count === undefined || s.turn_count === null || typeof s.turn_count === 'number')
+      && (s.git_context == null || (typeof s.git_context === 'object'
+        && (s.git_context.branch === null || typeof s.git_context.branch === 'string')
+        && Array.isArray(s.git_context.pull_requests) && s.git_context.pull_requests.every((url: unknown) => typeof url === 'string')))
+    )) return null;
+    return sortByMtime(sessions);
+  } catch {
+    return null;
+  }
+}
+
+const persistedSessions = readPersistedHistory();
+let state: HistoryState = {
+  sessions: persistedSessions ?? [],
+  status: persistedSessions === null ? 'idle' : 'ready',
+};
 const listeners = new Set<() => void>();
 
 /** Structural fingerprint of a history list. The backend caches each file's
@@ -43,13 +70,14 @@ const listeners = new Set<() => void>();
 function sessionsSignature(list: SavedSession[]): string {
   return JSON.stringify(list.map(s => [
     s.id, s.name, s.tool, s.cwd, s.session_token, s.saved_at,
-    s.created_at, s.file_path, s.turn_count,
+    s.created_at, s.file_path, s.turn_count, s.git_context,
   ]));
 }
-let lastSig = '';
+let lastSig = persistedSessions === null ? '' : sessionsSignature(persistedSessions);
 
 // Refresh plumbing — see refreshHistory / doFetch.
 let inFlight = false;
+let hasRequestedHistory = false;
 let lastFetchAt = 0;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 /** A refresh that arrives while one is in flight, or inside the throttle
@@ -75,7 +103,7 @@ function emit() {
   for (const l of listeners) l();
 }
 
-function sortByMtime(list: SavedSession[]): SavedSession[] {
+export function sortByMtime(list: SavedSession[]): SavedSession[] {
   const copy = [...list];
   copy.sort((a, b) => {
     let ams = Date.parse(a.saved_at);
@@ -136,6 +164,7 @@ function doFetch(isRefresh: boolean) {
     pendingTimer = null;
   }
   inFlight = true;
+  hasRequestedHistory = true;
   lastFetchAt = Date.now();
   if (!isRefresh) {
     state = { sessions: [], status: 'loading' };
@@ -153,6 +182,7 @@ function doFetch(isRefresh: boolean) {
       if (sig === lastSig && state.status === 'ready') return;
       lastSig = sig;
       state = { sessions: sorted, status: 'ready' };
+      try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(sorted)); } catch { /* Keep the in-memory cache if storage is unavailable. */ }
       emit();
     })
     .catch(err => {
@@ -176,12 +206,12 @@ function doFetch(isRefresh: boolean) {
     });
 }
 
-/** Kick off the background fetch. Idempotent — second call while loading or
- *  after ready is a no-op. Safe to call from App mount and from HistoryBoard. */
+/** Start one live fetch when HistoryBoard opens. A persisted snapshot remains
+ *  visible while it refreshes; repeated mounts do not start duplicate scans. */
 export function prefetchHistory(): void {
   if (!isTauri) return;
-  if (state.status === 'loading' || state.status === 'ready') return;
-  doFetch(false);
+  if (inFlight || (hasRequestedHistory && state.status === 'ready')) return;
+  doFetch(state.status === 'ready');
 }
 
 /** Force a re-fetch of the history list (non-idempotent). Debounced so a
@@ -191,7 +221,7 @@ export function prefetchHistory(): void {
  *  users who never open the History tab aren't polled. Safe to call from
  *  Explorer's tab onClick and from the window-foreground / poll listeners. */
 export function refreshHistory(): void {
-  if (!isTauri) return;
+  if (!isTauri || !hasRequestedHistory) return;
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     refreshTimer = null;

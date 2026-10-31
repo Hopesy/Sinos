@@ -58,6 +58,171 @@ and `git tag --list "v*"`.
   require the desktop instance to remain running and online; OS background
   restrictions can interrupt the connection until the app reconnects.
 
+## [3.6.5] — 2026-10-19
+
+### Fixed
+- **Character Flow responds to every tab switch.** Switching between existing
+  tool tabs immediately restarts the ripple, even after rendering load has
+  paused the ambient animation. Background pausing and frame limits remain.
+
+### Changed
+- **Language-aware messaging defaults.** Simplified and Traditional Chinese
+  default to WeChat; other interface languages default to Telegram in the
+  disconnected sidebar prompt and initial channel selection. Connected channels
+  retain their actual status, and manual channel selections are preserved.
+
+## [3.6.4] — 2026-10-18
+
+### Added
+- **Interactive Character Flow appearance.** Choose Character Flow in Settings
+  → Appearance → Shape for a theme-colored, drifting glyph background. Switching
+  terminal, Coffee Agent, message settings, or Diff tabs changes the flow and
+  sends a subtle ripple from the selected tab while reusing the same renderer.
+- **Low-power animation scheduling.** Pause while the window is hidden or
+  unfocused, settle when idle, bound resolution and frame rate, and back off
+  when rendering slows down. Respect reduced-motion and high-contrast settings.
+
+### Changed
+- **Localized shape names in all 11 interface languages.** Chinese appearance
+  settings now include “老花纹” for Monogram and “字符流” for Character Flow.
+
+### Fixed
+- **Pi icon sizing.** Remove transparent outer padding so the existing
+  three-color mark fills its icon slot consistently in tabs and tool lists.
+
+## [3.6.1] — 2026-10-14
+
+Coffee CLI continues its AI + mobile message gateway workflow: talk to Coffee
+Agent through WeChat or Telegram, arrange work in visible desktop CLI tabs,
+and follow progress from your phone. This release builds on the four work modes
+introduced in v3.6.0 with stronger memory and more compact model context.
+
+### Added
+- **Background durable memory.** Completed turns can contribute lasting user
+  preferences and confirmed project decisions. Recall is scoped to the identity
+  and verified project, with bounded capacity, deduplication, and conflict checks
+  that preserve later manual corrections and forgetting. Extraction uses
+  additional tokens from the configured model.
+- **Recoverable output compression.** Long history and project results use
+  compact summaries with exact identifiers and paths. Saved originals can be
+  read in pages across conversations and restarts. Live terminal screens, input
+  results, file reads, and installation plans remain uncompressed.
+- **Kiro and MiniMax Code launch support.** Add tool tiles, brand icons, and
+  split-pane selection for installed `kiro-cli chat` and `mcode`. These tools
+  support launching only; history, heatmap, and status integration are not added.
+
+### Changed
+- **Theme-aware rectangular tabs.** Refine detached tab spacing and corner
+  shapes, with connected borders retained for the Panel style.
+
+### Fixed
+- **Continue when conversation summarization fails.** Fall back to bounded
+  recent context without deleting history or advancing the summary checkpoint.
+- **Windows Agent TUI mouse-wheel reports.** Forward ConPTY wheel input when
+  a TUI requests it, preserving normal terminal scrolling otherwise.
+
+Please share feedback through
+[GitHub Issues](https://github.com/edison7009/Coffee-CLI/issues).
+
+## [3.5.9] — 2026-10-11
+
+This release continues Coffee CLI's AI + mobile message gateway workflow:
+talk to the built-in Coffee Agent through WeChat or Telegram, let it read the
+actual text in managed CLI terminals, open visible desktop tabs in your chosen
+tool and directory, delegate through Gambit, and report progress to your phone.
+Continue the same conversation from desktop history when you return.
+
+The 11-language Agent UI, shared bubble conversation view, message copying,
+turn navigation, stable history reading, and optional English delegation from
+v3.5.8 remain available. v3.5.9 adds Muse Code launching and fixes request
+feedback and session working directories.
+
+### Added
+- **Muse Code launch support with the Meta PNG icon.** Start an installed
+  `muse` in the directory you choose, using the same visible terminal tabs as
+  other CLI tools. The icon is shared by tool cards, tabs, and Gambit. Muse
+  session history and heatmap integration are not included.
+
+### Fixed
+- **Keep Muse tabs named after the chosen working directory.** Windows launcher
+  titles no longer replace the tab name with a system executable path.
+- **Avoid duplicate Coffee Agent request errors.** Once the failure is recorded
+  in the conversation, missing model ID/API key and network errors no longer
+  appear a second time above the input area.
+- **Restore OpenCode sessions in their actual working directory.** Use the
+  stored directory without appending the relative project path again. This
+  fixes duplicated directory segments and preserves compatibility with older
+  MiMo Code and Kilo session databases. (#150)
+
+Message-channel support is still being refined. Please share problems and
+suggestions through [GitHub Issues](https://github.com/edison7009/Coffee-CLI/issues).
+
+## [3.5.8] — 2026-10-11
+
+This release continues the mobile workflow introduced in v3.5.7: use WeChat or
+Telegram to talk to Coffee Agent, read the actual text in managed CLI terminals,
+open visible tool tabs in your chosen directory, and arrange work from your
+phone. Conversations remain available on the desktop when you return.
+
+### Changed
+- **Coffee Agent now follows the app language in all 11 supported locales.**
+  Message settings, channel status, help, activity indicators, and known error
+  messages update with the selected language without changing stored chats.
+- **Reuse the CLI bubble conversation interface.** User messages appear on the
+  right and Agent replies on the left, with the same per-turn navigation rail
+  and message-copy controls used by CLI conversations.
+- **Clearer English delegation and help.** The delegation switch saves
+  automatically without briefly replacing its description or shifting text.
+  Help explains how you can chat in your language while Coffee Agent delegates
+  tasks to other CLI agents in English and reports back in your language.
+
+### Fixed
+- **Keep the reading position in Coffee Agent history.** Navigating to an older
+  turn prevents streaming output from pulling the view back to the latest
+  reply; loading earlier messages preserves the current reading position even
+  while the active reply grows.
+
+Message-channel support is still being refined. Please share problems and
+suggestions through [GitHub Issues](https://github.com/edison7009/Coffee-CLI/issues).
+
+## [3.5.7] — 2026-10-11
+
+### Added
+- **Coffee Agent with WeChat and Telegram message channels.** Send instructions
+  through familiar chat apps while the built-in Agent reads the actual text
+  displayed in managed CLI terminals, coordinates tools, and reports progress.
+  Launched tools open as ordinary visible tabs in the directory you choose, so
+  you can continue the work at your computer.
+- **Persistent Coffee Agent conversations and preferences.** Local history
+  appears in the session list and can be continued on the desktop, including
+  conversations started through a message channel. Long conversations use
+  automatic summaries; explicit preferences can be remembered across new chats.
+- **Message settings and optional English task delegation.** Configure the
+  Agent model and message channels in one page. When English delegation is on,
+  Coffee Agent sends English task instructions to CLI agents while chatting and
+  reporting in your language; when off, task instructions follow your language.
+- **OpenCode V2 history and heatmap support.** Read current OpenCode sessions
+  alongside the legacy format.
+
+### Fixed
+- **Consistent visible terminal control.** Agent-launched Windows terminals use
+  shell-compatible working directories, and session readiness checks no longer
+  mistake a newly created tab for a closed one.
+- **More reliable channel and conversation recovery.** Reconnecting the same
+  verified channel identity preserves its conversation route; cancellation and
+  message deduplication remain scoped to the active connection. Telegram can
+  recover polling after a long idle period, and WeChat can reconnect after a
+  stored credential is missing.
+- **Safer file edits and history pagination.** Agent file replacements are
+  atomic, and loading older chat messages keeps the active reply in the correct
+  row. Session history restores its local cache before refreshing, and terminal
+  output scheduling waits for parser completion.
+- **Windows installer compatibility.** Align the custom NSIS template and
+  running-process checks with the pinned Tauri bundler version.
+
+Message-channel support is still being refined. Please share problems and
+suggestions through [GitHub Issues](https://github.com/edison7009/Coffee-CLI/issues).
+
 ## [3.2.9] — 2026-07-31
 
 ### Fixed

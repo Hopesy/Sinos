@@ -5,10 +5,10 @@ import ReactDOM from 'react-dom/client';
 import { AppProvider } from './store/app-state';
 import { App } from './App';
 import { invoke, commands } from './tauri';
-
 import { loadToolInfo } from './lib/tool-info';
 import { onWindowBackground, onWindowForeground } from './lib/window-focus-filter';
 import { IS_MACOS, IS_WINDOWS } from './lib/platform';
+import { initializeUiScale } from './lib/ui-scale';
 
 // macOS uses native window decorations + traffic lights (titleBarStyle:
 // "Overlay" in tauri.macos.conf.json). Tag <html> before first paint so the
@@ -25,19 +25,16 @@ if (IS_WINDOWS) document.documentElement.classList.add('is-windows');
 // canonical display names on first render (no 'claude' → 'Claude
 // Code' label flash). The window is `visible: false` until
 // show_main_window fires below, so the ~10ms wait is invisible.
-const renderApp = () => {
+const uiScaleReady = initializeUiScale();
+void Promise.all([loadToolInfo(), uiScaleReady]).finally(() => {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-
-        <AppProvider>
-          <App />
-        </AppProvider>
-
+      <AppProvider>
+        <App />
+      </AppProvider>
     </React.StrictMode>
   );
-};
-
-void loadToolInfo().finally(renderApp);
+});
 
 // Warm document.fonts so Inter is fully decoded BEFORE any UI element first
 // needs glyphs that the body had not yet rendered. <link rel="preload"> in
@@ -60,11 +57,11 @@ if (typeof document !== 'undefined' && document.fonts) {
 // Window starts with `visible: false` (see tauri.conf.json) to hide the
 // Windows-default chrome flash. Reveal it only after the first paint so
 // the first frame the user sees is the final themed UI.
-requestAnimationFrame(() => {
+void uiScaleReady.finally(() => requestAnimationFrame(() => {
   requestAnimationFrame(() => {
     invoke('show_main_window').catch(() => {});
   });
-});
+}));
 
 // ── Background-mode throttle ────────────────────────────────────────────
 // When the OS hides the Sinos CLI window (other Space, app switched
@@ -73,7 +70,6 @@ requestAnimationFrame(() => {
 // keeps paying the full 8ms emitter cadence per session forever — measurable
 // as a warm chassis on Apple Silicon laptops left running all day.
 const syncBackgroundMode = () => {
-
   commands.setBackgroundMode(document.hidden).catch(() => {});
 };
 document.addEventListener('visibilitychange', syncBackgroundMode);
@@ -88,11 +84,9 @@ document.addEventListener('visibilitychange', syncBackgroundMode);
 // every time the user grabs the titlebar. The filter waits SETTLE_MS
 // (100ms) before honoring a blur; a focus within that window cancels.
 onWindowBackground(() => {
-
   commands.setBackgroundMode(true).catch(() => {});
 });
 onWindowForeground(() => {
-
   commands.setBackgroundMode(false).catch(() => {});
 });
 
@@ -100,11 +94,9 @@ onWindowForeground(() => {
 // Our own React components handle onContextMenu directly and render
 // custom menus via app state — preventing the browser default at the
 // window level is layered on top, so those custom menus still appear.
-{
-  window.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-  });
-}
+window.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+});
 
 // Production: block F12 / Ctrl+Shift+I / Ctrl+Shift+J / Ctrl+Shift+C to
 // prevent users from opening the WebView devtools on a shipped build.

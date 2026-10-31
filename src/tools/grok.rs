@@ -1,7 +1,7 @@
 //! Grok Build (xAI) - `grok` binary.
 //!
 //! Hookless integration with native OSC-title dynamic island, history, heatmap,
-//! changes, and resume. Startup removes Grok hook JSON written by old builds.
+//! changes, and resume. Existing hook configuration is left untouched.
 //!
 //! Session storage (verified against on-disk files 2026-07-10): each session
 //! lives in its own dir `~/.grok/sessions/<url-encoded-cwd>/<uuid>/` with a

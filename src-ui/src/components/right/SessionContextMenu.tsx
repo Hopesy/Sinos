@@ -14,12 +14,13 @@ import { useT } from '../../i18n/useT';
 import type { SavedSession } from '../../tauri';
 import { commands } from '../../tauri';
 import { clipboardWrite } from '../../lib/clipboard';
-import { hideSession } from '../../lib/hidden-sessions';
 import { togglePin, isPinned } from '../../lib/pinned-sessions';
 import { buildResumeCommand } from '../../lib/resume-command';
 
 export interface SessionCtxMenuState {
   session: SavedSession;
+  workerId?: string;
+  workerParent?: SavedSession;
   x: number;
   y: number;
 }
@@ -35,7 +36,7 @@ const ICON_PROPS = {
   strokeLinejoin: 'round' as const,
 };
 
-export function SessionContextMenu({ menu, onClose, onRename }: { menu: SessionCtxMenuState; onClose: () => void; onRename: (session: SavedSession) => void }) {
+export function SessionContextMenu({ menu, onClose, onRename, onDelete, onOpenSplit, splitFull, onOpenWorker, onDetachWorker }: { menu: SessionCtxMenuState; onClose: () => void; onRename: (session: SavedSession) => void; onDelete: (session: SavedSession) => void; onOpenSplit?: (session: SavedSession) => void; splitFull?: boolean; onOpenWorker?: () => void; onDetachWorker?: () => void }) {
   const t = useT();
   const menuRef = useRef<HTMLDivElement>(null);
   const { session } = menu;
@@ -66,7 +67,7 @@ export function SessionContextMenu({ menu, onClose, onRename }: { menu: SessionC
   const copy = (text: string) => { clipboardWrite(text); onClose(); };
   const handlePin = () => { togglePin(session.tool ?? '', session.id); onClose(); };
   const handleRename = () => { onRename(session); onClose(); };
-  const handleDelete = () => { hideSession(session.tool ?? '', session.id); onClose(); };
+  const handleDelete = () => { onDelete(session); onClose(); };
   const handleShowInFolder = async () => {
     onClose();
     if (!filePath) return;
@@ -84,8 +85,16 @@ export function SessionContextMenu({ menu, onClose, onRename }: { menu: SessionC
     ...(isRightOverflow ? { right: Math.max(0, window.innerWidth - menu.x) } : { left: menu.x }),
   };
 
+  if (menu.workerId) return createPortal(<div className="ctx-menu" ref={menuRef} style={style}>
+    <button className="ctx-menu-item" onClick={() => { onClose(); onOpenWorker?.(); }}><svg {...ICON_PROPS}><path d="M9 5h10v14H5V9m8 0 6-4m-6 0h6v6" /></svg>{t('orchestration.open_history')}</button>
+    {onDetachWorker && <button className="ctx-menu-item" onClick={() => { onClose(); onDetachWorker(); }}><svg {...ICON_PROPS}><rect x="3" y="8" width="13" height="13" rx="2"/><path d="M8 3h13v13m-8-3 8-10"/></svg>{t('orchestration.detach')}</button>}
+    <div className="ctx-menu-divider"/><button className="ctx-menu-item" onClick={handleDelete}><svg {...ICON_PROPS}><polyline points="3 6 5 6 21 6"/><path d="m19 6-.867 13.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 6M10 11v6M14 11v6"/></svg>{t('menu.delete')}</button>
+  </div>,document.body);
   return createPortal(
     <div className="ctx-menu" ref={menuRef} style={style}>
+      {onOpenSplit && <button className="ctx-menu-item" disabled={splitFull} title={splitFull ? t('split.full') : undefined} onClick={() => { onClose(); onOpenSplit(session); }}>
+        <svg {...ICON_PROPS}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /></svg>{t('split.open')}
+      </button>}
       <button className="ctx-menu-item" onClick={handlePin}>
         <svg {...ICON_PROPS}>
           <path d="M12 17v5"/>

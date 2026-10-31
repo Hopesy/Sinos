@@ -1,6 +1,6 @@
 // Per-tool launch override modal — minimal version.
 //
-// Reached from the small gear on Library cards. Lets the user override
+// Reached from the gear on tool cards. Lets the user override
 // how a specific CLI tool is spawned: launch path (e.g. wsl claude),
 // extra args, default cwd, custom history scan path. All four fields
 // are optional — empty falls through to Coffee CLI's built-in default.
@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { commands, type ToolConfigEntry } from '../../tauri';
 import { useT } from '../../i18n/useT';
+import { ThemedSelect } from '../common/ThemedSelect';
 
 interface Props {
   toolKey: string;
@@ -106,6 +107,17 @@ export function ToolConfigModal({ toolKey, toolLabel, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [extraArgsText, setExtraArgsText] = useState('');
+  const presets = toolKey === 'claude' ? [
+    { value: 'claude', label: 'claude' },
+    { value: 'claude --permission-mode plan', label: t('claude.permission.plan') },
+    { value: 'claude --permission-mode acceptEdits', label: t('claude.permission.edit') },
+    { value: 'claude --dangerously-skip-permissions', label: t('claude.permission.bypass') },
+  ] : toolKey === 'codex' ? [
+    { value: 'codex', label: 'codex' },
+    { value: 'codex -c sandbox_mode=read-only -c approval_policy=on-request', label: t('codex.read_only') },
+    { value: 'codex -c sandbox_mode=workspace-write -c approval_policy=on-request', label: t('codex.workspace') },
+    { value: 'codex -c sandbox_mode=danger-full-access -c approval_policy=never', label: t('codex.full_access') },
+  ] : [];
 
   useEffect(() => {
     let cancelled = false;
@@ -154,20 +166,22 @@ export function ToolConfigModal({ toolKey, toolLabel, onClose }: Props) {
   };
 
   return (
-    <div onClick={onClose} className="tool-config-backdrop">
+    <div onMouseDown={event => { if (event.button === 0 && event.target === event.currentTarget) onClose(); }} className="tool-config-backdrop">
       <div onClick={e => e.stopPropagation()} className="tool-config-modal">
         <div className="tool-config-header">
           <span>{toolLabel}</span>
-          <button onClick={onClose} className="tool-config-close" aria-label="close">×</button>
+          <button onClick={onClose} className="tool-config-close close-button" aria-label="close">×</button>
         </div>
 
         {!loading && (
           <div className="tool-config-body">
-            <Field
-              label={t('tool_config.command')}
-              value={entry.command}
-              onChange={v => setEntry({ ...entry, command: v })}
-            />
+            <div className="tool-config-field">
+              <label className="tool-config-field-label" htmlFor="tool-launch-command">{t('tool_config.command')}</label>
+              <div className={`tool-config-command${presets.length ? ' has-presets' : ''}`}>
+                <input id="tool-launch-command" type="text" className="tool-config-input" spellCheck={false} value={entry.command} onChange={event => setEntry({ ...entry, command: event.target.value })} />
+                {presets.length > 0 && <ThemedSelect className="tool-command-presets" align="end" label={t('tool_config.presets')} value={entry.command} options={presets} disabled={saving} onChange={command => setEntry({ ...entry, command })} />}
+              </div>
+            </div>
             <Field
               label={t('tool_config.extra_args')}
               value={extraArgsText}

@@ -1,4 +1,10 @@
+.panel-center, .chrome-tabs-header, .gambit, .claude-control-menu, .folder-menu {
+  --font: var(--font-nav);
+  font-family: var(--font);
+}
+
 .main-content {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -9,19 +15,16 @@
   border-radius: 0; /* Fully flush, edge to edge */
 }
 
-/* Tool-tab strip. Portaled into the titlebar (#titlebar-tab-slot) so the tabs
-   sit on the drag bar like Windows Terminal / Chrome instead of a separate row
-   inside the content. Fixed height, bottom-aligned in the taller bar (via
-   .titlebar-tabs) so the tabs hug the content below and a reserve sits above. */
+/* Tool tabs sit in the titlebar with equal space above and below each tab. */
 .chrome-tabs-header {
   display: flex;
   align-items: stretch;
-  height: 32px;
-  padding: 0 2px 0 8px;
+  height: 30px;
+  padding: 0 2px 0 0;
   border-bottom: none;
   position: relative;
   z-index: 10;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -36,11 +39,7 @@
   font-weight: 500;
   color: var(--text-2);
   background: transparent;
-  /* --shape-radius-tab is ALREADY a top-only radius (e.g. `10px 10px 0 0`, or 0
-     in sharp/slab) — so the tab is rounded on top, square at the bottom. It
-     fills the bar to its bottom edge, and the active tab's fill meets the
-     content directly below (Windows-Terminal seam). Do NOT re-wrap this in
-     `var() var() 0 0` — that expands to 10 values and the browser drops it. */
+  /* Corner treatment follows the selected shape style. */
   border-radius: var(--shape-radius-tab);
   cursor: pointer;
   user-select: none;
@@ -55,12 +54,16 @@
   transition: background 0.15s, color 0.15s, transform 0.18s ease;
 }
 
+.chrome-tab .tab-title {
+  /* Keep CJK fallback fonts and Latin titles in the same centered line box. */
+  line-height: 18px;
+}
 
-.chrome-tab:hover:not(.active) {
+.chrome-tab:hover:not(.active, .orchestration-family-active) {
   background: var(--bg-hover);
 }
 
-.chrome-tab.active {
+.chrome-tab:is(.active, .orchestration-family-active) {
   color: var(--text-1);
   background: var(--bg-terminal);
   z-index: 2;
@@ -69,11 +72,7 @@
 }
 
 /* Active drag state — pointer-down a tab and slide it horizontally.
- * INTENTIONALLY zero visual effect (no opacity, no shadow, no cursor
- * change): the dragged tab's bottom edge meets the terminal area's
- * top edge, and any elevation / dimming there breaks the chrome-tab
- * → terminal seam continuity. The tab just moves; its appearance
- * stays identical to its non-drag self.
+ * Keep the tab's appearance unchanged while it moves.
  *
  * Two rules below are mechanical, not stylistic:
  *   z-index — ensures the dragged tab renders above siblings during
@@ -87,31 +86,30 @@
   transition: none;
 }
 
-/* The Chrome "flare" pseudo-elements that seamed the active tab into the
-   terminal directly below it were removed when the strip moved up into the
-   titlebar — there's no adjacent terminal to bridge into up here. The active
-   tab now reads via its --bg-terminal fill alone (WT-style flat tab). */
-
-.chrome-tab-new {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-2);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  margin-left: 4px;
+:root .chrome-tabs-header .chrome-tab.orchestration-child {
+  height: 26px;
   align-self: center;
-  flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
-}
-
-.chrome-tab-new:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--text-1) 12%, var(--bg-app));
   color: var(--text-1);
+  box-shadow: none;
+}
+:root .chrome-tabs-header .chrome-tab.orchestration-child[data-enter] {
+  animation: orchestration-tab-enter .2s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes orchestration-tab-enter {
+  from { max-width: 0; padding-inline: 0; gap: 0; opacity: 0; overflow: hidden; }
+  to { max-width: 200px; padding-inline: 12px; gap: 8px; opacity: 1; overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root .chrome-tabs-header .chrome-tab.orchestration-child[data-enter] { animation: none; }
+}
+:root .chrome-tabs-header .chrome-tab.orchestration-child:hover,
+:root .chrome-tabs-header .chrome-tab.orchestration-child.active {
+  background: color-mix(in srgb, var(--text-1) 20%, var(--bg-app));
+}
+:root .chrome-tabs-header .chrome-tab.orchestration-child::before,
+:root .chrome-tabs-header .chrome-tab.orchestration-child::after {
+  display: none;
 }
 
 /* ─── Tab Actions (Status Dots ↔ Close Button Overlay) ─── */
@@ -155,11 +153,6 @@
   pointer-events: auto;
 }
 
-.tab-close-btn:hover {
-  background-color: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-}
-
 /* ─── Tab Status Indicator (3×3 dot grid) ─── */
 
 @keyframes tab-status-wave {
@@ -191,7 +184,7 @@
 }
 
 /* idle — Wave-Double — green */
-.status-idle .tab-status-dot { background-color: #34d399; box-shadow: 0 0 3px #34d39988; }
+.status-idle .tab-status-dot { box-shadow: 0 0 3px #34d39988; }
 .status-idle .tab-status-dot:nth-child(1) { animation-delay: 0s; }
 .status-idle .tab-status-dot:nth-child(2) { animation-delay: 0.15s; }
 .status-idle .tab-status-dot:nth-child(3) { animation-delay: 0.3s; }
@@ -202,8 +195,8 @@
 .status-idle .tab-status-dot:nth-child(8) { animation-delay: 0.15s; }
 .status-idle .tab-status-dot:nth-child(9) { animation-delay: 0.3s; }
 
-/* working — Snake-CCW — Claude orange (matches the "Thinking..." color in Claude Code CLI output) */
-.status-working .tab-status-dot { background-color: #D97757; box-shadow: 0 0 3px #D9775788; }
+/* working — Snake-CW — Claude orange (matches the "Thinking..." color in Claude Code CLI output) */
+.status-working .tab-status-dot { box-shadow: 0 0 3px #D9775788; }
 .status-working .tab-status-dot:nth-child(1) { animation-delay: 0s; }
 .status-working .tab-status-dot:nth-child(2) { animation-delay: 1.05s; }
 .status-working .tab-status-dot:nth-child(3) { animation-delay: 0.9s; }
@@ -216,7 +209,7 @@
 
 /* wait_input — Ripple — blue. Claude is blocked on a permission prompt
    ("approve / deny" dialog or similar); user must intervene. */
-.status-waiting .tab-status-dot { background-color: #60a5fa; box-shadow: 0 0 3px #60a5fa88; }
+.status-waiting .tab-status-dot { box-shadow: 0 0 3px #60a5fa88; }
 .status-waiting .tab-status-dot:nth-child(1) { animation-delay: 0.3s; }
 .status-waiting .tab-status-dot:nth-child(2) { animation-delay: 0.15s; }
 .status-waiting .tab-status-dot:nth-child(3) { animation-delay: 0.3s; }
@@ -253,14 +246,111 @@
   flex-direction: column;
 }
 
-.terminal-mode-surface {
-  flex: 1;
+.session-split-pane {
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
-  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.session-split-pane.is-focused { border-color: var(--accent); }
+/* Reserve the shared composer once for the entire split, not once per cell. */
+body.gambit-docked .main-content.has-session-split { margin-bottom: calc(var(--gambit-dock-h, 200px) + 16px); }
+body.gambit-docked .has-session-split .tier-terminal { padding-bottom: 0; }
+body.gambit-docked .has-session-split .claude-scroll { height: 100%; }
+body.gambit-docked .has-session-split .claude-scroll-bottom { bottom: 20px; }
+body.gambit-docked .has-session-split .claude-reconnect { bottom: 20px; }
+body.gambit-docked .has-session-split .conversation-navigation { bottom: 16px; }
+.session-split-divider {
+  position: absolute;
+  z-index: 210;
+  touch-action: none;
+}
+.session-split-divider.is-horizontal { min-width: 6px; transform: translateX(-3px); cursor: col-resize !important; }
+.session-split-divider.is-vertical { min-height: 6px; transform: translateY(-3px); cursor: row-resize !important; }
+.session-split-divider:hover, .session-split-divider:focus-visible { background: color-mix(in srgb, var(--accent) 45%, transparent); outline: none; }
+.session-split-drop-target {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-1);
+  font: 500 13px var(--font-nav);
+}
+.session-split-drop-target span { padding: 5px 10px; border-radius: var(--radius-md); background: var(--bg-panel); }
+body.session-split-dragging { cursor: grabbing; user-select: none; }
+
+.pane-number-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 200;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* color-mix: 55% theme accent + 45% black. Well-supported since
+     Chrome 111 / Safari 16.4; Tauri's WebView2 is Edge-based and
+     supports it. Fallback uses the raw accent — acceptable. */
+  background: color-mix(in srgb, var(--accent, #6cc275) 55%, #000);
+  border-radius: 0;
+  border: none;
+  padding: 0;
+  font-size: 14px;
+  font-family: var(--font-display, 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+  font-weight: 700;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+  line-height: 1;
+  color: #fff;
+  user-select: none;
+  pointer-events: none;
 }
 
-.conversation-mode-surface {
+/* Active-pane badge variant — interactive close button. The × is only
+   revealed on hover (see .pane-badge-num / .pane-badge-x below), so the
+   idle state reads identical to the empty-pane badge and the user only
+   sees "close" affordance when they're reaching for it. */
+.pane-number-badge--closable {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pane-number-badge--closable:active {
+  filter: brightness(0.92);
+}
+
+.pane-badge-num,
+.pane-badge-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.pane-badge-x {
+  display: none;
+  font-size: 18px;
+  font-weight: 600;
+  /* × glyph sits optically low at this weight — lift a pixel so the
+     geometric center of the cross matches where the digit sat. */
+  transform: translateY(-1px);
+}
+
+.pane-number-badge--closable:hover .pane-badge-num { display: none; }
+.pane-number-badge--closable:hover .pane-badge-x   { display: flex; }
+
+
+.terminal-mode-surface {
+  display: flex;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -298,71 +388,14 @@
   opacity: var(--wallpaper-opacity, 0.7);
 }
 
-.launchpad-slider-viewport {
+.launchpad-page {
+  position: relative;
   width: 100%;
   height: 100%;
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-}
-
-.launchpad-slider-track {
-  display: flex;
-  width: 200%;
-  height: 100%;
-  transition: transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
-}
-
-.launchpad-slider-track.slide-to-library {
-  transform: translateX(-50%);
-}
-
-.launchpad-page {
-  width: 50%;
-  height: 100%;
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow-y: auto;
-}
-
-/* ─── Top-anchored chrome (mode label) ───────────────────────────────
-   Lives at the launchpad-container level so it does NOT translate
-   with the slider track. Always mounted; cross-fades between Desktop
-   chrome (gear) and Library chrome (chevron back + tab pill with
-   inline pin-count badge) via opacity. Mixing motion types — content
-   slides, chrome fades — reads more polished than forcing both onto
-   the same animation. pointer-events:none in the hidden state so
-   users can't click an invisible button during the fade.
-*/
-.launchpad-chrome {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  z-index: 3;
-}
-.launchpad-chrome.is-visible {
-  opacity: 1;
-}
-.launchpad-chrome.is-visible > * {
-  pointer-events: auto;
-}
-
-/* Desktop chrome: only the 9-dot launcher at top-right. */
-.launchpad-chrome--desktop > .mode-switch-btn {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-}
-
-/* Library chrome: back button at top-left. */
-.launchpad-chrome--library > .launchpad-chrome-back {
-  position: absolute;
-  top: 16px;
-  left: 16px;
 }
 
 .launchpad-inner {
@@ -380,10 +413,8 @@
 
 /* "Can't detect?" - plain small text hugging the bottom-right corner of
    the pinned cards. No pill / icon / border (per design feedback): just
-   muted right-aligned text with a dotted underline. Negative margin-bottom
-   cancels this line's own height so the grid->heatmap gap stays at the
-   heatmap-card's built-in 24px (this line lives inside that gap, adding
-   ~zero net height). Tooltip is a themed data-tip ::after (NOT native
+   muted right-aligned text with a dotted underline.
+   Tooltip is a themed data-tip ::after (NOT native
    title=); width is fixed at 340px + right-anchored so CJK wraps normally
    instead of one-char-per-line (width:auto + left:center shrank the
    available width to the tiny trigger). span so the Glass/Carbon nuclear
@@ -392,7 +423,6 @@
   display: flex;
   justify-content: flex-end;
   margin-top: 6px;
-  margin-bottom: -20px;
 }
 .detect-help-trigger {
   position: relative;
@@ -471,7 +501,7 @@
   z-index: 100;
 }
 
-/* Card + folder button share a group wrapper */
+/* Tool card wrapper */
 .launchpad-card-group {
   display: flex;
   flex-direction: row;
@@ -483,11 +513,7 @@
   border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-  transition: transform 0.25s, box-shadow 0.25s;
-}
-
-.launchpad-card-group:hover {
-  transform: translateY(-2px);
+  transition: box-shadow 0.25s;
 }
 
 /* Frosted glass cards when wallpaper is active.
@@ -497,8 +523,7 @@
    promoted to its own GPU layer; that layer ignores the wrapper's
    `overflow:hidden + border-radius` clip, leaking past the rounded
    corners — visible as 4 sharp corner residues on Soft (16px) and
-   as a colored blur fringe on the inner card's exposed left edge
-   (the right edge is shielded by .launchpad-folder-btn). Same fix
+   as a colored blur fringe on the inner card's exposed left edge. Same fix
    pattern as [data-shape="glass"] in global.css. */
 .launchpad-has-bg .launchpad-card-group {
   background: rgba(18, 18, 24, 0.52);
@@ -538,31 +563,19 @@
   min-width: 0;
 }
 
-/* Folder button — pinned to right side of card */
-.launchpad-folder-btn {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 4px;
-  cursor: pointer;
-  /* Theme-accent colored — follows each theme like the heatmap's bright
-     cells, so it's clearly visible and on-palette. Was --text-3 @ opacity
-     0.18, so dim that users didn't notice the open-folder affordance and
-     kept asking how to set the directory. */
-  color: var(--accent);
-  opacity: 0.9;
-  transition: opacity 0.15s;
-}
+.launchpad-config { display:flex; align-items:center; justify-content:center; flex:0 0 36px; width:36px; height:36px; margin-left:auto; padding:6px; border:0; border-radius:var(--shape-radius-btn,5px); background:transparent; color:var(--text-2); }
+.launchpad-config:hover { background:var(--bg-hover); }
+.launchpad-config svg { display:block; flex-shrink:0; }
+.launchpad-mode-tabs { position:absolute; right:0; bottom:0; display:flex; height:18px; overflow:hidden; border-top-left-radius:var(--radius-md); }
+.launchpad-mode-tabs button { display:flex; align-items:center; justify-content:center; width:70px; height:18px; padding:0 8px; border:0; border-radius:0; background:var(--bg-hover); color:var(--text-2); font:12px/1 var(--font); white-space:nowrap; cursor:pointer; }
+.launchpad-mode-tabs button:first-child { padding-left:10px; padding-right:6px; }
+.launchpad-mode-tabs button:last-child { padding-left:6px; padding-right:10px; }
+.launchpad-mode-tabs button:hover { color:var(--text-1); }
+.launchpad-mode-tabs button.is-selected { background:var(--accent); color:var(--bg-app); }
+.launchpad-mode-tabs button:disabled { cursor:default; }
+.launchpad-mode-tabs button:focus-visible, .launchpad-config:focus-visible { outline:1px solid var(--accent); outline-offset:-2px; }
 
-.launchpad-folder-btn:hover {
-  opacity: 1;
-}
-
-/* Recent-folders dropdown (opened from a tool card's folder icon).
+/* Recent-folders dropdown (opened from a tool card).
    Same opaque-bg recipe as .term-ctx-menu so it reads solid across every
    theme incl. glass (portal'd to <body>, which is under html[data-shape]). */
 .folder-menu {
@@ -625,27 +638,8 @@
 .folder-menu-item:hover .folder-menu-del { opacity: 0.55; }
 .folder-menu-item:hover .folder-menu-del:hover {
   opacity: 1;
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 15%, transparent);
 }
 .folder-menu-item .folder-menu-del svg { opacity: 1; color: inherit; }
-
-.launchpad-folder-btn svg {
-  /* Fluid with the card: full 28px at normal widths, down to 22px on
-     narrow windows so the button stays affordable (name ellipsizes first,
-     the folder affordance never gets overlapped). */
-  width: clamp(22px, 2vw, 28px);
-  height: clamp(22px, 2vw, 28px);
-  flex-shrink: 0;
-}
-
-.launchpad-card-disabled .launchpad-folder-btn {
-  pointer-events: none;
-}
-
-/* (Per-tool launch settings now live on the Library cards, not on
-   the main launchpad — gear is a one-time setup affordance, not a
-   recurring action like the folder picker. See .library-gear-btn.) */
 
 /* Disabled state — tool not installed */
 .launchpad-card-disabled {
@@ -690,23 +684,22 @@
 .launchpad-card-info {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 3px;
   min-width: 0;
-  /* Clip the name when the card gets too narrow — the span below
-     ellipsizes instead of painting over the folder button (narrow-window
-     overlap fix). */
+  /* Keep long tool names clear of the settings button on narrow cards. */
   overflow: hidden;
 }
 
 .launchpad-card span {
   font-size: clamp(15px, 1.35vw, 18px);
   font-weight: 500;
-  color: var(--text-1);
+  color: var(--text-2);
   white-space: nowrap;
 }
 
 /* Agent name: ellipsize when the card is squeezed instead of overflowing
-   onto the folder button. The terminal card's inline-flex name (with the
+   onto the settings button. The terminal card's inline-flex name (with the
    remote-link icon) only clips — flex items can't ellipsize — which is
    fine for its short CJK label. */
 .launchpad-card-info > span:first-child {
@@ -714,69 +707,8 @@
   text-overflow: ellipsis;
 }
 
-.launchpad-card-cwd {
-  /* Keep the remembered workspace readable at a glance, matching the
-     secondary metadata used by the session list in the left rail. */
-  font-size: 12px !important;
-  font-weight: 500 !important;
-  color: var(--text-2) !important;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* Shrink with the card (was a fixed 160px that could out-wide a narrow
-     card and overflow). */
-  max-width: 100%;
-  letter-spacing: 0.3px;
-}
-
 /* (folder button is now a transparent overlay — no per-shape overrides needed) */
 
-/* ─── Mode Switch Button (Library vs Desktop) ─────────────── */
-/* Naked glyph — no bg, no border, no plate. Chrome is the enemy of
-   high-end feel; a 48px filled pill around a 24px icon makes the
-   chrome carry more visual weight than the symbol it frames.
-   Color stays neutral (NOT accent) — having stripped border/bg to
-   reduce visual weight, then painting it in brand-accent would just
-   re-add weight via color. VS Code / Linear / Notion all keep
-   secondary chrome in dim grey for the same reason. */
-.mode-switch-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  /* Default: dim text-3 + opacity 0.7 → near-invisible-but-present
-     restraint. Hover: jump to full text-1 → noticeable affordance
-     lift without ever pulling attention when not interacting. */
-  color: var(--text-3);
-  opacity: 0.7;
-  cursor: pointer;
-  transition: color 0.2s ease, opacity 0.2s ease;
-}
-
-.mode-switch-btn:hover {
-  /* Hover lifts to brand accent — color as INTERACTION REWARD,
-     not default decoration. Same pattern as Linear/Arc: app feels
-     alive on intent, recedes when idle. */
-  color: var(--accent);
-  opacity: 1;
-}
-
-.mode-switch-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  /* Inherit color from .mode-switch-btn (text-2 → text-1 on hover)
-     instead of hardcoding accent. Naked glyph in subdued text-2 reads
-     as restrained chrome; hover lifts to text-1 for affordance. */
-  color: inherit;
-  background: transparent;
-  transition: transform 0.4s ease;
-}
 .empty-icon {
   color: var(--text-3);
   opacity: 0.6;
@@ -784,20 +716,20 @@
 
 /* ─── Library (Agents) ─────────────────────────────────────────────────── */
 
-.library-page {
-  position: relative;
-  align-items: flex-start;
+.tool-settings-page {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 24px 32px 32px;
+  color: var(--text-2);
+  font-family: var(--font-nav, var(--font));
+  container-type: inline-size;
 }
+.tool-settings-inner { width: 100%; max-width: 1200px; margin: 0 auto; }
+@container (max-width: 760px) { .tool-settings-page .library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 480px) { .tool-settings-page .library-grid { grid-template-columns: minmax(0, 1fr); } }
 
-.library-page .launchpad-inner {
-  max-width: 1200px;
-  /* 84px top: tab pill bottom edge at 60 (top:24 + h:~36) + 24px
-     breathing room — matches the 24px above the pill for visual
-     symmetry. Back button (top:16 + h:48 → bottom:64) also clears
-     within this band. Bottom 32px standard; Gambit owns the bottom. */
-  padding-top: 84px;
-  padding-bottom: 32px;
-}
+.library-divider { width:100%; margin:20px 0; border:0; border-top:1px solid var(--border); }
 
 .library-grid {
   display: grid;
@@ -811,12 +743,7 @@
   align-content: start;
 }
 
-/* Agent Tools sub-grid (3-col, same as the AI CLIs grid). */
-.library-grid.library-grid--tools {
-  margin-top: 8px;
-}
-
-/* Section heading between the AI CLIs grid and the Agent Tools grid. */
+/* Tool library section heading. */
 .library-section-title {
   margin-top: 28px;
   margin-bottom: 10px;
@@ -850,7 +777,7 @@
   justify-content: center;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
-  font-size: 22px;
+  font-size: 28px;
   color: var(--text-1);
 }
 
@@ -986,11 +913,6 @@
   justify-content: center;
   transition: background 0.15s, color 0.15s;
 }
-.tool-config-close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-}
-
 .tool-config-body {
   padding: 20px;
   display: flex;
@@ -1037,6 +959,13 @@
   opacity: 0.5;
 }
 
+.tool-config-command { position:relative; }
+.tool-config-command.has-presets .tool-config-input { padding-right:40px; }
+.tool-command-presets.settings-font-trigger { position:absolute; top:1px; right:1px; bottom:1px; width:32px; padding:8px; border:0; border-radius:0 var(--radius-sm) var(--radius-sm) 0; background:transparent; justify-content:center; }
+.tool-command-presets.settings-font-trigger:hover:not(:disabled) { background:var(--bg-hover); }
+.tool-command-presets .settings-font-current { display:none; }
+.tool-command-presets:disabled { opacity:.5; cursor:not-allowed; }
+
 .tool-config-buttons {
   display: flex;
   gap: 8px;
@@ -1068,13 +997,16 @@
 }
 
 .tool-config-btn-primary {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 70%, var(--text-1));
   color: var(--bg-app);
   border-color: transparent;
   font-weight: 600;
 }
 .tool-config-btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent-hover) 45%, var(--text-1));
+}
+.tool-config-btn-primary:active:not(:disabled) {
+  background: var(--accent-active, var(--accent));
 }
 
 /* ─── Terminal Card Subtle Remote Hint ─── */
@@ -1175,8 +1107,6 @@
 
 .remote-pill-close:hover {
   opacity: 1;
-  background: rgba(255, 85, 85, 0.2);
-  color: #ff5555;
 }
 
 
@@ -1222,11 +1152,6 @@
   justify-content: center;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-}
-
-.remote-form-close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
 }
 
 .remote-form-body {

@@ -2,9 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useT } from '../../i18n/useT';
 import { useAppState } from '../../store/app-state';
 import { isTauri, commands } from '../../tauri';
-import { getTabActions } from '../../lib/tab-actions';
+import { sendSessionPrompt } from '../../lib/send-session-prompt';
+import { isClaudeConversation, isCodexConversation, isDshConversation } from '../../lib/chat-tools';
+import { useClaudeSession } from '../../lib/claude-session';
+import { useCodexSession } from '../../lib/codex-session';
+import { useDshSession } from '../../lib/dsh-session';
 import './TaskBoard.css';
-import { ChangesBoard } from './ChangesBoard';
 import { TaskNoteView } from './TaskNoteView';
 import { TaskPromptView } from './TaskPromptView';
 import { TaskEmptyState } from './TaskEmptyState';
@@ -70,7 +73,7 @@ const SECTION_LABEL_KEYS: Record<TaskStatus, 'task.section.working' | 'task.sect
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function TaskBoard() {
+export function TaskBoard({ onCountChange }: { onCountChange: (count: number) => void }) {
   const t = useT();
   const { state, dispatch } = useAppState();
   // Right-click cut/copy/paste/select menu, shared by the to-do list's title
@@ -78,38 +81,19 @@ export function TaskBoard() {
   const { menu: ctxMenuEl, openMenu: openCtxMenu } = useTextContextMenu();
   const viewMode = state.taskViewMode;
   const [tasks, setTasks] = useState<TaskItem[]>([]);
+  useEffect(() => { onCountChange(tasks.length); }, [tasks.length, onCountChange]);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-
-  // Persist last-selected tab so a returning user resumes where they left off.
-  // First-time users land on Tasks. Legacy 'sessions' value (history moved to
-  // the left Explorer panel) collapses to Tasks default.
-  const [activeTab, setActiveTab] = useState<'tasks' | 'changes'>(() => {
-    try {
-      const saved = localStorage.getItem('cc-right-tab');
-      if (saved === 'tasks' || saved === 'changes') return saved;
-    } catch { /* Best-effort operation; failure is non-fatal. */ }
-    return 'tasks';
-  });
-  useEffect(() => {
-    try { localStorage.setItem('cc-right-tab', activeTab); } catch { /* Best-effort operation; failure is non-fatal. */ }
-  }, [activeTab]);
-
-  // Selection lives at the AppState tier now (diffSelection), so a detour to
-  // the center diff tab — which unmounts ChangesBoard — doesn't drop it.
-  // ChangesBoard still takes a selKey string for row highlighting; we derive it
-  // from diffSelection so the two stay in sync. Committed rows use a 3-segment
-  // form (`committed\x00<hash>\x00<path>`) so two session commits touching the
-  // SAME file keep distinct keys (else collapse leaves stale/duplicate rows).
-  // Must mirror ChangesBoard's committed-file key encoder exactly.
-  const diffSelection = state.diffSelection;
-  const diffMode = state.diffMode;
-  const selectedChangePath = diffSelection
-    ? diffSelection.kind === 'committed'
-      ? `committed\x00${diffSelection.commitHash ?? ''}\x00${diffSelection.path}`
-      : `${diffSelection.kind}\x00${diffSelection.path}`
-    : null;
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [sendErrorTarget, setSendErrorTarget] = useState<string | null>(null);
+  const activeSession = state.terminals.find(tab => tab.id === state.activeTerminalId);
+  const isClaude = isClaudeConversation(activeSession), isCodex = isCodexConversation(activeSession), isDsh = isDshConversation(activeSession);
+  const claudeReady = useClaudeSession(isClaude ? state.activeTerminalId ?? '' : '', session => session.ready && !session.requests.length);
+  const codexReady = useCodexSession(isCodex ? state.activeTerminalId ?? '' : '', session => session.ready && !session.busy && !session.requests.length);
+  const dshReady = useDshSession(isDsh ? state.activeTerminalId ?? '' : '', session => session.ready && !session.busy && !session.requests.length);
+  const canSend = !!activeSession?.tool && !sending && (isClaude ? claudeReady : isCodex ? codexReady : isDsh ? dshReady : true);
 
   // Inline title editing
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -270,37 +254,31 @@ export function TaskBoard() {
     });
   }, []);
 
-  // Send a task to the active tab's agent. Composes `title + description`
-  // (description appended on its own line block only when non-empty), pastes
-  // it into the active xterm via tab-actions, and auto-promotes the task to
-  // "working" so the board reflects "I just started this". If there is no
-  // active tab, silently no-op — the user's click was harmless.
+  // Share the composer's existing send route and promote only acknowledged tasks.
+  const sendTask = useCallback(async (task: TaskItem, body: string, promote: boolean) => {
+    if (!canSend || !activeSession || !body.trim() || sendingRef.current) return;
+    sendingRef.current = true; setSending(true); setSendErrorTarget(null);
+    try {
+      if (!await sendSessionPrompt(activeSession, body)) { setSendErrorTarget(activeSession.id); return; }
+      if (promote && task.status !== 'working') setTasks(prev => prev.map(item => item.id === task.id && item.status === task.status && item.title === task.title && item.description === task.description ? { ...item, status: 'working' } : item));
+    } finally { sendingRef.current = false; setSending(false); }
+  }, [activeSession, canSend]);
+
   const sendToAgent = useCallback((task: TaskItem) => {
-    const activeId = state.activeTerminalId;
-    if (!activeId) return;
-    const actions = getTabActions(activeId);
-    if (!actions) return;
     const body = task.description && task.description.trim()
       ? `${task.title}\n\n${task.description.trim()}`
       : task.title;
-    actions.paste(body);
-    if (task.status !== 'working') {
-      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'working' } : t));
-    }
-  }, [state.activeTerminalId]);
+    void sendTask(task, body, true);
+  }, [sendTask]);
 
-  // Prompt-view send: paste ONLY the description (the prompt body) into the
-  // active terminal. The title is just the category name there - sending it
+  // Prompt-view send: send ONLY the description (the prompt body). The
+  // title is just the category name there - sending it
   // would be noise. No status promotion: prompt mode has no priority concept.
   const sendPromptToAgent = useCallback((task: TaskItem) => {
-    const activeId = state.activeTerminalId;
-    if (!activeId) return;
-    const actions = getTabActions(activeId);
-    if (!actions) return;
     const body = task.description && task.description.trim();
     if (!body) return;
-    actions.paste(body);
-  }, [state.activeTerminalId]);
+    void sendTask(task, body, false);
+  }, [sendTask]);
 
   const handleToggle = useCallback((id: string) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status: NEXT_STATUS[t.status] } : t));
@@ -629,25 +607,14 @@ export function TaskBoard() {
   );
 
   return (
-    <div className={`task-board${__IS_LINUX__ ? ' task-board--static' : ''}`}>
-      {/* ── Tabs Header ── */}
-      <div className="right-tabs" style={{ position: 'relative' }}>
-        <button className={`right-tab ${activeTab === 'tasks' ? 'active' : ''}`} onClick={() => setActiveTab('tasks')}>
-          {t('task.tab.tasks') || 'Tasks'}
-        </button>
-        <button className={`right-tab ${activeTab === 'changes' ? 'active' : ''}`} onClick={() => setActiveTab('changes')}>
-          {t('task.tab.changes') || 'Changes'}
-        </button>
-      </div>
-
-      {activeTab === 'tasks' && (
-        <>
+    <div className={`task-board${__IS_LINUX__ ? ' task-board--static' : ''}`} aria-busy={sending}>
+          {sendErrorTarget && sendErrorTarget === state.activeTerminalId && <p className="task-send-error" role="alert">{t('task.send_failed')}</p>}
           {viewMode === 'note' ? (
             <TaskNoteView
               tasks={tasks}
               addingId={addingId}
               removingId={removingId}
-              canSend={!!state.activeTerminalId}
+              canSend={canSend}
               onSetStatus={setStatus}
               onUpdateTitle={updateTitle}
               onSetHeight={setHeight}
@@ -662,7 +629,7 @@ export function TaskBoard() {
               tasks={tasks}
               addingId={addingId}
               removingId={removingId}
-              canSend={!!state.activeTerminalId}
+              canSend={canSend}
               onRenameCategory={renameCategory}
               onUpdateDesc={handleDescChange}
               onRemove={handleRemove}
@@ -803,7 +770,7 @@ export function TaskBoard() {
                               <button
                                 className="task-slot task-slot-send"
                                 onClick={e => { e.stopPropagation(); sendToAgent(task); }}
-                                disabled={!state.activeTerminalId}
+                                disabled={!canSend}
                               >
                                 {/* Play triangle — reads as "start running this
                                     task"; polygon spans the full viewBox to
@@ -856,16 +823,6 @@ export function TaskBoard() {
           </div>
         </button>
       </div>
-
-      </>
-    )}
-
-    {activeTab === 'changes' && (
-      <ChangesBoard
-        selectedPath={selectedChangePath}
-        diffMode={diffMode}
-      />
-    )}
 
     {ctxMenuEl}
     </div>

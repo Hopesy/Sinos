@@ -25,6 +25,21 @@
   z-index: 5;
 }
 
+.diff-open-external {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--shape-radius-btn);
+  background: var(--bg-hover);
+  color: var(--text-1);
+  font: inherit;
+  cursor: pointer;
+}
+
+.diff-preview-message {
+  flex-direction: column;
+  gap: 12px;
+}
+
 /* Full-window overlay (from clicking ⤢ on the half-paper). Backdrop
  * captures pointer events behind it so user can only act on diff or
  * dismiss. z-index well above Gambit, below context menus. */
@@ -99,24 +114,10 @@
   box-shadow: none;
 }
 
-/* Glass shape opt-out — global.css:1218-1224 nukes background +
- * border-color on every .panel-right descendant div via a giant
- * :not() exception list. Diff content NEEDS opacity to stay readable
- * (syntax-highlighted code through 24px backdrop blur is unreadable),
- * so reassert the panel's solid surface here. !important required
- * because the global rule uses !important. Same intent as the other
- * exception entries (gambit, tool-config-modal, etc.) — content
- * viewers need their own surface, only chrome carriers go transparent.
- *
- * Specificity note: the global rule selector
- *   `[data-shape="glass"] .panel-right :is(div,...):not(.list,...)`
- * has specificity (0,3,1). To win, my override needs at least (0,3,2)
- * or (0,4,0). Adding `.panel-right` as an ancestor brings me to
- * (0,4,0), enough to beat global cleanly. Half-mode .diff-panel lives
- * inside .panel-right so this works; the expanded modal portal'd to
- * body has NO .panel-right ancestor, so the global rule doesn't match
- * it either — the simple `.diff-panel--expanded` override suffices. */
-[data-shape="glass"] .panel-right .diff-panel {
+/* Transparent shapes clear descendant surfaces with specificity (0,3,1).
+ * The changes container gives this overlay (0,4,0), so its opaque theme
+ * background covers the file list and wallpaper behind the code. */
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-right .changes-fullview .changes-detail-pane > .diff-panel {
   background: var(--bg-panel) !important;
   border-color: var(--border) !important;
 }
@@ -144,13 +145,17 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 6px 6px 14px;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-2, #888);
   flex-shrink: 0;
 }
+.diff-navigation-position { font-size:12px; color:var(--text-3); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.diff-file-location { padding:0 14px 8px; color:var(--text-3); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
 
 .diff-header-name {
-  font-weight: 600;
+  min-width: 0;
+  flex: 1;
+  font-weight: 500;
   color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
@@ -284,6 +289,124 @@
 .diff-toolarge-stats .diff-add { color: #4ec76b; }
 .diff-toolarge-stats .diff-del { color: #e07070; }
 
+.diff-markdown-preview {
+  min-height: 100%;
+  padding: 24px clamp(20px, 5vw, 56px) 64px;
+  box-sizing: border-box;
+  background: var(--bg-terminal);
+  color: var(--text-1);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.diff-markdown-preview .md-body {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.diff-markdown-preview .md-body > :first-child {
+  margin-top: 0;
+}
+
+.diff-markdown-preview .md-body > :last-child {
+  margin-bottom: 0;
+}
+
+.diff-markdown-preview :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.35em 0 0.5em;
+  color: var(--text-1);
+  line-height: 1.25;
+  font-weight: 650;
+}
+
+.diff-markdown-preview h1 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.8em;
+}
+
+.diff-markdown-preview h2 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.4em;
+}
+
+.diff-markdown-preview :is(p, ul, ol, blockquote, table, pre) {
+  margin: 0 0 0.9em;
+}
+
+.diff-markdown-preview :is(ul, ol) {
+  padding-left: 1.7em;
+}
+
+.diff-markdown-preview blockquote {
+  padding: 0.1em 1em;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 65%, var(--border));
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+}
+
+.diff-markdown-preview a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.diff-markdown-preview a:hover {
+  text-decoration: underline;
+}
+
+.diff-markdown-preview table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+
+.diff-markdown-preview :is(th, td) {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.diff-markdown-preview th {
+  background: var(--bg-panel);
+  font-weight: 650;
+}
+
+.diff-markdown-preview :not(pre) > code {
+  padding: 0.15em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  font-family: ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.diff-markdown-preview .md-inline-code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  font-family: var(--term-font, monospace);
+}
+
+.diff-markdown-preview .md-code {
+  overflow-x: auto;
+  margin: 12px 0;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-family: var(--term-font, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.diff-markdown-preview .md-code-line {
+  min-height: 1.55em;
+}
+
 /* inline-block + min-width:100% lets the pre grow as wide as its widest line
  * (so horizontal scrollbar works) while still filling the panel for short
  * content (so row backgrounds span full width, not just the text). */
@@ -325,7 +448,7 @@
   justify-content: center;
   padding: 3px 0;
   font-family: var(--font);
-  font-size: 11px;
+  font-size: 12px;
   white-space: normal;
   color: var(--text-3, var(--text-2));
   opacity: 0.8;

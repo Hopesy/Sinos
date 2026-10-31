@@ -1,6 +1,6 @@
 //! Per-tool integration registry — single source of truth for the
 //! per-CLI facts Coffee CLI needs (binary name, history
-//! shape, legacy-hook cleanup, launch argv). Iterate `TOOLS` instead of
+//! shape, launch argv). Iterate `TOOLS` instead of
 //! hardcoding lists in callers.
 //!
 //! Adding a new tool: create `src/tools/<id>.rs` with a `ToolDescriptor`
@@ -61,8 +61,8 @@ pub enum HistoryShape {
         depth: u8,
     },
 
-    /// OpenCode: SQLite DB (`storage/db.sqlite`) plus legacy
-    /// JSONL files. Walked by `find_opencode_sessions`, cannot be
+    /// OpenCode: SQLite DB (`opencode.db`, V1/V2) plus legacy
+    /// JSON files. Walked by `find_opencode_sessions`, cannot be
     /// processed by the generic mtime-then-parse pipeline.
     OpenCodeMixed { root_under_home: &'static str },
 
@@ -181,8 +181,8 @@ pub struct ToolDescriptor {
     pub binary_name: &'static str,
 
     /// `true` when an older Coffee release may have written hook/plugin
-    /// artifacts for this tool. Startup uses this only to dispatch cleanup;
-    /// current releases never install status hooks.
+    /// artifacts for this tool. Retained as historical integration metadata;
+    /// current maintenance only applies non-hook presentation settings.
     pub has_legacy_hook_artifacts: bool,
 
     /// Shape of this tool's on-disk session history. `None` =
@@ -208,7 +208,11 @@ mod codebuddy;
 mod grok;
 pub mod hermes;
 mod kilo;
+mod dsh;
+mod kiro;
+mod minimax;
 mod mimocode;
+mod muse;
 mod openclaw;
 mod opencode;
 mod qwen;
@@ -246,6 +250,7 @@ pub static TOOLS: &[&ToolDescriptor] = &[
     // history/heatmap second pass in server.rs, resume preset in terminal.rs,
     // launchpad tile in CenterPanel's catalog.
     &kilo::DESCRIPTOR,
+    &dsh::DESCRIPTOR,
     // Pi is T2 (history + heatmap + changes + resume; see its module doc).
     // Kimi Code keeps the same history/resume features as Pi. The others —
     // Crush / Aider / Goose / Copilot / Cursor / Cline / Oh-My-Pi — are T3
@@ -265,6 +270,9 @@ pub static TOOLS: &[&ToolDescriptor] = &[
     // transcript parser in server.rs, resume preset in terminal.rs,
     // launchpad tile in CenterPanel's catalog.
     &codebuddy::DESCRIPTOR,
+    &muse::DESCRIPTOR,
+    &kiro::DESCRIPTOR,
+    &minimax::DESCRIPTOR,
 ];
 
 /// Lookup by id. `None` if the id isn't registered. Used by legacy cleanup

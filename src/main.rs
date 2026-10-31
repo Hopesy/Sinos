@@ -5,13 +5,42 @@ mod codex_stream;
 mod claude_stream;
 mod server;
 mod clipboard_images;
+mod claude_session;
+mod codex_session;
+mod dsh_session;
+mod session_directory;
+mod opencode_island;
+mod agent;
+mod agent_modes;
+mod agent_projects;
+mod agent_experts;
+mod agent_capabilities;
+mod agent_graphify;
+mod agent_approvals;
+mod agent_sentinel;
+mod agent_memory;
+mod agent_context;
+mod agent_memory_capture;
+mod agent_output;
+mod agent_workspace;
+mod channels;
 mod hook_installer;
 mod fonts;
 mod fs_watcher;
 mod launch;
 mod tool_config;
+mod cli_updates;
+mod tool_memory;
+mod tool_skills;
+mod tool_control;
+mod computer_control;
+mod orchestration;
 mod tools;
+mod usage_stats;
+mod usage_quota;
 mod git;
+mod git_project_status;
+mod session_git_context;
 mod shell_probe;
 mod remote_server;
 mod remote_input;
@@ -29,6 +58,57 @@ mod windows_path;
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    // These helpers run inside a visible Coffee Terminal, before single-instance GUI routing.
+    let helper_args: Vec<String> = std::env::args().collect();
+    if matches!(helper_args.get(1).map(String::as_str), Some("__team_mcp" | "__team_worker")) {
+        #[cfg(windows)]
+        if helper_args[1] == "__team_worker" {
+            use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+            let _ = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+        }
+        let result = (|| {
+            let port = helper_args.get(2).and_then(|value| value.parse::<u16>().ok()).ok_or("Invalid local coordinator port")?;
+            let token = helper_args.get(3).ok_or("Coordinator token missing")?;
+            if helper_args[1] == "__team_mcp" { orchestration::mcp(port, token) }
+            else { orchestration::worker_cli(port, token, &helper_args[4..]) }
+        })();
+        if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+        return Ok(());
+    }
+    if helper_args.get(1).map(String::as_str) == Some("__ui-control") {
+        let result = match (helper_args.get(2), helper_args.get(3)) {
+            (Some(kind), Some(tool)) => tool_control::serve(kind, tool),
+            _ => Err("Expected capability and agent".into()),
+        };
+        if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+        return Ok(());
+    }
+    if matches!(helper_args.get(1).map(String::as_str), Some("__capability-apply" | "__graphify-run")) {
+        #[cfg(windows)]
+        {
+            use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+            let _ = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+            windows_path::hydrate();
+        }
+        let result = match (helper_args.get(2), helper_args.get(3)) {
+            (Some(root), Some(plan_id)) => {
+                let root = std::path::Path::new(root);
+                if helper_args[1] == "__capability-apply" {
+                    tauri::async_runtime::block_on(agent_capabilities::apply_plan(root, plan_id))
+                } else { agent_graphify::apply_build(root, plan_id) }
+            }
+            _ => Err("Expected helper data directory and plan ID".into()),
+        };
+        match result {
+            Ok(value) => {
+                println!("Coffee action result: {value}");
+                let failed = value["exitCode"].as_i64().is_some_and(|code| code != 0)
+                    || !matches!(value["state"].as_str(), Some("ready" | "verified" | "installed"));
+                std::process::exit(if failed { 1 } else { 0 });
+            }
+            Err(error) => { eprintln!("Coffee action failed: {error}"); std::process::exit(1); }
+        }
+    }
     // ── Legacy hook compatibility (fast path) ────────────────────────────
     // Current builds install no hooks. Keep the historical subcommands as
     // silent exit-0 handlers so a stale config that startup could not rewrite

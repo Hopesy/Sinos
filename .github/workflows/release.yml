@@ -11,14 +11,7 @@ permissions:
 
 jobs:
   # ── Quality gate ─────────────────────────────────────────────────────
-  # Runs typecheck + unit tests on Ubuntu before any platform build starts,
-  # so a broken tag never reaches the release matrix. One cheap job
-  # instead of a separate `ci.yml` that fires on every push to main (that's
-  # the EchoBird pattern — a separate push-triggered CI is what makes every
-  # release look like "a big pile of CI"). Here the gate runs ONLY on tag
-  # push / workflow_dispatch, gated behind `needs:`, so a normal
-  # commit-to-main push never starts this release matrix. Review and Android
-  # workflows provide independent checks without publishing a release.
+  # Build and regression checks must pass before any platform is packaged.
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -41,20 +34,23 @@ jobs:
       # also builds the frontend, but repeating it here is ~1s and keeps
       # the gate self-contained + identical to local `npm run build`, so a
       # type error the matrix would hit is caught before any platform
-      # runner spins up. NOTE: `npm run lint` is intentionally NOT gated
-      # here — the repo has long-standing lint errors (empty catch blocks,
-      # react-refresh exports) that predate this workflow and would block
-      # every release until cleaned up. Add lint back once those are fixed.
+      # runner spins up. Lint, regression tests and production dependency
+      # auditing also gate packaging.
       - name: Frontend build (typecheck)
         run: |
           cd src-ui
           npm run build
+          npm run lint
+          npm test
+          npm audit --audit-level=high --omit=dev
 
-      - name: Frontend regression tests
-        run: npm test --prefix src-ui
+      - name: Install test browser
+        working-directory: src-ui
+        run: npx playwright install --with-deps --only-shell chromium
 
-      - name: Upstream integration regressions
-        run: npm run test:regressions --prefix src-ui
+      - name: Browser interaction regression tests
+        working-directory: src-ui
+        run: npm run test:browser
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -76,12 +72,24 @@ jobs:
         with:
           key: quality
 
+      - name: Rust static analysis
+        run: cargo clippy --locked --all-targets --all-features -- -D clippy::correctness -D clippy::suspicious
+
       # Unit tests — includes the shell_probe detection / fallback-chain
       # suite. On Linux this also exercises the Unix cfg branches that
       # Windows-hosted dev never runs locally (#[cfg(not(target_os =
       # "windows"))] tests are filtered out on Windows).
       - name: Cargo test
-        run: cargo test --no-fail-fast
+        run: cargo test --locked --no-fail-fast
+
+      - name: Build native test host
+        run: cargo build --locked
+
+      - name: Native orchestration protocol regression
+        working-directory: src-ui
+        env:
+          COFFEE_TEST_EXE: ${{ github.workspace }}/target/debug/sinos-cli
+        run: npm run test:native
 
   release:
     needs: quality
@@ -171,8 +179,16 @@ jobs:
         with:
           key: ${{ matrix.label }}
 
+      - name: Validate bundled terminal runtime (Windows)
+        if: runner.os == 'Windows'
+        run: node src-ui/scripts/run-conpty-bundle-test.mjs
+
+      - name: Native regression tests
+        run: cargo test --locked --no-fail-fast ${{ matrix.args }}
+
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0" --locked
+        # Keep utils.nsh and our custom NSIS template on the same interface.
+        run: cargo install tauri-cli --version "2.12.2" --locked
 
       # ── macOS: build .app, re-sign without hardened runtime, then bundle DMG ──
       # tauri-bundler's default codesign for adhoc identities adds
@@ -215,6 +231,17 @@ jobs:
       - name: Build all bundles (Windows / Linux)
         if: runner.os != 'macOS'
         run: cargo tauri build ${{ matrix.args }}
+
+      - name: Verify packaged orchestration protocol
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target || '' }}
+        run: |
+          EXE="$GITHUB_WORKSPACE/target/${BUILD_TARGET:+$BUILD_TARGET/}release/sinos-cli"
+          if [ "$RUNNER_OS" = "Windows" ]; then EXE="$EXE.exe"; fi
+          export COFFEE_TEST_EXE="$EXE"
+          cd src-ui
+          npm run test:native
 
       # ── Stage + rename artifacts to platform-labelled format ──
       # Tauri's bundler emits names like `Sinos CLI_1.9.2_amd64.deb` which

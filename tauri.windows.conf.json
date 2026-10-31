@@ -19,5 +19,13 @@
         "visible": false
       }
     ]
+  },
+  "bundle": {
+    "resources": {
+      "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "resources/windows/conpty/conpty.dll": "conpty.dll",
+      "resources/windows/conpty/OpenConsole.exe": "OpenConsole.exe",
+      "resources/windows/conpty/LICENSE.txt": "CONPTY-LICENSE.txt"
+    }
   }
 }

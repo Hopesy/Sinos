@@ -1,5 +1,76 @@
 # Upstream integration record
 
+## Current integration — 2026-10-31
+
+Merged Coffee-CLI `main` through
+`3176d7473cceee22d05b34779a37033ad8fa2cb8` (202 commits since the previous
+integration point `c356dc2849b42827094c286bfea99fe44a9a254f`). The upstream
+remote is `https://github.com/edison7009/Coffee-CLI.git`.
+The Sinos merge parent is `233720d5` (`fix(companion): remove legacy Tailscale
+direct transport`). This integration records upstream ancestry in a merge
+commit so subsequent updates can use Git's normal merge base.
+
+### Imported behavior
+
+- Native Claude, Codex and DeepSeek Harness conversations, permission/question
+  controls, streaming messages, model/effort controls and conversation navigation.
+- Built-in Agent, messaging settings, orchestration, native MCP runtime and
+  dynamically nested session splits.
+- Usage dashboards, richer history, project Git/PR/CI status, review tabs, tool
+  settings, skills/memory management and updated tool support.
+- Windows ConPTY runtime resources, terminal input/status reconciliation,
+  background IPC scheduling, startup rendering and directory validation fixes.
+- Unified unit, browser and native protocol runners; release quality gates and
+  bundled runtime license/manifest checks.
+
+### Sinos compatibility decisions
+
+- Keep the Sinos package/product identity, version `4.0.2`, Windows startup
+  window configuration, AppImage artifacts and existing distribution endpoints.
+  Release notes resolve published releases from `Hopesy/Sinos`, matching the
+  installed version. The static version file and its writer workflow stay removed.
+- Retain Cloudflare relay, encrypted mobile RPC, Android packaging, shared PTY
+  session IDs, output sequence/buffer, pause/resume, image input and queued-input
+  validation. Tailscale, the legacy port 8787 listener and direct transport remain
+  removed by `233720d5`.
+- Claude/Codex default to Terminal in Sinos; Desktop remains an explicit persisted
+  choice. Phone launches explicitly use Terminal and the phone-reserved session
+  ID. Native desktop conversations use upstream's native stores; mobile sharing
+  continues through the existing PTY session path.
+- Keep hidden conversation processing while a phone watches another tab, desktop
+  editor/image tabs and their focus rules, terminal/conversation switching,
+  current-screen interaction validation and terminal cursor fixes.
+- Retain Antigravity and the existing transcript tool set, workspace filesystem
+  boundary checks, root/overwrite protection and per-project Git tracking controls.
+- Adopt upstream's hook maintenance policy: startup maintains presentation/npm
+  configuration and preserves existing hook entries. Automatic legacy Orca hook
+  cleanup from the September integration is superseded by this upstream policy.
+- Preserve the website demo assets referenced by the retained Sinos landing page.
+  Installer copies in `install/` and `Web-Home/` remain synchronized.
+- Resolve compatible dependency audit fixes, including Monaco's DOMPurify
+  override. The production dependency audit reports zero vulnerabilities.
+
+### Local validation
+
+- Windows: `cargo check --locked`, `cargo build --locked`, Clippy correctness/
+  suspicious lints, and Rust tests: **467 passed, 16 ignored**.
+- Frontend Vitest: **348 tests in 58 files passed**; unified script regressions:
+  **50/50 passed**, including Sinos mobile launch/hidden-tab coverage.
+- Browser interactions: **22/22 scripts passed** across the full run and focused
+  reruns after fixing review layout and adapting Explorer preview/editor checks.
+- Compiled native orchestration protocol: **1/1 passed**, using local mock services.
+- Desktop and phone production builds, Android frontend build/Capacitor sync,
+  ESLint and production dependency audit passed.
+- Browser fixtures exercise actual components with isolated filesystem/protocol
+  services. Physical Android, live Cloudflare/mobile connectivity, real vendor
+  accounts and non-Windows native builds await their respective environments.
+  Packaging and public release are separate from this source integration.
+
+## Historical integration — 2026-09-25
+
+The record below describes the earlier selective integration. Current decisions
+above take precedence, particularly upstream ancestry and hook maintenance.
+
 Reviewed on 2026-09-25 against Coffee-CLI `c356dc2849b42827094c286bfea99fe44a9a254f`.
 Comparison base: `31af493147f8eedbda6ed188d53efffd04d004ad`.
 Sinos starting revision: `81c7d9496d42de4f78f3e1e1bc8b5823207e7084`.

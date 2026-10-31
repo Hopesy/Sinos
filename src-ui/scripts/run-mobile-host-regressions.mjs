@@ -56,7 +56,7 @@ const chatActive = propExpression('ConversationView', 'isActive');
 const projectionActive = propExpression('TierTerminal', 'conversationActive');
 const context = {
   t: { id: 'phone-session', viewMode: 'terminal' }, activeTerminalId: 'other',
-  diffTabActive: false, editorTabActive: true, mobileWatching: new Set(['phone-session']),
+  diffTabActive: false, editorTabActive: true, contentActive: false, splitVisible: false, splitIds: [], mobileWatching: new Set(['phone-session']),
 };
 assert.equal(evaluate(chatActive, context), true);
 assert.equal(evaluate(projectionActive, context), true);
@@ -65,7 +65,7 @@ assert.equal(evaluate(chatActive, context), false);
 assert.equal(evaluate(projectionActive, context), false);
 context.activeTerminalId = 'phone-session'; context.t.viewMode = 'chat';
 assert.equal(evaluate(chatActive, context), false, 'an editor tab owns desktop focus');
-context.editorTabActive = false;
+context.editorTabActive = false; context.contentActive = true;
 assert.equal(evaluate(chatActive, context), true);
 context.t.viewMode = 'terminal';
 assert.equal(evaluate(chatActive, context), false);
@@ -82,7 +82,7 @@ function visit(node) {
 visit(center); assert.ok(effect);
 let listener, removed = 0; const launches = [];
 const cleanup = evaluate(`(${effect.getText(center).replace("import('@tauri-apps/api/event')", 'Promise.resolve(eventModule)')})()`, {
-  isTauri: true, commands: { takePendingLaunch: async () => null },
+  coldLaunchRef: { current: null }, isTauri: true, commands: { takePendingLaunch: async () => null },
   eventModule: { listen: async (_name, callback) => { listener = callback; return () => removed++; } },
   applyLaunchRequest: (...args) => launches.push(args),
 });
@@ -94,3 +94,25 @@ listener({ payload: { tool: 'claude', sessionId: 'after-close' } });
 assert.equal(launches.length, 1);
 assert.equal(removed, 1);
 console.log('OK: hidden phone subscriptions, retained chat owner, editor focus and mobile launch identity');
+
+let launchCallback;
+function findLaunch(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(center) === 'applyLaunchRequest') launchCallback = node.initializer;
+  ts.forEachChild(node, findLaunch);
+}
+findLaunch(center); assert.ok(launchCallback);
+const actions = [];
+const launch = evaluate(`const launch = ${launchCallback.getText(center)}; launch`, {
+  BUILTIN_AI_CLI_FALLBACK: [{ key: 'claude' }, { key: 'codex' }],
+  launchCtxRef: { current: { terminals: [{ id: 'busy', tool: 'claude' }], activeTerminalId: 'busy' } },
+  dispatch: action => actions.push(action), pushRecentFolder() {},
+});
+for (const tool of ['claude', 'codex']) {
+  actions.length = 0;
+  launch(tool, '/workspace', `phone-${tool}`);
+  assert.equal(actions.find(action => action.type === 'ADD_TERMINAL').session.id, `phone-${tool}`);
+  const start = actions.find(action => action.type === 'SET_TERMINAL_TOOL');
+  assert.equal(start.id, `phone-${tool}`);
+  assert.equal(start[`${tool}Mode`], 'terminal', 'phone-launched sessions retain the relay PTY transport');
+}
+console.log('OK: phone Claude/Codex launches preserve the reserved ID and shared PTY transport');

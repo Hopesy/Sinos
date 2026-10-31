@@ -11,6 +11,8 @@
 //! process PATH. Append-only + existence-gated: it can only make more tools
 //! resolvable, never removes or shadows anything — a harmless no-op when the
 //! inherited PATH was already complete.
+//! Child terminals and tool probes additionally prefer the current registry
+//! PATH, so an IDE's private binaries cannot shadow registered installations.
 
 #![cfg(target_os = "windows")]
 
@@ -59,6 +61,20 @@ fn real_path_dirs() -> Vec<String> {
         w!("Path"),
     )));
     dirs
+}
+
+/// Child terminals use the current system/user PATH before inherited extras.
+/// IDE-private binaries must not shadow the user's registered CLI installs.
+pub(crate) fn terminal_path() -> String {
+    prefer_registered_path(&std::env::var("PATH").unwrap_or_default(), &real_path_dirs())
+}
+
+fn prefer_registered_path(current: &str, registered: &[String]) -> String {
+    if registered.is_empty() {
+        return current.to_string();
+    }
+    let inherited = current.split(';').map(str::to_string).collect::<Vec<_>>();
+    merge_into_path(&registered.join(";"), &inherited)
 }
 
 /// Split a PATH string into existing dir strings (non-existent entries are
@@ -112,6 +128,13 @@ fn normalize(entry: &str) -> String {
     entry.trim().trim_end_matches('\\').to_ascii_lowercase()
 }
 
+/// One registry string from HKCU (or HKLM when `machine`), for lookups beyond PATH repair.
+pub(crate) fn registry_string(machine: bool, subkey: &str, value: &str) -> Option<String> {
+    let subkey: Vec<u16> = subkey.encode_utf16().chain([0]).collect();
+    let value: Vec<u16> = value.encode_utf16().chain([0]).collect();
+    read_path_value(if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER }, PCWSTR(subkey.as_ptr()), PCWSTR(value.as_ptr()))
+}
+
 /// Read a registry string value (`REG_SZ` or `REG_EXPAND_SZ`, auto-expanded).
 fn read_path_value(root: HKEY, subkey: PCWSTR, value: PCWSTR) -> Option<String> {
     unsafe {
@@ -152,6 +175,44 @@ fn read_path_value(root: HKEY, subkey: PCWSTR, value: PCWSTR) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_path_prefers_registered_installs_and_retains_inherited_extras() {
+        let registered = vec!["C:\\Windows".into(), "D:\\CLI Tools".into()];
+        assert_eq!(
+            prefer_registered_path("D:\\IDE\\bin;d:\\cli tools\\;C:\\Windows;D:\\custom", &registered),
+            "C:\\Windows;D:\\CLI Tools;D:\\IDE\\bin;D:\\custom"
+        );
+        assert_eq!(prefer_registered_path("D:\\custom", &[]), "D:\\custom");
+        assert_eq!(prefer_registered_path("", &registered), "C:\\Windows;D:\\CLI Tools");
+    }
+
+    #[test]
+    fn terminal_commands_use_registered_tools_and_keep_inherited_only_tools() {
+        use std::os::windows::process::CommandExt;
+        let root = std::env::temp_dir().join(format!("coffee-terminal-path-{}", uuid::Uuid::new_v4()));
+        let registered = root.join("registered tools");
+        let inherited = root.join("IDE tools");
+        std::fs::create_dir_all(&registered).unwrap();
+        std::fs::create_dir_all(&inherited).unwrap();
+        for name in ["coffee-path-alpha", "coffee-path-beta"] {
+            std::fs::write(registered.join(format!("{name}.cmd")), "@echo registered %*\r\n").unwrap();
+            std::fs::write(inherited.join(format!("{name}.cmd")), "@echo internal %*\r\n").unwrap();
+        }
+        std::fs::write(inherited.join("coffee-path-custom.cmd"), "@echo custom %*\r\n").unwrap();
+        let path = prefer_registered_path(&inherited.to_string_lossy(), &[registered.to_string_lossy().into_owned()]);
+        let cmd = std::env::var("COMSPEC").unwrap();
+        for (name, expected) in [("coffee-path-alpha", "registered"), ("coffee-path-beta", "registered"), ("coffee-path-custom", "custom")] {
+            let output = std::process::Command::new(&cmd)
+                .args(["/d", "/c", name, "resume", "session-id"])
+                .env("PATH", &path).current_dir(&root).creation_flags(0x08000000)
+                .output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("{expected} resume session-id"));
+        }
+        assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn empty_current_joins_all_candidates() {

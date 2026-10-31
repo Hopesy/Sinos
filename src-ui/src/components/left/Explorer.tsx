@@ -1,4 +1,5 @@
 import { useDirectory } from '../../lib/use-directory';
+import { ChannelConnectionSummary } from '../agent/AgentPages';
 // Explorer.tsx — Left panel: file tree synced from terminal CWD
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -10,6 +11,7 @@ import { isMaskTintTheme } from '../../lib/personalization';
 import { ScrollPanel } from '../common/ScrollPanel';
 import { clipboardWrite } from '../../lib/clipboard';
 import { beginExplorerDrag } from '../../lib/explorer-drag';
+import { getFileIconSrc } from '../../lib/file-icons';
 import { useFileStats, useDirtyDirs } from '../../lib/git-status';
 import { refreshHistory } from '../../lib/history-cache';
 import { commands, onSelfUpdateProgress } from '../../tauri';
@@ -329,14 +331,10 @@ function getIconPath(theme: IconTheme, name: string): string {
   return `/icons/themes/${theme}/${name}`;
 }
 
-function getFileIconSrc(ext: string, theme: IconTheme): string {
-  return `/icons/themes/${theme}/${getFileIcon(ext)}`;
-}
-
 /** Renders a theme icon. For mask-tint themes, uses a <span> with mask-image
  *  so `background-color: var(--accent)` paints the silhouette. For color
  *  themes, falls back to a plain <img>. */
-function ThemedIcon({ src, alt, onFallback }: {
+export function ThemedIcon({ src, alt, onFallback }: {
   src: string;
   alt: string;
   onFallback?: string;
@@ -362,16 +360,6 @@ function ThemedIcon({ src, alt, onFallback }: {
   );
 }
 
-
-function getFileIcon(ext: string): string {
-  const m: Record<string, string> = {
-    rs: 'rs.svg', js: 'js.svg', jsx: 'jsx.svg', ts: 'ts.svg', tsx: 'tsx.svg',
-    py: 'py.svg', go: 'go.svg', java: 'java.svg', c: 'c.svg', cpp: 'cpp.svg',
-    h: 'cpp.svg', html: 'html.svg', css: 'css.svg', json: 'json.svg',
-    md: 'md.svg', toml: 'toml.svg', sh: 'sh.svg', pyw: 'py.svg',
-  };
-  return m[ext.toLowerCase()] || 'file.svg';
-}
 
 
 // ─── Lazy Directory Browser Node ─────────────────────────────────────────────
@@ -594,6 +582,13 @@ function BrowserFileNode({ entry, parentDirPath, siblings, workspaceRoot, onCtxM
   return (
     <div
       className={`tree-file ${renaming ? 'renaming' : ''}`}
+      onClick={() => {
+        if (renaming) return;
+        dispatch({ type: 'SET_DIFF_SELECTION', selection: {
+          path: entry.path, repoRoot: parentDirPath, folderPath: parentDirPath,
+          rel: entry.name, kind: 'file', fileSize: entry.size,
+        } });
+      }}
       onContextMenu={handleCtxMenu}
       onMouseDown={onFileMouseDown}
       onDoubleClick={handleFileDoubleClick}
@@ -647,6 +642,9 @@ export function Explorer() {
 
   const activeSession = state.terminals.find(t => t.id === state.activeTerminalId);
   const folderPath = activeSession?.folderPath || null;
+  const [workspaceSearch, setWorkspaceSearch] = useState<{ folder: string | null; query: string } | null>(null);
+  const searchingWorkspace = workspaceSearch !== null && workspaceSearch.folder === folderPath;
+  const workspaceQuery = searchingWorkspace ? workspaceSearch.query.trim().toLowerCase() : '';
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
@@ -740,39 +738,17 @@ export function Explorer() {
     }
   }, [installing]);
 
-  // Persist last-selected left tab, same pattern as TaskBoard's right tab.
-  const [activeTab, setActiveTab] = useState<'workspace' | 'history'>(() => {
+  // Keep the last-selected view across panel collapse and application restarts.
+  const [activeTab, setActiveTab] = useState<'history' | 'workspace'>(() => {
     try {
       const saved = localStorage.getItem('cc-left-tab');
       if (saved === 'workspace' || saved === 'history') return saved;
     } catch { /* Best-effort operation; failure is non-fatal. */ }
-    return 'workspace';
+    return 'history';
   });
   useEffect(() => {
     try { localStorage.setItem('cc-left-tab', activeTab); } catch { /* Best-effort operation; failure is non-fatal. */ }
   }, [activeTab]);
-
-  const handleOpenFolder = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({ directory: true });
-      if (selected && typeof selected === 'string') {
-        const activeTerminalId = state.activeTerminalId;
-        const tool = activeSession?.tool;
-
-        if (activeTerminalId && tool) {
-          // 1. Update this tab's folderPath so the restarted terminal knows its CWD
-          dispatch({ type: 'SET_FOLDER', path: selected });
-
-          // 2. Force unmount-remount of the TierTerminal to restart the Agent in the new dir
-          dispatch({ type: 'RESTART_TERMINAL', id: activeTerminalId, newId: crypto.randomUUID() });
-        }
-      }
-    } catch (err) {
-      console.error('[Explorer] Failed to open folder:', err);
-    }
-  };
 
   // OS-level fs watcher — picks up changes from the terminal CLI, editors,
   // git, or any process writing under folderPath. The backend emits the
@@ -877,34 +853,53 @@ export function Explorer() {
       )}
 
       <div className="explorer-tabs">
-        <button
-          className={`explorer-tab ${activeTab === 'workspace' ? 'active' : ''}`}
-          onClick={() => setActiveTab('workspace')}
-        >
-          {t('explorer.tab.workspace')}
+        <button className="explorer-new-session" onClick={() => window.dispatchEvent(new Event('coffee-new-session'))}>
+          {/* Lucide square-pen; license in /icons/LICENSE-lucide.txt. */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" /></svg>
+          <span>{t('explorer.new_session')}</span>
         </button>
+        <span className="explorer-view-switch" data-active={activeTab} role="group" aria-label={`${t('explorer.tab.history')} / ${t('explorer.tab.workspace')}`}>
+        <span className="explorer-view-thumb" aria-hidden="true" />
         <button
           className={`explorer-tab ${activeTab === 'history' ? 'active' : ''}`}
+          aria-label={t('explorer.tab.history')}
+          aria-pressed={activeTab === 'history'}
           onClick={() => { setActiveTab('history'); refreshHistory(); }}
         >
-          {t('explorer.tab.history')}
+          {/* Lucide history, folder and square-check; see /icons/LICENSE-lucide.txt. */}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg>
         </button>
+        <button
+          className={`explorer-tab ${activeTab === 'workspace' ? 'active' : ''}`}
+          aria-label={t('explorer.tab.workspace')}
+          aria-pressed={activeTab === 'workspace'}
+          onClick={() => setActiveTab('workspace')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+        </button>
+        </span>
       </div>
 
+      <button type="button" className="explorer-new-session explorer-usage" aria-pressed={!!state.toolSettingsOpen} onClick={() => dispatch({ type: 'SET_TOOL_SETTINGS_OPEN', open: true })}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><path d="M14 17.5h7M17.5 14v7" /></svg><span>{t('tools.title')}</span>
+      </button>
+      <button type="button" className="explorer-new-session explorer-usage" aria-pressed={!!state.usageOpen} onClick={() => dispatch({ type: 'SET_USAGE_OPEN', open: true })}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3v18h18M8 16v-5M13 16V5M18 16V9" /></svg><span>{t('usage.title')}</span>
+      </button>
       {(activeTab === 'workspace' && activeSession?.tool && !CWD_AGNOSTIC_TOOLS.has(activeSession.tool)) && (
-        <button
-          className="workspace-dir-btn"
-          onClick={handleOpenFolder}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        <span className={`workspace-dir-btn${searchingWorkspace ? ' is-searching' : ''}`} role="search" aria-label={t('explorer.filter_files')}>
+          {searchingWorkspace ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></svg> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
             <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"></path>
-          </svg>
-          <span className="workspace-dir-path">
+          </svg>}
+          {searchingWorkspace ? <input className="workspace-filter-input" role="searchbox" autoFocus aria-label={t('explorer.filter_files')} placeholder={t('explorer.filter_files')} value={workspaceSearch.query} onChange={event => setWorkspaceSearch(event.target.value ? { folder: folderPath, query: event.target.value } : null)} onBlur={() => { if (!workspaceSearch.query) setWorkspaceSearch(null); }} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setWorkspaceSearch(null); } }} /> : <span className="workspace-dir-path">
             {activeSession.folderPath
               ? `⁦${activeSession.folderPath}⁩`
-              : t('explorer.workspace.select-dir')}
-          </span>
-        </button>
+              : '—'}
+          </span>}
+          <button type="button" className={`workspace-filter-toggle${searchingWorkspace ? ' close-button' : ''}`} aria-label={t(searchingWorkspace ? 'history.close_search' : 'explorer.filter_files')} onMouseDown={event => event.preventDefault()} onClick={() => setWorkspaceSearch(searchingWorkspace ? null : { folder: folderPath, query: '' })}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{searchingWorkspace ? <path d="m6 6 12 12M6 18 18 6" /> : <><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></>}</svg>
+          </button>
+        </span>
       )}
 
       {/* File list Content */}
@@ -955,15 +950,18 @@ export function Explorer() {
         ) : (
           <ScrollPanel>
             <div className="file-tree-container">
+              {workspaceQuery && !rootEntries!.some(entry => entry.name.toLowerCase().includes(workspaceQuery)) && <div className="workspace-filter-empty" role="status">{t('explorer.no_matches')}</div>}
               {rootEntries!.slice().sort((a, b) => {
                 if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
                 return a.name.localeCompare(b.name);
               }).map(entry => (
-                entry.is_dir ? (
-                <BrowserDirNode key={entry.path} name={entry.name} dirPath={entry.path} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
-                ) : (
-                  <BrowserFileNode key={entry.path} entry={entry} parentDirPath={folderPath!} siblings={rootEntries ?? []} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
-                )
+                <div key={entry.path} hidden={!!workspaceQuery && !entry.name.toLowerCase().includes(workspaceQuery)}>
+                  {entry.is_dir ? (
+                    <BrowserDirNode name={entry.name} dirPath={entry.path} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
+                  ) : (
+                    <BrowserFileNode entry={entry} parentDirPath={folderPath!} siblings={rootEntries ?? []} workspaceRoot={folderPath!} onCtxMenu={handleCtxMenu} onError={reportError} onOpenImage={handleOpenImage} />
+                  )}
+                </div>
               ))}
             </div>
           </ScrollPanel>
@@ -978,6 +976,7 @@ export function Explorer() {
           <button type="button" aria-label={t('editor.close_error')} onClick={() => setOperationError(null)}>×</button>
         </div>
       )}
+      <ChannelConnectionSummary />
 
       {/* Right-click context menu */}
       {ctxMenu && <ContextMenu menu={ctxMenu} onClose={closeCtxMenu} onError={reportError} />}

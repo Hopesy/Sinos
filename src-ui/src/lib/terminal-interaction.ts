@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { AgentStatus, ToolType } from '../store/app-state';
+import { parseAdditionalAgentScreen } from './terminal-agent-status';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Detection of live agent interactions from xterm's already-rendered cells.
@@ -546,8 +547,8 @@ const MOON_SPINNER_RE = /^[🌑🌒🌓🌔🌕🌖🌗🌘]/u;
  * same rendered cells used by the interaction card. A verified interaction is
  * always authoritative. Working patterns intentionally require TUI chrome
  * (spinner/status line + interrupt hint), never a prose keyword by itself.
- * `null` means the current frame carries no conclusive state; TierTerminal
- * settles to idle only after the rendered screen stops changing.
+ * `null` means the current frame carries no conclusive state. A quiet frame
+ * that still shows working chrome must never be treated as completion.
  */
 export function parseTerminalAgentStatus(
   screen: ScreenLine[],
@@ -581,7 +582,7 @@ export function parseTerminalAgentStatus(
 
     // Claude retains its authoritative native-title working fallback.
     default:
-      return null;
+      return parseAdditionalAgentScreen(recent, tool);
   }
 }
 

@@ -342,12 +342,9 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: 11px;
-  /* Match the card's bottom corners and clip the ::after bar to the rounded
-     shape (like Gambit's dock-resize) so the highlight follows the radius. */
-  border-radius: 0 0 var(--radius-md, 12px) var(--radius-md, 12px);
-  overflow: hidden;
+  bottom: -4px;
+  height: 8px;
+  /* Straddle the bottom border so the grip is centered on the card's edge. */
   /* !important: global.css sets `* { cursor: default !important }`. The
      ::after has pointer-events:none so the parent stays the hit target and
      this cursor shows across the whole handle (same pattern as Gambit). */

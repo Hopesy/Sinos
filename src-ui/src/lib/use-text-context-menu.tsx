@@ -120,15 +120,17 @@ export function useTextContextMenu() {
     setCtxMenu(null);
   };
 
+  const dialog = ctxMenu?.el.closest('dialog');
+  const dialogRect = dialog?.getBoundingClientRect();
   const menu = ctxMenu && createPortal(
     <div
       ref={menuRef}
       className="term-ctx-menu"
       style={{
-        // Clamp so the menu never overflows off-screen (matches terminal /
-        // Explorer / Gambit behavior). Width ~164, height ~152.
-        left: Math.min(ctxMenu.x, window.innerWidth - 168),
-        top: Math.min(ctxMenu.y, window.innerHeight - 156),
+        // Dialog-local positioning also works when Glass creates a fixed containing block.
+        position: dialog ? 'absolute' : undefined,
+        left: dialog && dialogRect ? Math.max(4, Math.min(ctxMenu.x - dialogRect.left, dialog.clientWidth - 168)) : Math.min(ctxMenu.x, window.innerWidth - 168),
+        top: dialog && dialogRect ? Math.max(4, Math.min(ctxMenu.y - dialogRect.top, dialog.clientHeight - 156)) : Math.min(ctxMenu.y, window.innerHeight - 156),
       }}
     >
       <button
@@ -157,7 +159,8 @@ export function useTextContextMenu() {
         <span>{t('menu.select_all')}</span><kbd>{ctxMod}+A</kbd>
       </button>
     </div>,
-    document.body,
+    // A modal dialog makes body portals inert; keep its text menu in the top layer.
+    dialog ?? document.body,
   );
 
   return { menu, openMenu };

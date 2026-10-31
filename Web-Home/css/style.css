@@ -4,16 +4,10 @@
  */
 
 /* =========================================================================
-   Dot field — Anthropic-style mouse-reactive dot grid filling the entire
-   viewport background. Dots near the cursor are pushed outward; the field
-   has a slow ambient drift when mouse is idle. All rendering happens in
-   <canvas>; this CSS only handles position, sizing, and the theme tokens.
-
-   The actual particle math (lerping, mouse repulsion, scroll wave) lives
-   in initDotField() in main.js. Color comes from --dot-color so the same
-   canvas adapts cleanly between dawn/dark themes without re-creation.
+   Character field — the client's curled ribbons on a fixed glyph grid.
+   The canvas stays behind the page and never intercepts its controls.
    ========================================================================= */
-.dot-field {
+.character-field {
   position: fixed;
   inset: 0;
   z-index: 0;
@@ -22,19 +16,9 @@
   height: 100%;
 }
 
-:root {
-  --dot-color: rgba(0, 0, 0, 0.16);          /* light theme: dim near-black */
-  --dot-color-hot: rgba(196, 149, 106, 0.90); /* mouse-near: cappuccino */
-}
-html[data-theme='dark'] {
-  --dot-color: rgba(255, 255, 255, 0.14);
-  --dot-color-hot: rgba(212, 165, 132, 0.95);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  /* JS skips the animation loop in reduced-motion; the canvas paints
-     a single static frame so the page is not visually empty. */
-  .dot-field { opacity: 0.6; }
+  /* Keep a static character field when motion is reduced. */
+  .character-field { opacity: 0.6; }
 }
 
 
@@ -717,9 +701,8 @@ code::-webkit-scrollbar-thumb {
 .demo-screen {
   width: 100%;
   background: #0E0E0F;
-  border-radius: 14px 14px 0 0;
+  border-radius: 14px;
   border: 1px solid var(--glass-border);
-  border-bottom: none;
   box-shadow: 0 -4px 40px -10px rgba(0, 0, 0, 0.12);
   overflow: hidden;
   transition: box-shadow 0.3s ease;
@@ -739,117 +722,6 @@ html[data-theme='dark'] .demo-screen {
   width: 100%;
   height: auto;
   display: block;
-  transition: opacity 0.2s ease;
-}
-
-.demo-screen-inner img.fading {
-  opacity: 0;
-}
-
-/* Demo loading overlay — reuses the animated brand logo */
-.demo-loading {
-  position: absolute;
-  inset: 0;
-  background: #0E0E0F;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-  z-index: 10;
-}
-
-.demo-loading.visible {
-  opacity: 1;
-}
-
-.demo-loading-logo {
-  color: var(--brand-color, #c4956a);
-}
-
-/* Meta: title + description */
-.demo-meta {
-  width: 100%;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-top: none;
-  border-bottom: none;
-  padding: 1.25rem 2rem;
-  text-align: left;
-  transition: background-color 0.25s ease;
-}
-
-.demo-title {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--text-highlight);
-  margin-bottom: 0.35rem;
-  letter-spacing: -0.01em;
-  transition: opacity 0.2s ease, color 0.25s ease;
-}
-
-.demo-desc {
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  max-width: 640px;
-  transition: opacity 0.2s ease, color 0.25s ease;
-}
-
-.demo-title.fading,
-.demo-desc.fading {
-  opacity: 0;
-}
-
-/* Tab row */
-.demo-tabs {
-  width: 100%;
-  display: flex;
-  background: var(--terminal-bar-bg);
-  border: 1px solid var(--glass-border);
-  border-top: none;
-  border-radius: 0 0 14px 14px;
-  overflow: hidden;
-  transition: background-color 0.25s ease;
-}
-
-.demo-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0.9rem 1rem;
-  background: transparent;
-  border: none;
-  border-right: 1px solid var(--glass-border);
-  color: var(--text-secondary);
-  font-family: var(--font-primary);
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-}
-
-.demo-tab:last-child {
-  border-right: none;
-}
-
-.demo-tab:hover {
-  background: var(--glass-hover);
-  color: var(--text-primary);
-}
-
-.demo-tab.active {
-  color: var(--brand-color);
-  background: var(--glass-hover);
-  font-weight: 600;
-}
-
-.demo-tab.active svg {
-  stroke: var(--brand-color);
 }
 
 /* Responsive constraints */
@@ -865,15 +737,6 @@ html[data-theme='dark'] .demo-screen {
   }
   .demo-section {
     padding: 2rem 1rem 4rem;
-  }
-  .demo-tab span {
-    display: none;
-  }
-  .demo-tab {
-    padding: 0.9rem 0.5rem;
-  }
-  .demo-meta {
-    padding: 1rem 1.25rem;
   }
 }
 

@@ -1,10 +1,11 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useContext, useEffect, useState, type ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { tokenizeByLang, getShikiTheme, type LineTokens } from '../../lib/shiki';
 import { useDataAttr } from '../../lib/use-data-attr';
 import { commands } from '../../tauri';
+import { ConversationDirectory, conversationLink } from '../../lib/conversation-links';
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
   const dataMode = useDataAttr('data-mode');
@@ -32,6 +33,31 @@ function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
   );
 }
 
+function MarkdownLink({ children, href, ...props }: ComponentProps<'a'>) {
+  const cwd = useContext(ConversationDirectory);
+  const link = conversationLink(href ?? '', cwd);
+  return (
+    <a
+      href={link?.target}
+      data-conversation-target={link?.target}
+      data-conversation-local={link?.local || undefined}
+      target="_blank"
+      rel="noreferrer noopener"
+      {...props}
+      onClick={(event) => {
+        event.preventDefault();
+        if (!link) return;
+        event.stopPropagation();
+        void commands.openUrl(link.target).catch(error => {
+          console.warn('[Markdown] failed to open link', link.target, error);
+        });
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 // Stable component identities keep syntax-highlighted blocks mounted when a
 // live transcript appends another message. Recreating this object per render
 // makes ReactMarkdown remount every code block and repeat Shiki tokenization.
@@ -44,33 +70,17 @@ const MARKDOWN_COMPONENTS: Components = {
     }
     return <CodeBlock code={text} lang={fenced?.[1] ?? null} />;
   },
-  a({ children, href, ...props }) {
-    return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer noopener"
-        {...props}
-        onClick={(event) => {
-          if (!href) return;
-          event.preventDefault();
-          void commands.openUrl(href).catch(error => {
-            console.warn('[Markdown] failed to open link', href, error);
-          });
-        }}
-      >
-        {children}
-      </a>
-    );
-  },
+  a: MarkdownLink,
 };
 
 function MarkdownContentImpl({ content }: { content: string }) {
+  const cwd = useContext(ConversationDirectory);
   return (
     <div className="md-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={MARKDOWN_COMPONENTS}
+        urlTransform={url => conversationLink(url, cwd) ? url : ''}
       >
         {content}
       </ReactMarkdown>

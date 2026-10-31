@@ -4,7 +4,7 @@
 // synchronously by every component that needs a display name for a
 // tool id (launchpad cards, tab labels, picker options, history rows,
 // session titles). Replaces the five hardcoded `id → label` tables
-// that used to live in CenterPanel / FourSplitGrid / MultiAgentGrid /
+// that used to live in the tool launchers /
 // TierTerminal / HistoryBoard.
 //
 // Until the load resolves, `getToolDisplayName(id)` falls back to the

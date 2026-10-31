@@ -232,13 +232,13 @@ pub(super) async fn changes(
         Err(response) => return response,
     };
     match crate::git::git_changes(root.to_string_lossy().into_owned()).await {
-        crate::git::GitChanges::Ok {
+        Ok(crate::git::GitChanges::Ok {
             repo_root,
             branch,
             uncommitted,
             untracked,
             ..
-        } => {
+        }) => {
             let files: Vec<_> = uncommitted.into_iter().chain(untracked).filter_map(|entry| {
                 let repo = FsPath::new(&repo_root).canonicalize().ok()?;
                 let path = relative_path(&repo, &entry.rel, true).ok()?;
@@ -248,10 +248,11 @@ pub(super) async fn changes(
             Json(serde_json::json!({ "state": "ok", "branch": branch, "files": files }))
                 .into_response()
         }
-        crate::git::GitChanges::NoGit => {
+        Err(error) => failure(error),
+        Ok(crate::git::GitChanges::NoGit) => {
             Json(serde_json::json!({ "state": "no_git", "files": [] })).into_response()
         }
-        crate::git::GitChanges::NotRepo => {
+        Ok(crate::git::GitChanges::NotRepo) => {
             Json(serde_json::json!({ "state": "not_repo", "files": [] })).into_response()
         }
     }
@@ -271,7 +272,7 @@ pub(super) async fn diff(
         Ok(path) => path,
         Err(error) => return failure(error),
     };
-    let crate::git::GitChanges::Ok { repo_root, .. } =
+    let Ok(crate::git::GitChanges::Ok { repo_root, .. }) =
         crate::git::git_changes(root.to_string_lossy().into_owned()).await
     else {
         return failure("NOT_REPOSITORY".into());
@@ -284,9 +285,10 @@ pub(super) async fn diff(
         Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
         Err(_) => return failure("PATH_OUTSIDE_WORKSPACE".into()),
     };
-    let before = crate::git::git_show_file(repo_root, format!("HEAD:{rel}"))
-        .await
-        .unwrap_or_default();
+    let before = match crate::git::git_show_file(repo_root, format!("HEAD:{rel}")).await {
+        Ok(content) => content.unwrap_or_default(),
+        Err(error) => return failure(error),
+    };
     if before.len() as u64 > MOBILE_FILE_LIMIT || before.contains('\0') {
         return failure("FILE_TOO_LARGE_OR_BINARY".into());
     }

@@ -19,6 +19,8 @@ interface AutoHideScrollbarOptions {
   hideDelay?: number;
   /** Slimmer 7px rail / 4px slider. Default false. */
   slim?: boolean;
+  /** Wider 12px rail / 8px slider for conversation scrolling. */
+  wide?: boolean;
   /** px inset from the element's top edge. Default 0. */
   insetTop?: number;
   /** px inset from the element's bottom edge — e.g. clear a resize handle. */
@@ -29,13 +31,13 @@ export function bindAutoHideScrollbar(
   element: HTMLElement,
   options: AutoHideScrollbarOptions = {},
 ): () => void {
-  const { hideDelay = 450, slim = false, insetTop = 0, insetBottom = 0 } = options;
+  const { hideDelay = 450, slim = false, wide = false, insetTop = 0, insetBottom = 0 } = options;
   // Hide the native bar entirely (CSS in global.css: .auto-hide-scrollbar).
   element.classList.add('auto-hide-scrollbar');
 
   const rail = document.createElement('div');
-  rail.className = slim ? 'cc-scrollbar cc-scrollbar-slim' : 'cc-scrollbar';
-  const railWidth = slim ? 7 : 10;
+  rail.className = slim ? 'cc-scrollbar cc-scrollbar-slim' : wide ? 'cc-scrollbar cc-scrollbar-wide' : 'cc-scrollbar';
+  const railWidth = slim ? 7 : wide ? 12 : 10;
   rail.setAttribute('aria-hidden', 'true');
   const slider = document.createElement('div');
   slider.className = 'cc-scrollbar-slider';

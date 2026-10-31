@@ -548,10 +548,42 @@ pub struct AppState {
     pub pending_launch: Mutex<Option<crate::launch::LaunchRequest>>,
 }
 
+#[tauri::command]
+fn agent_bridge_ready(app: tauri::AppHandle) {
+    crate::channels::start_saved(app);
+}
+
 
 #[tauri::command]
 fn window_minimize(window: tauri::Window) {
     let _ = window.minimize();
+}
+
+#[tauri::command]
+fn play_notify_sound(kind: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+
+        let wav: &'static [u8] = match kind {
+            "done" => include_bytes!("assets/notify-done.wav"),
+            "wait" => include_bytes!("assets/notify-wait.wav"),
+            _ => return Err("Unknown notification sound".into()),
+        };
+        // SND_MEMORY interprets the pointer as WAV bytes. Static storage must
+        // outlive this asynchronous call; no WebView audio renderer is involved.
+        unsafe {
+            PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_ASYNC | SND_MEMORY | SND_NODEFAULT)
+                .ok()
+                .map_err(|error| error.to_string())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = kind;
+        Err("Native notification sounds are Windows-only".into())
+    }
 }
 
 #[tauri::command]
@@ -719,6 +751,9 @@ async fn pick_folder(app: tauri::AppHandle) -> Result<String, String> {
 /// `~/.config/opencode/`, etc. on machines where the user hasn't
 /// installed the upstream CLI yet.
 pub(crate) fn binary_on_path(bin: &str) -> bool {
+    if bin == "claude" && dirs::home_dir().is_some_and(|home| home.join(".local/bin").join(if cfg!(windows) { "claude.exe" } else { "claude" }).is_file()) {
+        return true;
+    }
     #[cfg(target_os = "windows")]
     {
         check_tool_windows(bin)
@@ -734,6 +769,7 @@ pub(crate) fn check_tool_windows(bin: &str) -> bool {
     use std::os::windows::process::CommandExt;
     std::process::Command::new("where")
         .arg(bin)
+        .env("PATH", crate::windows_path::terminal_path())
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -753,14 +789,14 @@ pub(crate) fn check_tool_unix(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Re-run legacy cleanup and any non-hook presentation migration for one tool.
+/// Apply non-hook presentation maintenance for one tool.
 /// Called from the launchpad's focus-rescan when `check_tools_installed`
 /// flips a CLI from not-installed → installed, so users who install a
 /// CLI while Coffee CLI is running also get the OpenCode-family transparent
 /// theme migration without restarting. Idempotent.
 #[tauri::command]
-fn maintain_tool_integration(tool: String) {
-    crate::hook_installer::maintain_for_tool(&tool);
+async fn maintain_tool_integration(tool: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::hook_installer::maintain_for_tool(&tool)).await.map_err(|e| e.to_string())
 }
 
 /// Drain the cold-start external launch request (`launch --tool … --cwd …`),
@@ -773,15 +809,20 @@ fn take_pending_launch(state: State<'_, AppState>) -> Option<crate::launch::Laun
 }
 
 #[tauri::command]
-fn check_tools_installed() -> std::collections::HashMap<String, bool> {
-    let mut result = std::collections::HashMap::new();
-    for tool in crate::tools::TOOLS {
-        result.insert(tool.id.to_string(), binary_on_path(tool.binary_name));
-    }
-    // `terminal` (system shell) and `remote` (SSH) have no binary to
-    // probe — always available, not registered.
-    result.insert("terminal".to_string(), true);
-    result
+async fn check_tools_installed() -> Result<std::collections::HashMap<String, bool>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut result = std::collections::HashMap::new();
+        for tool in crate::tools::TOOLS {
+            result.insert(tool.id.to_string(), binary_on_path(tool.binary_name));
+        }
+        // DeepSeek Harness is "installed" exactly when its tab can start: `where dsh` also
+        // matches scripts it cannot run, and misses the Desktop runtime, which stays off PATH.
+        result.insert("dsh".to_string(), crate::dsh_session::executable().is_some());
+        // `terminal` (system shell) and `remote` (SSH) have no binary to
+        // probe — always available, not registered.
+        result.insert("terminal".to_string(), true);
+        result
+    }).await.map_err(|e| e.to_string())
 }
 
 /// Probe which optional shells are installed, so the settings picker can
@@ -790,13 +831,15 @@ fn check_tools_installed() -> std::collections::HashMap<String, bool> {
 /// `where`/`exists` checks — safe to call on settings open. See
 /// `shell_probe::detect_capabilities` for the per-shell strategy.
 #[tauri::command]
-fn detect_shells() -> crate::shell_probe::ShellCapabilitiesJson {
-    let mut caps = crate::shell_probe::detect_capabilities();
-    // Exact versions are probed here (Settings open), not in
-    // detect_capabilities (startup/spawn) — powershell.exe's $PSVersionTable
-    // takes ~1-2s and would stall boot if it ran there.
-    crate::shell_probe::populate_versions(&mut caps);
-    crate::shell_probe::ShellCapabilitiesJson::from(&caps)
+async fn detect_shells() -> Result<crate::shell_probe::ShellCapabilitiesJson, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut caps = crate::shell_probe::detect_capabilities();
+        // Exact versions are probed here (Settings open), not in
+        // detect_capabilities (startup/spawn) — powershell.exe's $PSVersionTable
+        // takes ~1-2s and would stall boot if it ran there.
+        crate::shell_probe::populate_versions(&mut caps);
+        crate::shell_probe::ShellCapabilitiesJson::from(&caps)
+    }).await.map_err(|e| e.to_string())
 }
 
 // ─── File System Live Watcher ────────────────────────────────────────────────
@@ -806,25 +849,25 @@ fn detect_shells() -> crate::shell_probe::ShellCapabilitiesJson {
 // into the Explorer tree immediately. See fs_watcher.rs for mechanics.
 
 #[tauri::command]
-fn start_fs_watcher(
+async fn start_fs_watcher(
     path: String,
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let root = PathBuf::from(&path);
-    let watcher = crate::fs_watcher::FsWatcher::start(app, root)?;
-    // Replace atomically; dropping the old FsWatcher stops its OS handle.
-    let mut guard = state.fs_watcher.lock().map_err(|e| format!("lock: {}", e))?;
-    *guard = Some(watcher);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        let watcher = crate::fs_watcher::FsWatcher::start(app.clone(), PathBuf::from(path))?;
+        let old = app.state::<AppState>().fs_watcher.lock().map_err(|e| format!("lock: {}", e))?.replace(watcher);
+        drop(old);
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn stop_fs_watcher(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state.fs_watcher.lock().map_err(|e| format!("lock: {}", e))?;
-    // Drop releases the OS watcher handle.
-    *guard = None;
-    Ok(())
+async fn stop_fs_watcher(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let old = app.state::<AppState>().fs_watcher.lock().map_err(|e| format!("lock: {}", e))?.take();
+        drop(old);
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 // ─── File System Browsing API ────────────────────────────────────────────────
@@ -926,10 +969,12 @@ pub(crate) fn normalize_path_key(path: &str) -> String {
 /// `get_baseline_content` to feed the right-side Diff panel: baseline +
 /// current = both sides of the diff.
 #[tauri::command]
-fn read_text_file(path: String) -> Option<String> {
-    let bytes = std::fs::read(&path).ok()?;
-    if !stats_is_text(&bytes) { return None; }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+async fn read_text_file(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).ok()?;
+        if !stats_is_text(&bytes) { return None; }
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }).await.ok().flatten()
 }
 
 
@@ -1324,6 +1369,7 @@ async fn tier_terminal_start(
     cwd: Option<String>,
     resume_token: Option<String>,
     shell: Option<String>,
+    strict_cwd: Option<bool>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1337,7 +1383,7 @@ async fn tier_terminal_start(
     tauri::async_runtime::spawn_blocking(move || {
         tier_terminal_start_blocking(
             session_id, tool, tool_data, cols, rows,
-            theme_mode, locale, cwd, resume_token, shell, app, terminal_session,
+            theme_mode, locale, cwd, resume_token, shell, strict_cwd.unwrap_or(false), app, terminal_session,
         )
     })
     .await
@@ -1355,6 +1401,7 @@ fn tier_terminal_start_blocking(
     cwd: Option<String>,
     resume_token: Option<String>,
     shell: Option<String>,
+    strict_cwd: bool,
     app: tauri::AppHandle,
     terminal_session: terminal::SharedSession,
 ) -> Result<(), String> {
@@ -1527,9 +1574,13 @@ fn tier_terminal_start_blocking(
     // --dangerously-skip-permissions" or "run codex through `docker exec mybox`".
     // `remote` is excluded by design: its argv is protocol-derived from
     // runtime tool_data, not configurable.
+    let launch_config = match tool.as_deref() {
+        Some(name) if name == "terminal" || crate::tools::find(name).is_some() => crate::tool_config::get(name),
+        _ => Default::default(),
+    };
     let (cmd, args) = match tool.as_deref() {
         Some(name) if name == "terminal" || crate::tools::find(name).is_some() => {
-            let entry = crate::tool_config::get(name);
+            let entry = &launch_config;
             let (cmd, mut args) = (cmd, args);
             let (cmd, args) = if let (Some(bin), prefix_args) =
                 crate::tool_config::parse_command(&entry.command)
@@ -1540,7 +1591,7 @@ fn tier_terminal_start_blocking(
                 // system-prompt / etc) follow them.
                 let mut new_args = prefix_args;
                 new_args.append(&mut args);
-                (bin, new_args)
+                (crate::tool_config::command_binary(name, &bin).to_owned(), new_args)
             } else {
                 (cmd, args)
             };
@@ -1554,6 +1605,13 @@ fn tier_terminal_start_blocking(
         // Synthetic / pane-internal tools (remote / multi-agent)
         // intentionally bypass user override.
         _ => (cmd, args),
+    };
+
+    let mut args = args;
+    let native_token = if tool.as_deref() == Some("claude") {
+        terminal::claude_launch_token(&mut args, launch_config.command.trim().is_empty())
+    } else {
+        None
     };
 
     // If a session with the same ID already exists (e.g. restart-in-place),
@@ -1572,11 +1630,19 @@ fn tier_terminal_start_blocking(
     // Determine the CWD to pass to the Agent:
     // 1. If workspace has an explicit dir (from open-folder or resume) → use it
     // 2. Otherwise default to user's home dir (matches most agents' default)
+    if strict_cwd && (dir.as_os_str().is_empty() || !dir.is_dir()) {
+        return Err("Agent working directory no longer exists; terminal was not started".into());
+    }
     let spawn_cwd = if dir.as_os_str().is_empty() || !dir.is_dir() {
         dirs::home_dir().map(|p| p.to_string_lossy().to_string())
     } else {
         Some(dir.to_string_lossy().to_string())
     };
+    let spawn_cwd = spawn_cwd.map(|cwd| {
+        terminal::shell_working_directory(std::path::Path::new(&cwd))
+            .map(|path| path.to_string_lossy().to_string())
+            .map_err(|e| e.to_string())
+    }).transpose()?;
 
     let tool_name = tool.clone();
     let actual_cwd = spawn_cwd.clone().unwrap_or_default();
@@ -1586,6 +1652,14 @@ fn tier_terminal_start_blocking(
     // Per-pane env overrides (reserved). Independent-split and
     // single-terminal panes spawn with no extra env today.
     let extra_env: Vec<(String, String)> = Vec::new();
+
+    if tool.as_deref() == Some("claude") {
+        if let Some(native_id) = &native_token {
+            if let Some((mcp, prompt)) = crate::orchestration::parent_launch(&app, &session_id, native_id, std::path::Path::new(&actual_cwd))? {
+                args.extend(["--mcp-config".into(), mcp, "--append-system-prompt".into(), prompt]);
+            }
+        }
+    }
 
     terminal::spawn(
         app.clone(),
@@ -1601,7 +1675,15 @@ fn tier_terminal_start_blocking(
         theme_mode,
         locale,
         extra_env,
+        launch_config,
     ).map_err(|e| format!("Failed to spawn PTY: {}", e))?;
+
+    if let Some(token) = native_token {
+        if let Some(session) = terminal_session.lock().unwrap().get(&session_id) {
+            *session.session_token.lock().unwrap() = Some(token.clone());
+        }
+        let _ = app.emit("tier-terminal-token", terminal::SessionTokenPayload { id: session_id.clone(), token });
+    }
 
     // Emit the initial CWD to the frontend so the left panel can map immediately.
     // On Windows, cmd.exe does not emit OSC 7, and full-screen agents enter alt-screen
@@ -1620,7 +1702,7 @@ fn tier_terminal_start_blocking(
 
 
 #[tauri::command]
-fn tier_terminal_input(
+async fn tier_terminal_input(
     session_id: String,
     data: String,
     state: State<'_, AppState>,
@@ -1637,14 +1719,16 @@ fn tier_terminal_input(
 
     // PTY write may block under back-pressure, after the session-map lock has
     // already been released so other tabs remain responsive.
-    use std::io::Write;
-    let mut activity = runtime.lock().map_err(|_| "Activity unavailable")?;
-    activity.desktop_input(&data);
-    let mut w = writer_arc.lock().map_err(|e| format!("Writer lock poisoned: {}", e))?;
-    w.write_all(data.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
-    w.flush().map_err(|e| format!("Flush failed: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let mut activity = runtime.lock().map_err(|_| "Activity unavailable")?;
+        activity.desktop_input(&data);
+        let mut w = writer_arc.lock().map_err(|e| format!("Writer lock poisoned: {}", e))?;
+        w.write_all(data.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+        w.flush().map_err(|e| format!("Flush failed: {}", e))?;
 
-    Ok(())
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Raw write used for system-generated input like auto-skip Enter for the
@@ -1676,25 +1760,12 @@ fn tier_terminal_pause(
 }
 
 #[tauri::command]
-fn tier_terminal_raw_write(
+async fn tier_terminal_raw_write(
     session_id: String,
     data: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Grab writer Arc, release map lock before PTY I/O
-    let writer_arc = {
-        let map = state.terminal_session.lock().unwrap();
-        match map.get(&session_id) {
-            Some(s) => s.writer_lock.clone(),
-            None => return Err(format!("No active terminal session for id: {}", session_id)),
-        }
-    };
-
-    use std::io::Write;
-    let mut w = writer_arc.lock().map_err(|e| format!("Writer lock poisoned: {}", e))?;
-    w.write_all(data.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
-    w.flush().map_err(|e| format!("Flush failed: {}", e))?;
-    Ok(())
+    tier_terminal_input(session_id, data, state).await
 }
 
 /// Toggle the global background-throttle flag. Called by the frontend
@@ -1735,21 +1806,25 @@ fn tier_terminal_kill(session_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-fn tier_terminal_resize(
+async fn tier_terminal_resize(
     session_id: String,
     cols: u16,
     rows: u16,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let map = state.terminal_session.lock().unwrap();
-    let session = map
-        .get(&session_id)
-        .ok_or_else(|| format!("No active terminal session for id: {session_id}"))?;
-    let master_guard = session._master.lock().unwrap();
-    let master = master_guard
-        .as_ref()
-        .ok_or_else(|| format!("Terminal session has no PTY master: {session_id}"))?;
-    resize_terminal_pty(master.as_ref(), cols, rows)
+    resize_terminal_session(state.terminal_session.clone(), session_id, cols, rows).await
+}
+
+async fn resize_terminal_session(sessions: terminal::SharedSession, session_id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let master = {
+        let map = sessions.lock().unwrap();
+        map.get(&session_id).ok_or_else(|| format!("No active terminal session for id: {session_id}"))?._master.clone()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = master.lock().unwrap();
+        let master = guard.as_ref().ok_or_else(|| format!("Terminal session has no PTY master: {session_id}"))?;
+        resize_terminal_pty(master.as_ref(), cols, rows)
+    }).await.map_err(|e| e.to_string())?
 }
 
 pub(crate) fn resize_terminal_pty(master: &dyn portable_pty::MasterPty, cols: u16, rows: u16) -> Result<(), String> {
@@ -1779,6 +1854,8 @@ pub(crate) struct SavedSession {
     created_at: Option<String>,
     file_path: Option<String>,
     turn_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    git_context: Option<crate::session_git_context::SessionGitContext>,
 }
 
 impl SavedSession {
@@ -1870,7 +1947,7 @@ const SYSTEM_INJECTION_TAGS: &[&str] = &[
     "Below is a conversation log from a Claude Code coding session",
 ];
 
-fn is_system_injected(text: &str) -> bool {
+pub(crate) fn is_system_injected(text: &str) -> bool {
     let t = text.trim();
     SYSTEM_INJECTION_TAGS.iter().any(|tag| t.starts_with(tag))
 }
@@ -1999,6 +2076,7 @@ fn parse_agent_jsonl(
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
+    let mut git_context = crate::session_git_context::SessionGitObserver::default();
     let mut updated_at = String::new();
     let mut created_at = None;
     let mut title = String::new();
@@ -2018,6 +2096,7 @@ fn parse_agent_jsonl(
 
     for line in reader.lines().map_while(Result::ok) {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+            git_context.observe(&value);
             if created_at.is_none() {
                 created_at = value.get("timestamp").and_then(json_timestamp_string);
             }
@@ -2122,7 +2201,7 @@ fn parse_agent_jsonl(
             }
         }
     }
-    
+
     // Fallback: JSONL had no embedded cwd (older session, or a line we didn't
     // recognize). Claude Code's own `~/.claude.json` projects registry is the
     // only reliable source at that point — see load_claude_project_map for why
@@ -2187,6 +2266,7 @@ fn parse_agent_jsonl(
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: git_context.finish(),
     })
 }
 
@@ -2310,6 +2390,7 @@ fn parse_codebuddy_session_jsonl(file_path: &std::path::Path) -> Option<SavedSes
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: None,
     })
 }
 
@@ -2459,6 +2540,7 @@ fn parse_pi_session_jsonl(file_path: &std::path::Path, tool: &str) -> Option<Sav
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: None,
     })
 }
 
@@ -2483,7 +2565,7 @@ fn parse_pi_session_jsonl(file_path: &std::path::Path, tool: &str) -> Option<Sav
 /// files with no accompanying text), we return empty so the caller
 /// treats it like any other system injection and keeps scanning.
 /// Blocks without the preamble are returned unchanged.
-fn strip_codex_desktop_file_preamble(text: &str) -> &str {
+pub(crate) fn strip_codex_desktop_file_preamble(text: &str) -> &str {
     const PREAMBLE: &str = "# Files mentioned by the user";
     if !text.contains(PREAMBLE) {
         return text;
@@ -2522,6 +2604,7 @@ fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession
 
     let mut session_id = file_path.file_stem()?.to_string_lossy().to_string();
     let mut cwd = String::new();
+    let mut git_context = crate::session_git_context::SessionGitObserver::default();
     let mut updated_at = String::new();
     let mut title = String::new();
     let mut total_messages = 0;
@@ -2531,6 +2614,7 @@ fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
+        git_context.observe(&value);
         let row_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let payload = match value.get("payload") {
             Some(p) => p,
@@ -2634,6 +2718,7 @@ fn parse_codex_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: git_context.finish(),
     })
 }
 
@@ -2816,6 +2901,7 @@ fn parse_gemini_session_jsonl(
 
     Some(SavedSession {
         id: format!("antigravity_native_{}", session_id),
+        git_context: None,
         name: title,
         tool: "antigravity".to_string(),
         cwd,
@@ -2938,6 +3024,7 @@ fn parse_qwen_session_jsonl(file_path: &std::path::Path) -> Option<SavedSession>
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: None,
     })
 }
 
@@ -3034,14 +3121,14 @@ fn validated_native_session_path(file_path: &str) -> Result<std::path::PathBuf, 
 
 // ─── OpenCode Session Reader ─────────────────────────────────────────────────
 //
-// OpenCode stores chat history in two layouts depending on version:
-//   • SQLite (current):  `~/.local/share/opencode/opencode.db`
-//                         tables `message` (role + metadata) + `part`
-//                         (text/tool blocks), joined by message_id.
+// OpenCode stores chat history in these layouts depending on version:
+//   • SQLite V2:         `~/.local/share/opencode/opencode.db`
+//                         `session_v2` + `session_message` (inline content).
+//   • SQLite V1:         same DB, `session` + `message` + `part` tables.
 //   • JSON  (legacy):    `~/.local/share/opencode/storage/message/<sid>/*.json`
 //                         one file per message, content blocks inline.
 //
-// Both are normalized to the same JSONL shape ConversationView understands
+// All are normalized to the same JSONL shape ConversationView understands
 // (Claude Code shape with `{message:{role, content[]}}`):
 //
 //   {"message": {"role": "user", "content": [{"type":"text","text":"..."}]}}
@@ -3058,6 +3145,104 @@ struct DatabaseChatPage {
     has_older: bool,
 }
 
+fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    ).unwrap_or(false)
+}
+
+fn opencode_v2_session(conn: &rusqlite::Connection, session_id: &str) -> bool {
+    if !sqlite_table_exists(conn, "session_message") {
+        return false;
+    }
+    // The beta importer retains V1 rows. Prefer the V2 session even when
+    // empty, and also support earlier builds that kept the `session` table.
+    for table in ["session_v2", "session_message"] {
+        let column = if table == "session_v2" { "id" } else { "session_id" };
+        if sqlite_table_exists(conn, table) && conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column} = ?1)"),
+            [session_id],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Shared session/count source for history and heatmap. A migrated V2 row
+/// replaces its V1 row, including its archived state, so neither scan doubles it.
+fn opencode_sessions_sql(conn: &rusqlite::Connection) -> String {
+    let has_v2_sessions = sqlite_table_exists(conn, "session_v2");
+    let has_v2_messages = sqlite_table_exists(conn, "session_message");
+    let v2_count = "(SELECT COUNT(*) FROM session_message WHERE session_id = s.id \
+                    AND type IN ('user', 'assistant'))";
+    let v1_count = "(SELECT COUNT(*) FROM message WHERE session_id = s.id)";
+    let mut queries = Vec::new();
+    for table in ["session_v2", "session"] {
+        if !sqlite_table_exists(conn, table) { continue; }
+        let count = if table == "session_v2" {
+            v2_count.to_string()
+        } else if has_v2_messages {
+            format!("CASE WHEN EXISTS(SELECT 1 FROM session_message WHERE session_id = s.id) \
+                     THEN {v2_count} ELSE {v1_count} END")
+        } else {
+            v1_count.to_string()
+        };
+        let filter = if table == "session" && has_v2_sessions {
+            "WHERE NOT EXISTS(SELECT 1 FROM session_v2 WHERE id = s.id)"
+        } else { "" };
+        queries.push(format!(
+            "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, \
+             s.time_archived, s.parent_id, {count} AS msg_count \
+             FROM {table} s {filter}"
+        ));
+    }
+    queries.join(" UNION ALL ")
+}
+
+fn read_opencode_v2_session_page(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    before: Option<u64>,
+) -> Result<DatabaseChatPage, String> {
+    let total: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM session_message WHERE session_id = ?1 AND type IN ('user', 'assistant')",
+        [session_id],
+        |row| row.get(0),
+    ).map_err(|e| format!("count V2 messages: {e}"))?;
+    let end = before.unwrap_or(total).min(total);
+    let start = end.saturating_sub(CHAT_WINDOW_ROWS as u64);
+    let mut stmt = conn.prepare(
+        "SELECT id, type, data FROM session_message WHERE session_id = ?1 \
+         AND type IN ('user', 'assistant') ORDER BY seq ASC LIMIT ?2 OFFSET ?3",
+    ).map_err(|e| format!("prepare V2 message query: {e}"))?;
+    let rows = stmt.query_map(rusqlite::params![session_id, end - start, start], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    }).map_err(|e| format!("query V2 messages: {e}"))?;
+    let mut out = String::new();
+    for row in rows.flatten() {
+        let (id, role, data) = row;
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) else { continue; };
+        let texts: Vec<&str> = if role == "user" {
+            parsed.get("text").and_then(|v| v.as_str()).into_iter().collect()
+        } else {
+            parsed.get("content").and_then(|v| v.as_array()).into_iter().flatten()
+                .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"))
+                .filter_map(|block| block.get("text").and_then(|v| v.as_str()))
+                .collect()
+        };
+        let content: Vec<serde_json::Value> = texts.into_iter().filter(|text| !text.is_empty())
+            .map(|text| serde_json::json!({"type": "text", "text": text})).collect();
+        if content.is_empty() { continue; }
+        out.push_str(&serde_json::json!({"id": id, "message": {"role": role, "content": content}}).to_string());
+        out.push('\n');
+    }
+    Ok(DatabaseChatPage { data: out, history_cursor: start, has_older: start > 0 })
+}
+
 fn read_opencode_sqlite_session_page(
     db_path: &std::path::Path,
     session_id: &str,
@@ -3069,6 +3254,10 @@ fn read_opencode_sqlite_session_page(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| format!("open opencode.db: {e}"))?;
+
+    if opencode_v2_session(&conn, session_id) {
+        return read_opencode_v2_session_page(&conn, session_id, before);
+    }
 
     let total: u64 = conn
         .query_row(
@@ -3644,6 +3833,15 @@ fn drizzle_session_revision(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|error| error.to_string())?;
+    if opencode_v2_session(&conn, session_token) {
+        let (count, updated, seq): (i64, i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(time_updated), 0), COALESCE(MAX(seq), 0) \
+             FROM session_message WHERE session_id = ?1 AND type IN ('user', 'assistant')",
+            [session_token],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).map_err(|error| error.to_string())?;
+        return Ok(format!("opencode-v2:{count}:{updated}:{seq}"));
+    }
     let (message_count, message_updated, part_count, part_updated): (i64, i64, i64, i64) = conn
         .query_row(
             "SELECT \
@@ -3988,6 +4186,7 @@ fn find_kimi_sessions(home: &std::path::Path, result: &mut Vec<SavedSession>) {
             // turn_count deferred — counting wire.jsonl is extra I/O per
             // session and the History board renders fine without it.
             turn_count: None,
+            git_context: None,
         });
     }
 }
@@ -4158,6 +4357,7 @@ fn find_grok_sessions(home: &std::path::Path, result: &mut Vec<SavedSession>) {
             // turn_count deferred - counting chat_history.jsonl is extra I/O per
             // session and the History board renders fine without it.
             turn_count: None,
+            git_context: None,
         });
     }
 }
@@ -4350,6 +4550,7 @@ fn parse_hermes_json(file_path: &std::path::Path) -> Option<SavedSession> {
         created_at: created_at.or_else(|| file_created_epoch_ms(file_path)),
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: None,
     })
 }
 
@@ -4396,6 +4597,7 @@ fn parse_opencode_session(file_path: &std::path::Path, message_dir: &std::path::
         created_at,
         file_path: Some(file_path.to_string_lossy().into_owned()),
         turn_count: Some(turn_count),
+        git_context: None,
     })
 }
 
@@ -4432,9 +4634,8 @@ fn find_opencode_sessions(base_dir: std::path::PathBuf, result: &mut Vec<SavedSe
     }
 }
 
-/// Read sessions from a Drizzle-schema SQLite db (`session` + `message`
-/// tables). Shared by OpenCode and its forks — MiMo Code uses the identical
-/// schema, so it passes its own `tool_id` / `default_title` and db path.
+/// Read V1/V2 SQLite sessions. Shared by OpenCode and its forks, which pass
+/// their own `tool_id` / `default_title` and db path.
 fn find_drizzle_sessions_sqlite(
     db_path: &std::path::Path,
     tool_id: &str,
@@ -4455,17 +4656,15 @@ fn find_drizzle_sessions_sqlite(
     // on-demand from the parent's timeline. Surfacing them here flat-clutters
     // the Sessions board with un-resumable child conversations. MiMo Code
     // shares this Drizzle schema/scanner, so the same filter applies.
-    let query = "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, \
-                 COUNT(m.id) as msg_count \
-                 FROM session s \
-                 LEFT JOIN message m ON m.session_id = s.id \
+    let query = format!("WITH sessions AS ({}) \
+                 SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, s.msg_count \
+                 FROM sessions s \
                  WHERE s.time_archived IS NULL \
                    AND s.parent_id IS NULL \
-                 GROUP BY s.id \
                  ORDER BY s.time_updated DESC \
-                 LIMIT 30";
+                 LIMIT 30", opencode_sessions_sql(&conn));
 
-    let mut stmt = match conn.prepare(query) {
+    let mut stmt = match conn.prepare(&query) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -4476,6 +4675,8 @@ fn find_drizzle_sessions_sqlite(
             .unwrap_or(None)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| default_title.to_string());
+        // V1 and V2 store the actual cwd in `directory`; `path` is relative
+        // to the project root, not a child of this directory.
         let directory: String = row.get::<_, Option<String>>(2)
             .unwrap_or(None)
             .unwrap_or_default();
@@ -4504,6 +4705,7 @@ fn find_drizzle_sessions_sqlite(
             // file_path, so read_opencode_session still owns parsing).
             file_path: Some(db_path.to_string_lossy().into_owned()),
             turn_count: Some(turn_count),
+            git_context: None,
         })
     });
 
@@ -4661,6 +4863,7 @@ fn find_hermes_sessions_sqlite(db_path: &std::path::Path, result: &mut Vec<Saved
             created_at: Some(((hermes_started_at_secs(started_at) * 1000.0) as i64).to_string()),
             file_path: None,
             turn_count: Some(turn_count),
+            git_context: None,
         })
     });
     if let Ok(iter) = iter {
@@ -5091,6 +5294,24 @@ fn load_native_history_blocking() -> Result<Vec<SavedSession>, String> {
         find_grok_sessions(_home, &mut result);
     }
 
+    // DeepSeek Harness second pass - per-Session dirs under ~/.dsh/sessions with
+    // zstd logs; titles and times come from its own projection cache, so no log
+    // is decompressed. Desktop-only tool: resume opens a conversation tab.
+    for entry in crate::dsh_session::history_entries(200) {
+        result.push(SavedSession {
+            id: format!("dsh_native_{}", entry.session_id),
+            name: entry.title.unwrap_or_else(|| "DeepSeek Harness Session".to_string()),
+            tool: "dsh".to_string(),
+            cwd: entry.cwd,
+            session_token: Some(entry.session_id),
+            saved_at: entry.last_ms.to_string(),
+            created_at: entry.created_ms.map(|ms| ms.to_string()),
+            file_path: Some(entry.log.to_string_lossy().into_owned()),
+            turn_count: entry.turns,
+            git_context: None,
+        });
+    }
+
     // Collapse any Claude-worktree cwd to its project root, for every tool's
     // sessions (a session launched from <project>/.claude/worktrees/<x> should
     // resume in <project>, not the ephemeral worktree). No-op for normal dirs;
@@ -5228,9 +5449,8 @@ async fn get_message_heatmap() -> Result<Vec<HeatmapEntry>, String> {
 }
 
 fn load_message_heatmap_blocking() -> Result<Vec<HeatmapEntry>, String> {
-    // Frontend renders a 26-week (≈ 6-month) grid. ~210 days back so
-    // the leftmost column is always populated even mid-week.
-    const LOOKBACK_SECS: u64 = 210 * 86400;
+    // Cover the full 53-week grid, including its first partial week.
+    const LOOKBACK_SECS: u64 = 371 * 86400;
     let now = std::time::SystemTime::now();
     let cutoff = now.checked_sub(std::time::Duration::from_secs(LOOKBACK_SECS))
         .unwrap_or(std::time::UNIX_EPOCH);
@@ -5422,12 +5642,11 @@ fn collect_opencode_heatmap_entries(
     // `new Date(ts * 1000)` in ContributionHeatmap.tsx). So compare and emit
     // in millis at the SQL boundary, then divide by 1000 once.
     let cutoff_ms: i64 = cutoff_secs.saturating_mul(1000);
-    let query = "SELECT s.time_updated, COUNT(m.id) AS msg_count \
-                 FROM session s \
-                 LEFT JOIN message m ON m.session_id = s.id \
-                 WHERE s.time_archived IS NULL AND s.time_updated >= ?1 \
-                 GROUP BY s.id";
-    let mut stmt = match conn.prepare(query) {
+    let query = format!("WITH sessions AS ({}) \
+                 SELECT s.time_updated, s.msg_count FROM sessions s \
+                 WHERE s.time_archived IS NULL AND s.time_updated >= ?1",
+                 opencode_sessions_sql(&conn));
+    let mut stmt = match conn.prepare(&query) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -5590,7 +5809,7 @@ async fn check_network_port(host: String, port: u16) -> Result<bool, String> {
     use std::net::ToSocketAddrs;
     
     let target = format!("{}:{}", host, port);
-    
+
     // Run blocking network check in a dedicated blocking task to avoid stalling the async runtime
     let reachable = tauri::async_runtime::spawn_blocking(move || {
         match target.to_socket_addrs() {
@@ -5606,6 +5825,24 @@ async fn check_network_port(host: String, port: u16) -> Result<bool, String> {
     }).await.unwrap_or(false);
 
     Ok(reachable)
+}
+
+#[tauri::command]
+fn computer_name() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    if let Ok(name) = std::env::var("COMPUTERNAME") {
+        if !name.trim().is_empty() { return Ok(name.trim().to_string()); }
+    }
+    let mut command = std::process::Command::new("hostname");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output().map_err(|e| e.to_string())?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || name.is_empty() { return Err("Could not read computer name".into()); }
+    Ok(name)
 }
 
 #[tauri::command]
@@ -5892,15 +6129,61 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(crate::channels::ChannelRuntime::default())
+        .manage(crate::claude_session::ClaudeSessions::default())
+        .manage(crate::codex_session::CodexSessions::default())
+        .manage(crate::dsh_session::DshSessions::default())
         .manage(AppState {
             terminal_session,
             fs_watcher: Mutex::new(None),
             pending_launch: Mutex::new(pending_launch),
         })
         .invoke_handler(tauri::generate_handler![
+            crate::session_directory::check_project_directories,
+            crate::claude_session::claude_session_start,
+            crate::claude_session::claude_session_history,
+            crate::claude_session::claude_session_send,
+            crate::claude_session::claude_session_control,
+            crate::claude_session::claude_session_respond,
+            crate::claude_session::claude_session_close,
+            crate::codex_session::codex_session_start,
+            crate::usage_quota::usage_quota_query,
+            crate::codex_session::codex_session_request,
+            crate::codex_session::codex_session_respond,
+            crate::codex_session::codex_session_close,
+            crate::dsh_session::dsh_session_start,
+            crate::dsh_session::dsh_session_request,
+            crate::dsh_session::dsh_session_set_preset,
+            crate::dsh_session::dsh_session_respond,
+            crate::dsh_session::dsh_session_close,
+            crate::dsh_session::dsh_session_history,
             crate::fonts::list_system_fonts,
+            agent_bridge_ready,
+            crate::agent::agent_get_model,
+            crate::agent_modes::agent_get_work_modes,
+            crate::agent_modes::agent_set_work_mode,
+            crate::agent_sentinel::agent_sentinel_report,
+            crate::agent::agent_save_model,
+            crate::agent::agent_get_english_delegation,
+            crate::agent::agent_set_english_delegation,
+            crate::agent::agent_get_conversation,
+            crate::agent::agent_list_conversations,
+            crate::agent::agent_new_conversation,
+            crate::agent::agent_send_message,
+            crate::agent::agent_cancel,
+            crate::agent::agent_resolve_tool,
+            crate::agent::agent_tool_is_pending,
+            crate::agent::agent_validate_directory,
+            crate::agent::agent_create_directory,
+            crate::agent_workspace::agent_workspace_tool,
+            crate::channels::channel_get_settings,
+            crate::channels::channel_connect_telegram,
+            crate::channels::channel_disconnect,
+            crate::channels::channel_weixin_start,
+            crate::channels::channel_weixin_poll,
             pick_folder,
             window_minimize,
+            play_notify_sound,
             window_maximize,
             window_close,
             show_main_window,
@@ -5921,12 +6204,15 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             set_session_active,
             get_native_history,
             get_message_heatmap,
+            crate::usage_stats::get_usage_statistics,
             read_chat_session,
             read_chat_navigation,
             get_terminal_session_token,
             bind_mobile_chat,
             check_network_port,
             check_tools_installed,
+            crate::cli_updates::check_cli_update,
+            crate::cli_updates::update_cli,
             detect_shells,
             crate::tools::list_tools,
             maintain_tool_integration,
@@ -5951,21 +6237,43 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             save_password,
             load_password,
             delete_password,
+            computer_name,
             open_url,
             download_and_install_update,
             get_tool_config,
             get_all_tool_configs,
             set_tool_config,
+            crate::tool_memory::read_tool_memory,
+            crate::tool_memory::save_tool_memory,
+            crate::tool_skills::get_tool_skills,
+            crate::tool_skills::search_tool_skills,
+            crate::tool_skills::get_tool_skill_description,
+            crate::tool_skills::install_tool_skill,
+            crate::tool_skills::remove_tool_skill,
+            crate::tool_skills::check_tool_skill_updates,
+            crate::tool_control::get_tool_control,
+            crate::tool_control::check_tool_control,
+            crate::tool_control::install_browser_control,
+            crate::tool_control::set_tool_control,
+            crate::orchestration::orchestration_get,
+            crate::orchestration::orchestration_set_agent,
+            crate::orchestration::orchestration_sync,
+            crate::orchestration::orchestration_close_group,
+            crate::orchestration::orchestration_remove_worker,
+            crate::orchestration::orchestration_restore_worker,
+            crate::orchestration::orchestration_detach_worker,
+            crate::orchestration::orchestration_pending,
+            crate::orchestration::orchestration_resolve,
             crate::git::git_changes,
+            crate::git_project_status::git_project_status,
             crate::git::git_show_file,
             crate::git::git_init,
             crate::git::git_capture_baseline,
             crate::git::git_commit_files,
         ])
         .setup(|app| {
-            // Remove Coffee status hooks/plugins left by older releases.
-            // Current integrations are read-only terminal/title parsers.
-            crate::hook_installer::cleanup_all();
+            // Presentation and npm-bin maintenance never modifies status hooks.
+            crate::hook_installer::maintain_all();
 
             // Paired phones share desktop sessions through the outbound relay.
             // Initialize its state and message queue without a local listener.
@@ -6101,6 +6409,9 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             }
 
             if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                crate::claude_session::shutdown(&app_handle.state::<crate::claude_session::ClaudeSessions>());
+                crate::codex_session::shutdown(&app_handle.state::<crate::codex_session::CodexSessions>());
+                crate::dsh_session::shutdown(&app_handle.state::<crate::dsh_session::DshSessions>());
                 let state = app_handle.state::<AppState>();
                 let mut n = 0usize;
                 if let Ok(mut map) = state.terminal_session.lock() {
@@ -6754,6 +7065,29 @@ mod tests {
     }
 
     #[test]
+    fn session_git_metadata_survives_history_parsing_and_serialization() {
+        let path = std::env::temp_dir().join(format!("coffee-session-git-{}.jsonl", uuid::Uuid::new_v4()));
+        write_jsonl(&path, &[
+            r#"{"type":"user","gitBranch":"feature/one","cwd":"D:/project","message":{"role":"user","content":"Review this change"}}"#,
+            r#"{"type":"pr-link","prUrl":"https://github.com/owner/repo/pull/42"}"#,
+            r#"{"type":"assistant","gitBranch":"main","message":{"role":"assistant","content":[]}}"#,
+        ]);
+        let session = parse_agent_jsonl(&path, "claude", &std::collections::HashMap::new()).unwrap();
+        let restored: SavedSession = serde_json::from_value(serde_json::to_value(&session).unwrap()).unwrap();
+        let context = restored.git_context.unwrap();
+        assert_eq!(context.branch.as_deref(), Some("main"));
+        assert_eq!(context.pull_requests, ["https://github.com/owner/repo/pull/42"]);
+        write_jsonl(&path, &[
+            r#"{"type":"session_meta","payload":{"id":"one","cwd":"D:/project","git":{"branch":"main"}}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review https://github.com/owner/repo/pull/43"}]}}"#,
+        ]);
+        let context = parse_codex_session_jsonl(&path).unwrap().git_context.unwrap();
+        assert_eq!(context.branch.as_deref(), Some("main"));
+        assert_eq!(context.pull_requests, ["https://github.com/owner/repo/pull/43"]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn drops_pure_compaction_subtask_session() {
         let dir = std::env::temp_dir().join(format!("coffee-cli-compact-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -6851,6 +7185,7 @@ mod tests {
             created_at: None,
             file_path: None,
             turn_count: None,
+            git_context: None,
         };
         let mut sessions = vec![row("codex", "t1"), row("codex", "unnamed"), row("claude", "t1")];
         apply_codex_thread_names(&home.join(".codex/sessions"), &mut sessions);
@@ -6908,6 +7243,10 @@ mod tests {
 #[cfg(test)]
 #[path = "server/history_cache_tests.rs"]
 mod history_cache_tests;
+
+#[cfg(test)]
+#[path = "server/opencode_tests.rs"]
+mod opencode_tests;
 
 #[cfg(test)]
 #[path = "server/pty_resize_tests.rs"]

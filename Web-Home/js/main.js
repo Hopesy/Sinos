@@ -309,253 +309,193 @@ document.addEventListener("DOMContentLoaded", () => {
   initInstallationTabs();
   initI18N();
   initLangDropdown();
-  initDemoTabs();
-  initDotField();
+  initCharacterField();
 });
 
 /**
- * Dot field — uniform grid of small dots drifting downward as one sheet.
- *
- * Each dot has:
- *   - a fixed (x, y) anchor that drifts vertically at DRIFT_SPEED
- *   - a per-dot breathing phase (`bp`) so size + alpha oscillate gently
- *     out of sync with neighbors — the field "breathes" without all
- *     dots pulsing in unison
- *   - a fixed digit ("0" or "1") assigned once at creation. Within the
- *     cursor's hover region (REPEL_RADIUS) the dot smoothly morphs into
- *     its digit; outside it stays a circle.
- *   - displacement state (dispX/Y) for mouse repulsion (lerped, so dots
- *     ease back into formation when the cursor leaves)
- *
- * Performance:
- *   - ~700 cells at 1080p, single canvas, 60fps even on integrated GPU
- *   - Idle throttle: ~30fps when mouse parked offscreen + no scroll
- *   - Retina-aware (DPR backing), reduced-motion friendly (static paint)
+ * Reuses the client's character shaders: light drifts through a fixed glyph grid.
+ * Keeps the client's neutral Obsidian ink throughout the animation.
  */
-function initDotField() {
-  const canvas = document.querySelector(".dot-field");
+function initCharacterField() {
+  const canvas = document.querySelector(".character-field");
   if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  const gl = canvas.getContext("webgl2", {
+    alpha: true, antialias: false, depth: false, powerPreference: "low-power"
+  });
+  if (!gl) return;
 
-  const reduceMotion = window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const vertex = `#version 300 es
+precision highp float;
+uniform vec2 u_grid;
+uniform float u_time;
+uniform float u_flow;
+out vec2 v_uv;
+out float v_light;
 
-  const SPACING      = 32;
-  const BASE_SIZE    = 2.0;     // bigger than before (was 1.5) — user wanted 大一点
-  const REPEL_RADIUS = 130;
-  const REPEL_FORCE  = 26;
-  const LERP         = 0.18;
-  const DRIFT_SPEED  = 0.22;    // px per frame at 60fps — uniform for the whole grid
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+float curl(vec2 p) {
+  return noise(p) * 0.62 + noise(p * 2.1 + 9.0) * 0.27
+       + noise(p * 4.3 + 17.0) * 0.11;
+}
+void main() {
+  float index = float(gl_InstanceID);
+  vec2 cell = vec2(mod(index, u_grid.x), floor(index / u_grid.x));
+  vec2 corner = vec2(float(gl_VertexID % 2), float(gl_VertexID / 2));
+  vec2 position = (cell + corner) / u_grid;
+  gl_Position = vec4(position * vec2(2, -2) + vec2(-1, 1), 0, 1);
 
-  // Breathing config.
-  const BREATH_FREQ      = 0.0014;  // radians/ms — slow pulse (~4.5s period)
-  const BREATH_SIZE_AMP  = 0.35;    // px size oscillation
-  const BREATH_ALPHA_LO  = 0.65;    // alpha multiplier at trough
-  const BREATH_ALPHA_HI  = 1.00;    // alpha multiplier at crest
+  vec2 p = (cell + 0.5) * vec2(7, 14) / 230.0;
+  float t = u_time * 0.14;
+  vec2 drift = vec2(t * 0.8, -t * 0.35);
+  float eddy = curl(p * 0.72 + drift + u_flow);
+  float fold = sin(p.x * 0.8 + p.y * 0.52 + eddy * 5.0 - t * 1.7);
+  float ribbon = pow(max(0.0, 1.0 - abs(fold) * 3.2), 2.0);
+  float detail = curl(p * 1.8 - drift * 0.7 + 24.0);
+  float body = smoothstep(0.33, 0.76, eddy) * (0.3 + detail * 0.7);
+  v_light = clamp(0.004 + body * 0.07 + ribbon * detail * 0.42, 0.0, 0.58);
+  v_light *= smoothstep(0.0, 1.5, u_time);
 
-  // Digit morph: how much of the "hot" influence triggers the morph.
-  // morph = clamp(hot / MORPH_THRESHOLD, 0, 1) — used as the digit's
-  // alpha and as 1-alpha for the circle (crossfade).
-  const MORPH_THRESHOLD = 0.55;
+  // Only scattered glyphs change at once; the wind carries light rather than
+  // scrolling whole columns of text down the screen.
+  float tick = floor(u_time * 0.65 + hash(cell) * 60.0);
+  float glyph = floor(hash(cell + vec2(tick, 1.0)) * 62.0);
+  vec2 tile = vec2(mod(glyph, 16.0), floor(glyph / 16.0));
+  v_uv = (tile + corner) / vec2(16, 4);
+}`;
+  const fragment = `#version 300 es
+precision mediump float;
+uniform sampler2D u_atlas;
+uniform vec4 u_ink;
+in vec2 v_uv;
+in float v_light;
+out vec4 color;
+void main() {
+  float alpha = min(0.72, texture(u_atlas, v_uv).a * v_light * u_ink.a);
+  color = vec4(u_ink.rgb * alpha, alpha);
+}`;
+  const shaders = [];
+  const program = gl.createProgram();
+  for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
+    const shader = gl.createShader(type);
+    shaders.push(shader);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    gl.attachShader(program, shader);
+  }
+  gl.linkProgram(program);
+  shaders.forEach(shader => gl.deleteShader(shader));
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program);
+    return;
+  }
+  gl.useProgram(program);
 
-  // Cifrão (the double-barred "$") drawn as vector paths, so the value motif
-  // reads as a bold, standard money glyph — not the thin single-bar "$" a text
-  // font produces. Source: Wikimedia Commons "Double-barred dollar sign.svg"
-  // (the S stroke + the two vertical bars), 500×500 viewBox centered ~(250,249).
-  const CIFRAO_S    = new Path2D("m119,312c4,70 58,111 130,110 78,1 129-34 125-101-11-61-78-69-122-79-48-16-118-16-117-89-1-53 59-84 117-78 60,1 111,32 112,96");
-  const CIFRAO_BARS = new Path2D("m205,17v464m90,0V17");
-  const CIFRAO_VB = 500, CIFRAO_CX = 250, CIFRAO_CY = 249;
-  const GLYPH_PX  = 12;  // on-screen box (px) the 500-unit viewBox maps to
+  const atlas = document.createElement("canvas");
+  atlas.width = 16 * 28;
+  atlas.height = 4 * 56;
+  const ink = atlas.getContext("2d");
+  ink.font = `38px ${getComputedStyle(document.documentElement).getPropertyValue("--font-mono")}`;
+  ink.textAlign = "center";
+  ink.textBaseline = "middle";
+  ink.fillStyle = "#fff";
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (let i = 0; i < alphabet.length; i++) {
+    ink.fillText(alphabet[i], (i % 16) * 28 + 14, Math.floor(i / 16) * 56 + 28);
+  }
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+  const uniforms = Object.fromEntries(
+    ["grid", "time", "flow", "ink"].map(name =>
+      [name, gl.getUniformLocation(program, `u_${name}`)]
+    )
+  );
 
-  let cells = [];
-  let trackLength = 0;   // cyclic Y range — set in resize() to an exact
-                         // multiple of SPACING so wrap preserves uniform
-                         // row pitch (no "narrow seam" at the wrap point)
-  let dpr = Math.max(1, window.devicePixelRatio || 1);
-  let viewW = 0, viewH = 0;
-
-  let mx = -9999, my = -9999;
-  let lastMoveTs = 0;
-  let lastScrollTs = 0;
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let width, height, columns, rows;
+  let time = 0;
+  let flow = 1, targetFlow = 1;
+  let lastTick = performance.now();
+  let frame = 0;
+  let lost = false;
 
   function resize() {
-    viewW = window.innerWidth;
-    viewH = window.innerHeight;
-    dpr = Math.max(1, window.devicePixelRatio || 1);
-    canvas.width  = Math.floor(viewW * dpr);
-    canvas.height = Math.floor(viewH * dpr);
-    canvas.style.width  = viewW + "px";
-    canvas.style.height = viewH + "px";
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // We want cells spanning [-SPACING, viewH+SPACING] (one buffer row
-    // above and below the viewport). Round the row count UP to the nearest
-    // integer and use exactly that many rows; trackLength = nRows*SPACING.
-    // This guarantees that when the bottom-most cell wraps to the top,
-    // it lands exactly one SPACING above its neighbor — no narrow seam.
-    const nRows = Math.ceil((viewH + 2 * SPACING) / SPACING);
-    trackLength = nRows * SPACING;
-
-    cells = [];
-    for (let row = 0; row < nRows; row++) {
-      const y = -SPACING + row * SPACING;
-      for (let x = SPACING / 2; x < viewW; x += SPACING) {
-        cells.push({
-          x: x,
-          y: y,
-          dispX: 0,
-          dispY: 0,
-          bp: Math.random() * Math.PI * 2,
-        });
-      }
-    }
+    width = window.innerWidth;
+    height = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5, Math.sqrt(4000000 / (width * height)));
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const cell = Math.max(8, Math.sqrt(width * height / 32000));
+    columns = Math.max(1, Math.floor(width / cell));
+    rows = Math.max(1, Math.floor(height / (cell * 2)));
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    if (motion.matches) draw();
   }
-  resize();
+
+  function draw() {
+    if (lost) return;
+    const dark = document.documentElement.dataset.theme === "dark";
+    const tone = dark ? 0.55 : 0.315;
+    gl.uniform2f(uniforms.grid, columns, rows);
+    gl.uniform1f(uniforms.time, motion.matches ? 12 : time);
+    gl.uniform1f(uniforms.flow, flow);
+    // The full-page dark backdrop needs more contrast than the client surface.
+    gl.uniform4f(uniforms.ink, tone, tone, tone, dark ? 2.4 : 0.72);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, columns * rows);
+  }
+
+  function animate(now) {
+    frame = 0;
+    if (lost || document.hidden || motion.matches) return;
+    const delta = now - lastTick;
+    if (delta >= 32) {
+      lastTick = now;
+      const elapsed = Math.min(100, delta);
+      time += elapsed / 1000;
+      flow += (targetFlow - flow) * (1 - Math.exp(-elapsed / 1200));
+      draw();
+    }
+    frame = requestAnimationFrame(animate);
+  }
+
+  function resume() {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    if (lost || document.hidden) return;
+    lastTick = performance.now();
+    draw();
+    if (!motion.matches) frame = requestAnimationFrame(animate);
+  }
+
+  // Gently steer the existing ribbons without adding light or replacing glyphs.
+  window.addEventListener("pointerdown", () => {
+    if (!lost && !motion.matches) targetFlow += 0.45;
+  }, { capture: true, passive: true });
   window.addEventListener("resize", resize);
-
-  document.addEventListener("mousemove", (e) => {
-    mx = e.clientX;
-    my = e.clientY;
-    lastMoveTs = performance.now();
-  }, { passive: true });
-
-  document.addEventListener("mouseleave", () => {
-    mx = -9999;
-    my = -9999;
+  document.addEventListener("visibilitychange", resume);
+  motion.addEventListener("change", resume);
+  new MutationObserver(() => {
+    if (!document.hidden) draw();
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  canvas.addEventListener("webglcontextlost", () => {
+    lost = true;
+    cancelAnimationFrame(frame);
+    canvas.style.visibility = "hidden";
   });
-
-  document.addEventListener("scroll", () => {
-    lastScrollTs = performance.now();
-  }, { passive: true });
-
-  const root = document.documentElement;
-  const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
-
-  let lastFrameTs = performance.now();
-
-  function frame() {
-    const now = performance.now();
-    const dt  = Math.min(48, now - lastFrameTs);
-    lastFrameTs = now;
-    const dtScale = dt / 16.667;
-
-    const colBaseRGB = parseRGBA(token("--dot-color")     || "rgba(0,0,0,0.16)");
-    const colHotRGB  = parseRGBA(token("--dot-color-hot") || "rgba(196,149,106,0.9)");
-
-    ctx.clearRect(0, 0, viewW, viewH);
-    ctx.lineCap  = "round";
-    ctx.lineJoin = "round";
-
-    for (const c of cells) {
-      // Uniform downward drift; wrap by exactly trackLength so the seam
-      // preserves row pitch (see resize() comment).
-      c.y += DRIFT_SPEED * dtScale;
-      if (c.y > trackLength - SPACING) {
-        c.y -= trackLength;
-      }
-
-      // Mouse hot factor (0..1) and repulsion vector.
-      let hot = 0;
-      let displaceX = 0, displaceY = 0;
-      const dx = mx - c.x;
-      const dy = my - c.y;
-      const dist2 = dx * dx + dy * dy;
-      if (dist2 < REPEL_RADIUS * REPEL_RADIUS) {
-        const dist = Math.sqrt(dist2) || 0.0001;
-        const factor = 1 - dist / REPEL_RADIUS;
-        hot = factor * factor;
-        displaceX = -(dx / dist) * hot * REPEL_FORCE;
-        displaceY = -(dy / dist) * hot * REPEL_FORCE;
-      }
-
-      c.dispX += (displaceX - c.dispX) * LERP;
-      c.dispY += (displaceY - c.dispY) * LERP;
-
-      const fx = c.x + c.dispX;
-      const fy = c.y + c.dispY;
-
-      // Breathing: per-dot phase-offset sine drives size + alpha.
-      const breath01 = (Math.sin(now * BREATH_FREQ + c.bp) + 1) * 0.5; // 0..1
-      const sizeR    = BASE_SIZE + (breath01 - 0.5) * 2 * BREATH_SIZE_AMP;
-      const breathAlpha = BREATH_ALPHA_LO + breath01 * (BREATH_ALPHA_HI - BREATH_ALPHA_LO);
-
-      // Digit morph: crossfade between circle and digit based on hot.
-      const morph = Math.max(0, Math.min(1, hot / MORPH_THRESHOLD));
-
-      // Color interpolation between cool (base) and warm (hot) tokens.
-      const useColor = morph > 0.02 ? mixRGB(colBaseRGB, colHotRGB, hot) : colBaseRGB;
-
-      // Draw circle, faded out as morph approaches 1.
-      const circleA = (1 - morph) * breathAlpha;
-      if (circleA > 0.02) {
-        ctx.fillStyle = withAlpha(useColor, circleA);
-        ctx.beginPath();
-        ctx.arc(fx, fy, sizeR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Draw the cifrão ($), faded in as morph rises. Stroke the S and the two
-      // vertical bars, scaled from the 500-unit viewBox and centered at (fx,fy).
-      if (morph > 0.05) {
-        const gs = GLYPH_PX / CIFRAO_VB;
-        ctx.save();
-        ctx.translate(fx, fy);
-        ctx.scale(gs, gs);
-        ctx.translate(-CIFRAO_CX, -CIFRAO_CY);
-        ctx.strokeStyle = withAlpha(useColor, morph);
-        ctx.lineWidth = 60;
-        ctx.stroke(CIFRAO_S);
-        ctx.lineWidth = 48;
-        ctx.stroke(CIFRAO_BARS);
-        ctx.restore();
-      }
-    }
-
-    const idle = (now - lastMoveTs) > 1200 && (now - lastScrollTs) > 1200 && mx < 0;
-    if (idle) {
-      setTimeout(() => requestAnimationFrame(frame), 16);
-    } else {
-      requestAnimationFrame(frame);
-    }
-  }
-
-  function paintStatic() {
-    const colBase = token("--dot-color") || "rgba(0,0,0,0.16)";
-    ctx.clearRect(0, 0, viewW, viewH);
-    ctx.fillStyle = colBase;
-    for (const c of cells) {
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, BASE_SIZE, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // Parse "rgba(r,g,b,a)" into [r, g, b, a]; falls back to opaque black.
-  function parseRGBA(s) {
-    const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/);
-    if (!m) return [0, 0, 0, 1];
-    return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3]), m[4] ? parseFloat(m[4]) : 1];
-  }
-  // Lerp two parsed-RGBA arrays. Returns a new array.
-  function mixRGB(a, b, t) {
-    return [
-      Math.round(a[0] + (b[0] - a[0]) * t),
-      Math.round(a[1] + (b[1] - a[1]) * t),
-      Math.round(a[2] + (b[2] - a[2]) * t),
-      a[3] + (b[3] - a[3]) * t,
-    ];
-  }
-  // Apply an alpha multiplier to a parsed-RGBA array → "rgba(...)" string.
-  function withAlpha(rgb, mul) {
-    return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(rgb[3] * mul).toFixed(3)})`;
-  }
-
-  if (reduceMotion) {
-    paintStatic();
-  } else {
-    requestAnimationFrame(frame);
-  }
+  resize();
+  resume();
 }
 
 const T_TYPING_SPEED = 100;
@@ -797,9 +737,6 @@ function renderI18N() {
       opt.classList.toggle("selected", opt.dataset.lang === currentLang);
     });
   }
-
-  // Refresh demo tab labels and active description
-  refreshDemoLang();
 
   // Refresh the install command for the current tab (direct call, no .click())
   const activeTab = document.querySelector(".tab-btn.active");

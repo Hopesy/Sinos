@@ -1,3 +1,5 @@
+import { getTabActions } from '../../lib/tab-actions';
+import { supportsConversationTool } from '../../lib/chat-tools';
 // ActiveGambit.tsx — app-level host for the docked compose panel.
 //
 // Gambit is a global overlay docked at the bottom of the center panel, and
@@ -11,18 +13,22 @@
 // - Hands a stable set of props to the memoized Gambit component so parent
 //   re-renders don't ripple into it.
 //
-// Visibility is global (state.gambitOpen) so the panel doesn't flicker
-// in/out when the user switches tabs. Draft content remains per-tab —
+// Terminal visibility follows state.gambitOpen; Claude always needs its composer.
+// Draft content remains per-tab —
 // switching tabs swaps what's shown inside the (still-open) panel so
 // text can't be misdirected to the wrong terminal.
 
 import { useCallback, useEffect } from 'react';
-import { useAppState, isSplitTool, paneSessionId, matchHotkeyScheme } from '../../store/app-state';
-import { getTabActions } from '../../lib/tab-actions';
-import { getFocusedPane } from '../../lib/pane-focus';
-import { supportsConversationTool } from '../../lib/chat-tools';
+import { useAppState, useAppStateRef, matchHotkeyScheme } from '../../store/app-state';
+import { sendSessionPrompt } from '../../lib/send-session-prompt';
+import { isClaudeConversation, isCodexConversation, isDshConversation } from '../../lib/chat-tools';
 import { getToolIcon } from './CenterPanel';
 import { Gambit } from './Gambit';
+import { controlClaude, useClaudeSession } from '../../lib/claude-session';
+import { interruptCodex, useCodexSession } from '../../lib/codex-session';
+import { stopDsh, useDshSession } from '../../lib/dsh-session';
+import { useOrchestration } from '../../lib/orchestration';
+import { useSessionControls } from '../../lib/session-controls';
 
 // Last path segment of a folder, Windows ("\") and POSIX ("/") safe. Local copy
 // (CenterPanel has the same helper) — tiny, not worth a shared util yet.
@@ -50,13 +56,23 @@ function remoteHost(toolData: string | undefined): string {
 
 export function ActiveGambit() {
   const { state, dispatch } = useAppState();
+  const stateRef = useAppStateRef();
+  const orchestration = useOrchestration();
   const activeId = state.activeTerminalId;
+  const controls = useSessionControls(activeId ?? '');
   const activeSession = activeId
     ? state.terminals.find(t => t.id === activeId)
     : undefined;
 
-  const gambitOpen = state.gambitOpen;
   const gambitDraft = activeSession?.gambitDraft ?? '';
+  const isClaude = isClaudeConversation(activeSession);
+  const isCodex = isCodexConversation(activeSession);
+  const isDsh = isDshConversation(activeSession);
+  const gambitOpen = isClaude || isCodex || isDsh || state.gambitOpen;
+  const claude = useClaudeSession(isClaude ? activeId ?? '' : '');
+  const codex = useCodexSession(isCodex ? activeId ?? '' : '');
+  const dshBusy = useDshSession(isDsh ? activeId ?? '' : '', s => s.busy);
+  const controlsReady = isClaude ? claude.ready : isCodex ? codex.ready : true;
   // Footer label telling the user where Send will land. Local sessions show
   // their working-folder name; SSH/WebSocket sessions show their connection
   // host, since folderPath may still contain the launchpad's previous folder.
@@ -70,8 +86,7 @@ export function ActiveGambit() {
   // Gambit target chip reads as "tool + target" (mirrors the tab's
   // icon+name pairing). null session → undefined → Gambit hides the icon.
   const toolIcon = activeSession ? getToolIcon(activeSession.tool) : undefined;
-  const canUseChat = supportsConversationTool(activeSession?.tool);
-  const viewMode = canUseChat ? (activeSession?.viewMode ?? 'terminal') : 'terminal';
+  const coordinator = activeSession?.tool === 'claude' && !activeSession.parentId && orchestration.enabled && orchestration.coordinators?.includes(activeSession.id);
 
   const handleDraftChange = useCallback((draft: string) => {
     if (!activeId) return;
@@ -82,60 +97,15 @@ export function ActiveGambit() {
     dispatch({ type: 'TOGGLE_GAMBIT' });
   }, [dispatch]);
 
-  // Route Send to the correct xterm. For a plain single-terminal tab the
-  // sessionId is just activeId. For a multi-pane tab, no xterm registers
-  // under activeId itself — each pane registers under a suffixed id and
-  // Gambit has to pick one. Two families of multi-pane tabs exist:
-  //
-  //   - Orchestrated multi-agent (`multi-agent` / `two-agent` /
-  //     `three-agent`, rendered by MultiAgentGrid) uses the `::pane-N`
-  //     suffix; backend treats that prefix as "hands-free mode" and
-  //     injects auto-approve flags.
-  //
-  //   - Independent split (`two-split` / `three-split` / `four-split`,
-  //     rendered by FourSplitGrid) uses the `::split-N` suffix; each
-  //     pane is a plain user-interactive PTY with no auto-approve.
-  //
-  // Both write to the same `pane-focus` registry on click (tab-scoped
-  // 1..N), so routing only has to pick the right prefix.
-  //
-  // If no pane has been focused yet, return false so Gambit preserves
-  // the draft rather than dropping text into the void.
-  const handleSend = useCallback((text: string): boolean => {
-    if (!activeId) return false;
-    const tool = activeSession?.tool ?? null;
-    let targetId = activeId;
-    if (isSplitTool(tool)) {
-      const paneIdx = getFocusedPane(activeId);
-      if (!paneIdx) return false;
-      targetId = paneSessionId(activeId, paneIdx, 'split');
-    }
-    const actions = getTabActions(targetId);
-    if (!actions) return false;
-    const sent = actions.paste(text);
-    if (sent && !isSplitTool(tool) && canUseChat) {
-      dispatch({ type: 'SET_CHAT_PENDING', id: activeId, pending: { text, sentAt: Date.now() } });
+  // Both single and split views target the focused real session.
+  const handleSend = useCallback(async (text: string) => {
+    const session = stateRef.current.terminals.find(tab => tab.id === activeId);
+    const sent = await sendSessionPrompt(session, text);
+    if (sent && session && supportsConversationTool(session.tool) && !isClaudeConversation(session) && !isCodexConversation(session)) {
+      dispatch({ type: 'SET_CHAT_PENDING', id: session.id, pending: { text, sentAt: Date.now() } });
     }
     return sent;
-  }, [activeId, activeSession?.tool, canUseChat, dispatch]);
-
-  const handlePause = useCallback((paused: boolean): Promise<boolean> => {
-    if (!activeId) return Promise.resolve(false);
-    const tool = activeSession?.tool ?? null;
-    let targetId = activeId;
-    if (isSplitTool(tool)) {
-      const paneIdx = getFocusedPane(activeId);
-      if (!paneIdx) return Promise.resolve(false);
-      targetId = paneSessionId(activeId, paneIdx, 'split');
-    }
-    const actions = getTabActions(targetId);
-    return actions?.setPaused(paused) ?? Promise.resolve(false);
-  }, [activeId, activeSession?.tool]);
-
-  const handleViewModeChange = useCallback((next: 'terminal' | 'chat') => {
-    if (!activeId || (next === 'chat' && !canUseChat)) return;
-    dispatch({ type: 'SET_SESSION_VIEW', id: activeId, viewMode: next });
-  }, [activeId, canUseChat, dispatch]);
+  }, [activeId, stateRef, dispatch]);
 
   // Global open/close hotkey (settings → 妙手). Registered in the CAPTURE
   // phase on document so it fires BEFORE the focused xterm's own keydown —
@@ -174,14 +144,12 @@ export function ActiveGambit() {
     return () => document.removeEventListener('keydown', onKeyDown, true);
   }, [scheme, dispatch]);
 
-  // Persist the open/closed choice across restarts. Gambit defaults to open on
-  // first launch (see app-state initializer) but the user's toggle sticks —
-  // cc-gambit-open is the single source that initializer reads back.
+  // Persist the open/closed choice across restarts via cc-gambit-open.
   useEffect(() => {
     try { localStorage.setItem('cc-gambit-open', state.gambitOpen ? '1' : '0'); } catch { /* optional preference */ }
   }, [state.gambitOpen]);
 
-  if (!gambitOpen || !activeId) return null;
+  if (!gambitOpen || !activeId || state.editorTabActive || state.agentPageActive || state.diffTabActive || state.usageOpen || state.toolSettingsOpen) return null;
 
   return (
     <Gambit
@@ -189,14 +157,25 @@ export function ActiveGambit() {
       draft={gambitDraft}
       workspaceName={workspaceName}
       toolIcon={toolIcon}
-      canUseChat={canUseChat}
-      viewMode={viewMode}
-      onViewModeChange={handleViewModeChange}
+      tool={activeSession?.tool && activeSession.tool !== 'remote' ? activeSession.tool : undefined}
+      cwd={activeSession?.folderPath ?? undefined}
       onDraftChange={handleDraftChange}
       onClose={handleClose}
       onSend={handleSend}
+      canUseChat={!isClaude && !isCodex && !isDsh && supportsConversationTool(activeSession?.tool)}
+      viewMode={activeSession?.viewMode ?? 'terminal'}
+      onViewModeChange={viewMode => dispatch({ type: 'SET_SESSION_VIEW', id: activeId, viewMode })}
       agentStatus={activeSession?.agentStatus}
-      onTogglePause={handlePause}
+      onTogglePause={isClaude || isCodex || isDsh ? undefined : (paused => getTabActions(activeId)?.setPaused(paused) ?? Promise.resolve(false))}
+      orchestration={coordinator}
+      computer={controlsReady && controls.includes('computer')}
+      browser={controlsReady && controls.includes('browser')}
+      claude={isClaude}
+      codex={isCodex}
+      dsh={isDsh}
+      attachable={activeSession?.tool !== 'remote'}
+      running={isClaude ? claude.busy : isCodex ? codex.busy : isDsh && dshBusy}
+      onCancel={isDsh ? () => { void stopDsh(activeId); } : isCodex ? () => { void interruptCodex(activeId); } : isClaude ? () => { void controlClaude(activeId, { subtype: 'interrupt' }).catch(() => {}); } : undefined}
       leftPanelHidden={state.leftPanelHidden}
       rightPanelHidden={state.rightPanelHidden}
     />

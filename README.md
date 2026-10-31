@@ -61,6 +61,12 @@ Sinos CLI can launch **any** command-line agent — but the ones below get deepe
 
 *T1 and T2 CLIs ship today; T3 integrations are rolling in.*
 
+Muse Code launches `muse` in your selected directory. Its session history and heatmap are not integrated into Sinos CLI yet.
+
+### Desktop & Terminal Modes
+
+**Claude Code and Codex CLI** offer `Desktop / Terminal` tabs on their launch cards. Terminal is the default in Sinos to retain shared mobile sessions; saved preferences are preserved. Desktop mode displays conversations, tool activity, permission/input cards, and conversation navigation while staying connected to the native background session. Coffee Agent can read and operate that same desktop-mode session without opening a separate terminal.
+
 ---
 
 ### Who is it for?
@@ -82,15 +88,11 @@ Sinos CLI removes both barriers at once: **no terminal expertise required, no En
 
 Sinos CLI ships with multiple built-in themes. Switch between them instantly — the entire interface, including the active terminal session, updates live. No restart, no flicker. Whether you prefer a dark workspace late at night or a lighter tone during a presentation, one click is all it takes.
 
-![Theme Switching](screenshot/theme-switching.gif)
-
 ---
 
 #### Task Board
 
 Your agent works fast. Keep up with it. The built-in task board lets you create and organize tasks into **To-Do / In Progress / Done** columns — right in the sidebar while the agent runs. No external tool, no tab switching. Everything the agent is doing and everything you still need it to do, visible at a glance.
-
-![Task Board](screenshot/task-board.gif)
 
 ---
 
@@ -114,14 +116,13 @@ Run multiple agents and terminals in parallel, each in its own tab with its own 
 
 The Sinos CLI app ships with a fully localized UI in 11 languages — menus, dialogs, shortcuts, and every corner of the workspace speak English, 简体中文, 繁體中文, 日本語, 한국어, Español, Français, Deutsch, Português, Русский, or Tiếng Việt. Switch anytime from the settings.
 
-![11 Languages](screenshot/multilingual.png)
-
 ---
 
 ### Key Features
 
 | Feature | Description |
 |---|---|
+| **Desktop Conversations** | Claude Code and Codex CLI support Desktop or Terminal launch modes, with native background sessions and same-session Coffee Agent control |
 | **Multi-Tab Sessions** | Run multiple agents side by side, each with its own independent process and context |
 | **Session History** | Every session auto-saved and searchable; resume any conversation from where you left off |
 | **Built-In File Explorer** | Browse your workspace, copy paths, drag references directly into your prompt |
@@ -266,6 +267,8 @@ Sinos CLI 是專為 AI CLI Agent 打造的**原生桌面伴侶應用**，支援 
 
 Sinos CLI 同時消除兩道門檻：**不需要終端經驗，不需要懂英語**。
 
+Claude Code 與 Codex CLI 支援 `Desktop / Terminal` 兩種啟動方式。既有的使用者、第三方與舊版 Coffee CLI 狀態 Hook 及相關外掛會原樣保留，不會安裝、遷移或清理。
+
 **核心功能：** 即時終端翻譯 · 多 Tab 會話 · 會話歷史 · 內建檔案瀏覽器 · 任務板 · Agent 安裝器 · 遠端終端
 
 原生支援 11 種語言，開箱即用。
@@ -281,6 +284,8 @@ Sinos CLI ist eine **native Desktop-Begleit-App** für KI-CLI-Agenten — Claude
 Keine Web-App. Kein Electron-Wrapper. Eine **echte native Desktop-Anwendung**, gebaut mit Tauri (Rust-Kern).
 
 Sinos CLI beseitigt beide Hürden gleichzeitig: **Keine Terminal-Kenntnisse erforderlich, kein Englisch erforderlich.**
+
+Claude Code und Codex CLI unterstützen die Startmodi `Desktop / Terminal`. Bestehende Status-Hooks und Hook-Plugins von Nutzern, Drittanbietern und älteren Coffee-CLI-Versionen bleiben erhalten; sie werden weder installiert noch migriert oder entfernt.
 
 **Hauptfunktionen:** Echtzeit-Terminal-Übersetzung · Multi-Tab-Sitzungen · Sitzungsverlauf · Datei-Explorer · Aufgaben-Board · Agent-Installer · Remote-Terminal
 
@@ -298,6 +303,8 @@ No es una aplicación web. No es un envoltorio de Electron. Es una **aplicación
 
 Sinos CLI elimina ambas barreras a la vez: **sin necesidad de experiencia en terminal, sin necesidad de saber inglés.**
 
+Claude Code y Codex CLI admiten los modos `Desktop / Terminal`. Se conservan los hooks de estado y sus plugins existentes, incluidos los del usuario, de terceros y de versiones anteriores de Coffee CLI; no se instalan, migran ni eliminan.
+
 **Funciones principales:** Traducción de terminal en tiempo real · Sesiones multi-pestaña · Historial de sesiones · Explorador de archivos · Tablero de tareas · Instalador de agentes · Terminal remota
 
 10 idiomas compatibles de serie.
@@ -313,6 +320,8 @@ Sinos CLI est une **application de bureau native** conçue pour les agents IA en
 Ce n'est pas une application web. Pas un wrapper Electron. Une **vraie application de bureau native**, construite avec Tauri (cœur Rust).
 
 Sinos CLI supprime les deux barrières à la fois : **aucune expertise terminal requise, aucune connaissance de l'anglais requise.**
+
+Claude Code et Codex CLI proposent les modes `Desktop / Terminal`. Les hooks de statut et leurs plugins existants, qu’ils proviennent de l’utilisateur, de tiers ou d’anciennes versions de Coffee CLI, sont conservés ; ils ne sont ni installés, ni migrés, ni supprimés.
 
 **Fonctionnalités clés :** Traduction de terminal en temps réel · Sessions multi-onglets · Historique des sessions · Explorateur de fichiers · Tableau de tâches · Installeur d'agents · Terminal distant
 
@@ -330,6 +339,8 @@ Sinos CLI は、AI CLI エージェント（Claude Code、OpenAI Codex など）
 
 Sinos CLI はその2つのハードルを同時に取り除きます：**ターミナルの知識不要、英語不要**。
 
+Claude Code と Codex CLI は `Desktop / Terminal` の両モードに対応しています。ユーザー、サードパーティー、旧バージョンの Coffee CLI による既存のステータス Hook と関連プラグインはそのまま保持し、インストール・移行・削除は行いません。
+
 **主な機能：** リアルタイム翻訳 · マルチタブセッション · セッション履歴 · ファイルエクスプローラー · タスクボード · エージェントインストーラー · リモートターミナル
 
 11言語をネイティブサポート。
@@ -345,6 +356,8 @@ Sinos CLI는 AI CLI 에이전트(Claude Code, OpenAI Codex 등)를 위한 **네�
 웹 앱도 아니고 Electron 래퍼도 아닙니다. Tauri(Rust 코어)로 구축된 **진정한 네이티브 데스크톱 앱**입니다.
 
 Sinos CLI는 두 가지 장벽을 동시에 제거합니다: **터미널 지식 불필요, 영어 불필요**.
+
+Claude Code와 Codex CLI는 `Desktop / Terminal` 실행 모드를 지원합니다. 사용자, 타사 도구 및 이전 Coffee CLI 버전의 기존 상태 Hook과 관련 플러그인은 그대로 보존하며 설치, 이전 또는 삭제하지 않습니다.
 
 **주요 기능:** 실시간 번역 · 멀티탭 세션 · 세션 히스토리 · 파일 탐색기 · 작업 보드 · 에이전트 설치 관리자 · 원격 터미널
 
@@ -362,6 +375,8 @@ Não é um aplicativo web. Não é um wrapper Electron. É um **verdadeiro aplic
 
 Sinos CLI elimina as duas barreiras ao mesmo tempo: **sem necessidade de experiência em terminal, sem necessidade de saber inglês.**
 
+Claude Code e Codex CLI oferecem os modos `Desktop / Terminal`. Os hooks de estado e plugins existentes do utilizador, de terceiros e de versões anteriores do Coffee CLI são preservados, sem instalação, migração ou remoção.
+
 **Recursos principais:** Tradução de terminal em tempo real · Sessões multi-aba · Histórico de sessões · Explorador de arquivos · Quadro de tarefas · Instalador de agentes · Terminal remoto
 
 10 idiomas suportados nativamente.
@@ -377,6 +392,8 @@ Sinos CLI — это **нативное десктопное приложени�
 Это не веб-приложение. Не обёртка на Electron. Настоящее **нативное десктопное приложение**, построенное на Tauri (ядро на Rust).
 
 Sinos CLI устраняет оба барьера одновременно: **не нужно знать терминал, не нужно знать английский**.
+
+Claude Code и Codex CLI поддерживают режимы `Desktop / Terminal`. Существующие хуки состояния и связанные плагины пользователя, сторонних инструментов и прежних версий Coffee CLI сохраняются без установки, переноса или удаления.
 
 **Ключевые функции:** Перевод терминала в реальном времени · Мультивкладочные сессии · История сессий · Файловый проводник · Доска задач · Установщик агентов · Удалённый терминал
 

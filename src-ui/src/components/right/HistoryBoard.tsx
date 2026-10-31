@@ -1,36 +1,50 @@
-import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useState, useEffect, useMemo, useRef, useSyncExternalStore, useId, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { InlineSvgIcon } from '../InlineSvgIcon';
 import { useT } from '../../i18n/useT';
-import { resolveDiffContext, useAppState, type ToolType } from '../../store/app-state';
-import { isTauri } from '../../tauri';
+import { useAppState, useAppStateRef, type TerminalSession, type ToolType } from '../../store/app-state';
+import { useSessionSplitDrag, type SessionSplitPlacement } from '../../lib/use-session-split-drag';
+import { splitSessionIds } from '../../lib/session-split-layout';
+import { commands, isTauri } from '../../tauri';
 import type { SavedSession } from '../../tauri';
 import { getToolDisplayName } from '../../lib/tool-info';
+import { useAgentClient, openAgentConversation, refreshAgentConversations } from '../../lib/agent-client';
 import {
   prefetchHistory,
+  refreshHistory,
   subscribeHistory,
   getHistorySnapshot,
+  sortByMtime,
 } from '../../lib/history-cache';
 import { subscribeHidden, getHiddenSnapshot, hideSession } from '../../lib/hidden-sessions';
 import { subscribePinned, getPinnedSnapshot } from '../../lib/pinned-sessions';
 import { subscribeRenamed, getRenamedSnapshot, setCustomName } from '../../lib/renamed-sessions';
 import { SessionContextMenu, type SessionCtxMenuState } from './SessionContextMenu';
 import { useTextContextMenu } from '../../lib/use-text-context-menu';
+import { gitFolderKey, gitStatusKey, useProjectGitStatuses, type GitStatusTarget } from '../../lib/project-git-status';
+import { HistoryGitMark } from './HistoryGitMark';
+import { receiveOrchestration, useOrchestration, workerState, type OrchestrationTask } from '../../lib/orchestration';
+import { RemoveWorkerDialog } from '../center/RemoveWorkerDialog';
+import '../../styles/orchestration.css';
+import { getUnreadSessionReplies, subscribeSessionReplies, sessionReplyKey } from '../../lib/session-replies';
 // hermes/opencode PNG assets live in src/icons-inline/ so the Launchpad
 // can `?inline`-import them as data URIs and bypass the <img> async-decode
 // flash. We pull the same data URIs here so HistoryBoard doesn't need a
 // separate file copy on disk.
+import CLAUDE_DATA_URL from '../../icons-inline/claude.svg?inline';
+import CODEX_SVG from '../../icons-inline/codex.svg?raw';
+import MIMOCODE_DATA_URL from '../../icons-inline/mimocode.png?inline';
 import HERMES_DATA_URL from '../../icons-inline/hermes.png?inline';
 import OPENCODE_DATA_URL from '../../icons-inline/opencode.png?inline';
 // Kimi Code (PNG squircle) — fixed-color brand mark, ?inline data URI.
 import KIMICODE_DATA_URL from '../../icons-inline/kimicode.png?inline';
-// Pi is a MONOCHROME currentColor mark (its <style> sets fill: currentColor),
-// so it must render as an INLINE SVG (not an <img>) to inherit the surrounding
-// text color — otherwise currentColor resolves to black and the mark is
-// invisible on dark themes. CenterPanel does the same (?raw + inlineSvgIcon).
+import DSH_DATA_URL from '../../icons-inline/dsh.png?inline';
+// Pi is a fixed-color brand mark, rendered as an INLINE SVG so it shares the
+// synchronous rendering path used by CenterPanel (?raw + inlineSvgIcon).
 import PI_SVG from '../../icons-inline/pi.svg?raw';
 import OMP_SVG from '../../icons-inline/omp.svg?raw';
-// Grok Build - same monochrome currentColor mark treatment as Pi: inline SVG
-// so it inherits the surrounding text color across light/dark themes.
+// Grok Build - monochrome currentColor mark rendered inline so it inherits
+// the surrounding text color across light/dark themes.
 import GROK_SVG from '../../icons-inline/grok.svg?raw';
 // OpenClaw (lobster mascot) — full-color brand mark (red gradient + teal
 // eyes), NOT currentColor, so it renders as an INLINE SVG rather than <img>;
@@ -41,64 +55,57 @@ import OPENCLAW_SVG from '../../icons-inline/openclaw.svg?raw';
 // CodeBuddy — same full-color inline treatment as OpenClaw (gradient squircle
 // with its own fills, no currentColor).
 import CODEBUDDY_SVG from '../../icons-inline/codebuddy.svg?raw';
+import CURSOR_SVG from '../../icons-inline/cursor.svg?raw';
+import COPILOT_SVG from '../../icons-inline/copilot.svg?raw';
+import CLINE_SVG from '../../icons-inline/cline.svg?raw';
+import KIRO_SVG from '../../icons-inline/kiro.svg?raw';
+import MINIMAX_SVG from '../../icons-inline/minimax.svg?raw';
+import ANTIGRAVITY_SVG from '../../icons-inline/antigravity.svg?raw';
+import AIDER_DATA_URL from '../../icons-inline/aider.png?inline';
+import CRUSH_DATA_URL from '../../icons-inline/crush.png?inline';
+import MUSE_DATA_URL from '../../icons-inline/muse.png?inline';
+import GOOSE_DATA_URL from '../../icons-inline/goose.png?inline';
 import './HistoryBoard.css';
 
-// Tool icons — claude/codex/qwen/antigravity load via <img src=public/...>
+// Tool icons — qwen loads via <img src=public/...>
 // because HistoryBoard mounts once at app start and never re-mounts on tab
-// switch, so the one-time decode flash is invisible. Hermes/OpenCode are
-// PNG-inlined to share the same bytes the Launchpad uses (no duplicate files).
-//
-// Antigravity covers both new agy sessions and any older Gemini-CLI
-// sessions sitting in the same `~/.gemini/tmp/` dir — see
-// `parse_gemini_session_jsonl` in server.rs for why we label both as
-// Antigravity rather than splitting the rows by writer.
+// switch, so the one-time decode flash is invisible. Other imported assets
+// share the same bytes the Launchpad uses (no duplicate files).
 
 const TOOL_ICON_SRC: Record<string, string> = {
-  claude:      '/icons/tools/claude.svg',
-  codex:       '/icons/tools/codex.svg',
+  claude:      CLAUDE_DATA_URL,
   qwen:        '/icons/tools/qwen.svg',
-  antigravity: '/icons/tools/antigravity.svg',
   hermes:      HERMES_DATA_URL,
   opencode:    OPENCODE_DATA_URL,
   kimicode:    KIMICODE_DATA_URL,
-  mimocode:    '/icons/tools/mimocode.svg',
+  mimocode:    MIMOCODE_DATA_URL,
   kilo:        '/icons/tools/kilo.svg',
+  aider:       AIDER_DATA_URL,
+  crush:       CRUSH_DATA_URL,
+  muse:        MUSE_DATA_URL,
+  dsh:         DSH_DATA_URL,
+};
+
+const TOOL_ICON_SVG: Record<string, string> = {
+  pi: PI_SVG, grok: GROK_SVG, omp: OMP_SVG, codex: CODEX_SVG,
+  openclaw: OPENCLAW_SVG, codebuddy: CODEBUDDY_SVG, cursor: CURSOR_SVG,
+  copilot: COPILOT_SVG, cline: CLINE_SVG, kiro: KIRO_SVG,
+  minimax: MINIMAX_SVG, antigravity: ANTIGRAVITY_SVG,
 };
 
 const getToolIcon = (tool: string) => {
-  // Pi is a monochrome currentColor mark — render it as an INLINE SVG so it
-  // inherits the surrounding text color (theme-adaptive, matching the
-  // launchpad's inlineSvgIcon treatment). An <img> would isolate the SVG and
-  // resolve currentColor to black — invisible on dark themes (issue: "会话记录
-  // 列表 Pi 图标一直是黑色看不清"). The other tools are fixed-color brand
-  // marks (logo orange, codex gradient, kimi squircle…) and stay <img>.
-  if (tool === 'pi' || tool === 'grok' || tool === 'omp') {
-    const svg = tool === 'pi' ? PI_SVG : tool === 'omp' ? OMP_SVG : GROK_SVG;
+  const svg = TOOL_ICON_SVG[tool];
+  if (svg) {
     return (
-      <span
-        aria-hidden
-        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '1em', height: '1em', flexShrink: 0 }}
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
+      <InlineSvgIcon markup={svg} />
     );
   }
-  // OpenClaw / CodeBuddy are full-color brand marks (lobster gradient; teal →
-  // violet squircle) — inline SVG with their own fills, NOT currentColor.
-  // Renders as an inline span so the markup's hardcoded colors show verbatim
-  // (an <img> would also work, but we reuse the same SVG bytes CenterPanel
-  // imports).
-  if (tool === 'openclaw' || tool === 'codebuddy') {
-    return (
-      <span
-        aria-hidden
-        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '1em', height: '1em', flexShrink: 0 }}
-        dangerouslySetInnerHTML={{ __html: tool === 'codebuddy' ? CODEBUDDY_SVG : OPENCLAW_SVG }}
-      />
-    );
+  if (tool === 'goose') {
+    return <span aria-hidden style={{ display:'inline-block', width:'1em', height:'1em', flexShrink:0, backgroundColor:'currentColor', WebkitMask:`url(${GOOSE_DATA_URL}) center / contain no-repeat`, mask:`url(${GOOSE_DATA_URL}) center / contain no-repeat` }} />;
   }
   const src = TOOL_ICON_SRC[tool];
-  if (!src) return <div style={{ width: 14, height: 14, flexShrink: 0, borderRadius: 'var(--radius-xs)', background: '#555' }}/>;
-  const extra = (tool === 'hermes' || tool === 'opencode' || tool === 'kilo') ? { borderRadius: 'var(--radius-xs)', objectFit: 'cover' as const }
+  if (!src) return null;
+  const extra = (tool === 'hermes' || tool === 'opencode' || tool === 'kilo' || tool === 'dsh') ? { borderRadius: 'var(--radius-xs)', objectFit: 'cover' as const }
     : tool === 'kimicode' ? { borderRadius: 'var(--radius-xs)', objectFit: 'contain' as const }
     : {};
   return <img src={src} alt="" style={{ width: '1em', height: '1em', flexShrink: 0, objectFit: 'contain', ...extra }}/>;
@@ -131,42 +138,30 @@ const projectName = (cwd: string, tool: string) => {
   return getToolName(tool);
 };
 
-// Normalize a recorded cwd for grouping: trim trailing slashes and unify
-// separators. Deliberately NOT case-folded — Linux paths are case-sensitive.
-const normCwd = (cwd: string) => cwd.replace(/[\\/]+$/, '').replace(/\//g, '\\');
-
-// Last path segment of either separator flavor.
-const pathBasename = (p: string) => {
-  const trimmed = p.replace(/[\\/]+$/, '');
-  const idx = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+// Windows drive paths ignore case; Unix paths retain their case-sensitive identity.
+const normCwd = (cwd: string) => {
+  const normalized = cwd.replace(/[\\/]+$/, '').replace(/\//g, '\\');
+  return /^[a-z]:\\/i.test(normalized) ? normalized.toLowerCase() : normalized;
 };
-
-// These are terminal/layout entries rather than agent types. They can still
-// appear as a SavedSession in legacy data, but they should not become the
-// default "Agent" scope in the history UI.
-const NON_AGENT_TOOLS = new Set([
-  'terminal', 'remote', 'installer',
-  'two-split', 'three-split', 'four-split',
-]);
-
-const isAgentTool = (tool: string | null | undefined): tool is string =>
-  !!tool && !NON_AGENT_TOOLS.has(tool);
-
-type HistoryFilterKind = 'agent' | 'project';
 
 export function HistoryBoard() {
   const t = useT();
   const { state, dispatch } = useAppState();
+  const stateRef = useAppStateRef();
+  const openingWorkers = useRef(new Set<string>());
+  const orchestration = useOrchestration();
+  const splitDrag = useSessionSplitDrag();
+  const { conversations, conversationId: activeAgentConversation } = useAgentClient();
+  const agentConversations = useMemo(() => conversations.filter(conversation => conversation.messageCount > 0), [conversations]);
+  const [agentError, setAgentError] = useState('');
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
-  // History is prefetched at app startup (see App.tsx). We just subscribe
-  // to the shared cache so the panel renders instantly when data is ready.
-  // The prefetch call here is idempotent — it only fires if no load ran yet.
+  // The shared cache restores the previous list before this first render.
+  // Opening the panel starts one background scan without hiding cached rows.
   const { sessions: cachedSessions, status } = useSyncExternalStore(
     subscribeHistory,
     getHistorySnapshot,
@@ -178,6 +173,22 @@ export function HistoryBoard() {
   // Pinned (置顶) markers from localStorage - re-renders + re-sorts the list
   // the instant a pin toggles from the context menu.
   const pinned = useSyncExternalStore(subscribePinned, getPinnedSnapshot);
+  const unreadReplies = useSyncExternalStore(subscribeSessionReplies, getUnreadSessionReplies);
+  // Identity is tool + native conversation token, never the folder/title.
+  const workingSessions = useMemo(() => new Set(state.terminals
+    .filter(session => session.resumeToken && session.agentStatus === 'working')
+    .map(session => `${session.tool}:${session.resumeToken}`)), [state.terminals]);
+  const waitingSessions = useMemo(() => new Set(state.terminals
+    .filter(session => session.resumeToken && session.agentStatus === 'wait_input')
+    .map(session => `${session.tool}:${session.resumeToken}`)), [state.terminals]);
+  const workingSignature = [...workingSessions].sort().join('|');
+  useEffect(() => {
+    if (!workingSignature) return;
+    // Give the CLI time to create its new history file; reuse the single
+    // throttled cache scan rather than polling separately for every row.
+    const timer = window.setTimeout(refreshHistory, 1_000);
+    return () => window.clearTimeout(timer);
+  }, [workingSignature]);
   // Custom session titles from localStorage (rename feature) - re-renders
   // the list the instant a rename lands.
   const renamed = useSyncExternalStore(subscribeRenamed, getRenamedSnapshot);
@@ -190,332 +201,283 @@ export function HistoryBoard() {
   // flag is set on Escape so onBlur knows to skip the save. Reset each edit.
   const cancelRenameRef = useRef(false);
   const [ctxMenu, setCtxMenu] = useState<SessionCtxMenuState | null>(null);
-  useEffect(() => { prefetchHistory(); }, []);
-  const isLoading = isTauri && (status === 'idle' || status === 'loading') && cachedSessions.length === 0;
+  const [preview, setPreview] = useState<{ key: string; left: number; top: number } | null>(null);
+  const [removeWorkerTarget, setRemoveWorkerTarget] = useState<{ task: OrchestrationTask; error?: string } | null>(null);
+  const removingWorkers = useRef(new Set<string>());
+  const previewId = useId();
+  useEffect(() => {
+    if (!preview) return;
+    const close = () => setPreview(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    document.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('blur', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('blur', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [preview]);
+  useEffect(() => { prefetchHistory(); refreshAgentConversations().catch(() => {}); }, []);
+  const isLoading = isTauri && (status === 'idle' || status === 'loading') && cachedSessions.length === 0 && agentConversations.length === 0;
 
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
-  // Both filters are explicit state so their AND semantics stay visible and
-  // predictable: Agent narrows the tool type, Project narrows cwd. The
-  // initial values are filled from the active terminal below.
-  const [activeAgent, setActiveAgent] = useState<string | null>(null);
-  const [activeProject, setActiveProject] = useState<string | null>(null);
-  // The filters use themed, portaled menus rather than native <select> so the
-  // controls remain usable while a terminal is focused and match the app's
-  // existing context-menu treatment.
-  const [filterMenuOpen, setFilterMenuOpen] = useState<HistoryFilterKind | null>(null);
-  const [filterMenuPos, setFilterMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const agentFilterTriggerRef = useRef<HTMLButtonElement>(null);
-  const projectFilterTriggerRef = useRef<HTMLButtonElement>(null);
-
-  const activeTerminal = state.terminals.find(s => s.id === state.activeTerminalId);
-  const activeContext = resolveDiffContext(activeTerminal);
-  const defaultAgent = (activeContext?.tool ?? activeTerminal?.tool ?? null);
-  const defaultAgentFilter = isAgentTool(defaultAgent) ? defaultAgent : null;
-  const defaultProjectFilter = activeContext?.folderPath ?? activeTerminal?.folderPath ?? null;
-  const activeContextKey = `${defaultAgentFilter ?? ''}\x00${defaultProjectFilter ? normCwd(defaultProjectFilter) : ''}`;
-
-  const toggleFilterMenu = (kind: HistoryFilterKind) => {
-    if (filterMenuOpen === kind) { setFilterMenuOpen(null); return; }
-    const trigger = kind === 'agent' ? agentFilterTriggerRef.current : projectFilterTriggerRef.current;
-    const r = trigger?.getBoundingClientRect();
-    if (r) {
-      const width = Math.max(r.width, kind === 'agent' ? 210 : 220);
-      setFilterMenuPos({ left: r.right - width, top: r.bottom + 4, width });
-    }
-    setFilterMenuOpen(kind);
-  };
-
-  // Keep the portaled menu glued to its trigger on scroll/resize (it's
-  // fixed-positioned; same pattern as FontPicker).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSelection, setSearchSelection] = useState(0);
+  const searchDialogRef = useRef<HTMLDialogElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchResultsRef = useRef<HTMLDivElement>(null);
+  const searchId = useId();
+  const [layout, setLayout] = useState<'list' | 'projects'>(() => {
+    try { return localStorage.getItem('cc-history-layout') === 'projects' ? 'projects' : 'list'; } catch { return 'list'; }
+  });
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  useEffect(() => { try { localStorage.setItem('cc-history-layout', layout); } catch { /* Storage unavailable. */ } }, [layout]);
   useEffect(() => {
-    if (!filterMenuOpen) return;
-    const reposition = () => {
-      const trigger = filterMenuOpen === 'agent'
-        ? agentFilterTriggerRef.current
-        : projectFilterTriggerRef.current;
-      const r = trigger?.getBoundingClientRect();
-      if (r) {
-        const width = Math.max(r.width, filterMenuOpen === 'agent' ? 210 : 220);
-        setFilterMenuPos({ left: r.right - width, top: r.bottom + 4, width });
-      }
-    };
-    window.addEventListener('scroll', reposition, true);
-    window.addEventListener('resize', reposition);
-    return () => {
-      window.removeEventListener('scroll', reposition, true);
-      window.removeEventListener('resize', reposition);
-    };
-  }, [filterMenuOpen]);
-  // Escape closes the portaled filter menu — same dismissal UX as the right-
-  // click menu and the rename input.
-  useEffect(() => {
-    if (!filterMenuOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFilterMenuOpen(null); };
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); };
-  }, [filterMenuOpen]);
-  // Right-click cut/copy/paste/select menu for the search box (same one
-  // Gambit/terminal/task-list use).
+    const dialog = searchDialogRef.current;
+    if (!dialog) return;
+    if (searchOpen) { dialog.showModal(); searchInputRef.current?.focus(); }
+    else if (dialog.open) dialog.close();
+  }, [searchOpen]);
   const { menu: ctxMenuEl, openMenu: openCtxMenu } = useTextContextMenu();
 
   // Memoize baseSessions on cachedSessions so the filter useMemo below doesn't
   // re-run every render (the isTauri? ternary otherwise rebuilds a fresh array
   // literal each render, defeating the debounce — a burst of keystrokes would
   // filter the whole list once per render instead of once per debounce tick).
-  const baseSessions: SavedSession[] = useMemo(() => isTauri ? cachedSessions : cachedSessions.length > 0 ? cachedSessions : [
+  const nativeSessions: SavedSession[] = useMemo(() => isTauri ? cachedSessions : cachedSessions.length > 0 ? cachedSessions : [
     { id: 'mock-1', name: 'build a flash card website', tool: 'claude', cwd: '~/projects/flashcards', session_token: 'tk1', saved_at: new Date(nowMs).toISOString() },
     { id: 'mock-2', name: 'build a snake game', tool: 'claude', cwd: '~/projects/snake', session_token: 'tk2', saved_at: new Date(nowMs - 3600000).toISOString() },
     { id: 'mock-3', name: 'refactor components', tool: 'qwen', cwd: '~/projects/coffee', session_token: 'tk3', saved_at: new Date(nowMs - 86400000 * 2).toISOString() },
   ], [cachedSessions, nowMs]);
+  const liveSessions = useMemo(() => state.terminals.filter(session => session.tool && !nativeSessions.some(saved => saved.tool === session.tool && saved.session_token && saved.session_token === session.resumeToken)), [state.terminals, nativeSessions]);
+  const baseSessions: SavedSession[] = useMemo(() => sortByMtime([...nativeSessions, ...liveSessions.map(session => ({
+    id: `live:${session.id}`, name: session.toolTitle || getToolDisplayName(session.tool!), tool: session.tool!,
+    cwd: session.folderPath ?? '', session_token: session.resumeToken ?? null, saved_at: new Date(session.startedAt ?? nowMs).toISOString(),
+  })), ...agentConversations.map(conversation => ({
+    id: conversation.id, name: conversation.title, tool: 'coffee-agent', cwd: '', session_token: null,
+    saved_at: new Date(conversation.updatedAt).toISOString(), turn_count: conversation.messageCount,
+  }))]), [nativeSessions, liveSessions, agentConversations, nowMs]);
 
-  const agentCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const s of baseSessions) {
-      if (!isAgentTool(s.tool) || hidden.has(`${s.tool}:${s.id}`)) continue;
-      if (activeProject && (!s.cwd || normCwd(s.cwd) !== activeProject)) continue;
-      counts.set(s.tool, (counts.get(s.tool) ?? 0) + 1);
+  const availableSessions = useMemo(() => {
+    const list = baseSessions.filter(session => !hidden.has(`${session.tool ?? ''}:${session.id}`)
+      && !orchestration.tasks.some(task => !task.detached && (`live:${task.sessionId}` === session.id || task.tool === session.tool && session.session_token && (task.nativeId === session.session_token || state.terminals.some(tab => tab.id === task.sessionId && tab.resumeToken === session.session_token))))
+      && !state.terminals.some(tab => tab.parentId && (`live:${tab.id}` === session.id || tab.tool === session.tool && session.session_token && tab.resumeToken === session.session_token))).map(session => {
+        const task = orchestration.tasks.find(task => task.detached && (`live:${task.sessionId}` === session.id || task.tool === session.tool && session.session_token && (task.nativeId === session.session_token || state.terminals.some(tab => tab.id === task.sessionId && tab.resumeToken === session.session_token))));
+        return task ? { ...session, name: task.title } : session;
+      });
+    if (!pinned.size) return list;
+    return list.sort((a, b) => Number(pinned.has(`${b.tool ?? ''}:${b.id}`)) - Number(pinned.has(`${a.tool ?? ''}:${a.id}`)));
+  }, [baseSessions, hidden, pinned, orchestration.tasks, state.terminals]);
+  const projects = useMemo(() => {
+    const groups = new Map<string, { key: string; name: string; cwd: string; sessions: SavedSession[] }>();
+    for (const session of availableSessions) {
+      const cwd = session.tool === 'openclaw' ? '' : (session.cwd ?? '').trim();
+      const key = cwd ? 'cwd:' + normCwd(cwd) : 'tool:' + session.tool;
+      let group = groups.get(key);
+      if (!group) {
+        group = { key, name: session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(cwd, session.tool), cwd, sessions: [] };
+        groups.set(key, group);
+      }
+      group.sessions.push(session);
     }
-    return [...counts.entries()]
-      .map(([tool, count]) => ({ tool, count }))
-      .sort((a, b) => b.count - a.count || getToolName(a.tool).localeCompare(getToolName(b.tool)));
-  }, [activeProject, baseSessions, hidden]);
-
-  // Project (workspace) filter: which cwd's sessions to show (null = all).
-  // Keyed by normalized cwd (trailing slashes trimmed, separators unified —
-  // no case-folding: Linux paths are case-sensitive).
-  // OpenClaw is excluded: it has no user-project concept — every session's
-  // cwd is its own internal `~/.openclaw/workspace`, so it would form one
-  // meaningless bucket that all OpenClaw sessions collapse into. It still
-  // shows in the flat list (and under "all"); it just never contributes a
-  // selectable project bucket.
-  const projectCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    // Display form of each normalized key: first-seen original cwd wins.
-    const display = new Map<string, string>();
-    for (const s of baseSessions) {
-      if (s.tool === 'openclaw') continue;
-      if (activeAgent && s.tool !== activeAgent) continue;
-      const raw = (s.cwd ?? '').trim();
-      if (!raw || hidden.has(`${s.tool ?? ''}:${s.id}`)) continue;
-      const key = normCwd(raw);
-      if (!display.has(key)) display.set(key, raw.replace(/[\\/]+$/, ''));
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    const all = [...groups.values()];
+    const names = new Map<string, number>();
+    for (const group of all) names.set(group.name, (names.get(group.name) ?? 0) + 1);
+    for (const group of all) {
+      if (group.cwd && (names.get(group.name) ?? 0) > 1) {
+        // Full paths distinguish identically named folders under different parents.
+        group.name = group.cwd;
+      }
     }
-    return [...counts.entries()]
-      .map(([key, count]) => ({ key, cwd: display.get(key)!, count }))
-      .sort((a, b) => b.count - a.count);
-  }, [activeAgent, baseSessions, hidden]);
+    return all;
+  }, [availableSessions]);
+  const rows = useMemo(() => layout === 'list'
+    ? availableSessions.map(session => ({ kind: 'session' as const, session, grouped: false }))
+    : projects.flatMap(group => [
+      { kind: 'project' as const, group },
+      ...(collapsedProjects.has(group.key) ? [] : group.sessions.map(session => ({ kind: 'session' as const, session, grouped: true }))),
+    ] as Array<{ kind: 'project'; group: typeof group } | { kind: 'session'; session: SavedSession; grouped: boolean }>), [layout, availableSessions, projects, collapsedProjects]);
 
-  // Basename collisions (two different parents both named "coffee") get the
-  // parent dir appended in the menu label so they're tellable apart.
-  const projectLabel = useMemo(() => {
-    const baseCount = new Map<string, number>();
-    for (const p of projectCounts) {
-      const base = pathBasename(p.cwd);
-      baseCount.set(base, (baseCount.get(base) ?? 0) + 1);
-    }
-    return (cwd: string): string => {
-      const base = pathBasename(cwd);
-      if ((baseCount.get(base) ?? 0) <= 1) return base;
-      const parent = pathBasename(cwd.slice(0, cwd.length - base.length).replace(/[\\/]+$/, ''));
-      return parent ? `${base} — ${parent}` : base;
-    };
-  }, [projectCounts]);
-
-  // The active terminal is the source of truth for the initial scope. This
-  // follows tab/pane switches, while manual changes remain untouched until the
-  // user changes the active terminal again.
-  /* eslint-disable react-hooks/set-state-in-effect -- Active terminal changes intentionally update the history scope. */
-  useEffect(() => {
-    setActiveAgent(defaultAgentFilter);
-    setActiveProject(defaultProjectFilter ? normCwd(defaultProjectFilter) : null);
-    setFilterMenuOpen(null);
-  }, [activeContextKey, defaultAgentFilter, defaultProjectFilter]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Debounce the raw query so fast typing doesn't re-filter the full session
-  // list on every keystroke (history-cache can hold thousands of sessions —
-  // a per-key full scan stutters). 150ms is short enough to feel instant and
-  // long enough to coalesce a burst of keystrokes into one filter pass.
+  // Search works across titles, tools and full project paths, independently of the sidebar view.
+  const matchesQuery = useCallback((session: SavedSession, query: string) => {
+    const q = query.trim().replace(/\s+/g, ' ').toLowerCase();
+    const name = renamed[`${session.tool ?? ''}:${session.id}`] ?? session.name ?? '';
+    const tool = session.tool === 'coffee-agent' ? 'Coffee Agent' : getToolName(session.tool);
+    return [name, session.tool === 'openclaw' ? '' : session.cwd ?? '', projectName(session.cwd ?? '', session.tool), tool].some(value => value.toLowerCase().includes(q));
+  }, [renamed]);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   useEffect(() => {
-    const h = setTimeout(() => setDebouncedQuery(sessionSearchQuery), 150);
-    return () => clearTimeout(h);
+    const timer = setTimeout(() => setDebouncedQuery(sessionSearchQuery), 150);
+    return () => clearTimeout(timer);
   }, [sessionSearchQuery]);
-
-  // Normalize once: trim + collapse runs of whitespace + lowercase. Empty after
-  // normalization means "no query → show all". Matching against projectName(cwd)
-  // too so a user can find a project's sessions by typing its folder name — the
-  // folder is already printed on every card, so this is the one search
-  // dimension the flat time-sorted list genuinely earns. The tool display name
-  // is matched as well ("kimi" surfaces all Kimi Code sessions) — the chip row
-  // below covers mouse users, this covers keyboard users. All fields are
-  // null-guarded: legacy sessions can carry a blank cwd (projectName then
-  // falls back to the tool display name).
-  const matchedSessions = useMemo(() => {
-    // Hide filter first so soft-deleted sessions never take a visible slot or
-    // count toward load-more paging.
-    let list = baseSessions;
-    if (hidden.size > 0) {
-      list = list.filter(s => !hidden.has(`${s.tool ?? ''}:${s.id}`));
-    }
-    // Agent and project scopes are independent controls; both are applied so
-    // the default view is exactly the active agent in the active workspace.
-    if (activeAgent) {
-      list = list.filter(s => s.tool === activeAgent);
-    }
-    // Project (cwd) filter — AND semantics with the text query below.
-    if (activeProject) {
-      list = list.filter(s => !!s.cwd && normCwd(s.cwd) === activeProject);
-    }
-    const q = debouncedQuery.trim().replace(/\s+/g, ' ').toLowerCase();
-    if (q) {
-      list = list.filter(s => {
-        const name = (renamed[`${s.tool ?? ''}:${s.id}`] ?? s.name ?? '').toLowerCase();
-        const proj = projectName(s.cwd ?? '', s.tool ?? '').toLowerCase();
-        const tool = getToolName(s.tool ?? '').toLowerCase();
-        return name.includes(q) || proj.includes(q) || tool.includes(q);
-      });
-    }
-    // Pinned (置顶) sessions sort to the top. history-cache already returns
-    // saved_at desc, so a stable sort on the pinned flag keeps that order
-    // within each group. Skipped entirely when nothing is pinned.
-    if (pinned.size > 0) {
-      list = [...list].sort((a, b) => {
-        const pa = pinned.has(`${a.tool ?? ''}:${a.id}`) ? 1 : 0;
-        const pb = pinned.has(`${b.tool ?? ''}:${b.id}`) ? 1 : 0;
-        return pb - pa;
-      });
-    }
-    return list;
-  }, [baseSessions, debouncedQuery, hidden, pinned, activeAgent, activeProject, renamed]);
-
-  // Progressive render: data is already fully in memory (history-cache reads
-  // every jsonl on startup), so "load more" is just rendering more rows.
-  // IntersectionObserver on a bottom sentinel bumps visibleCount when it
-  // scrolls into view. Reset to PAGE on the debounced query landing — keying
-  // on the raw query would reset mid-burst while results haven't changed yet,
-  // making the list flap; the debounced value only moves when results actually
-  // change.
+  const matchedSessions = useMemo(() => availableSessions.filter(session => matchesQuery(session, debouncedQuery)), [availableSessions, debouncedQuery, matchesQuery]);
   const PAGE = 30;
   const [visibleCount, setVisibleCount] = useState(PAGE);
-  /* eslint-disable-next-line react-hooks/set-state-in-effect -- A changed query/filter starts a new pagination window. */
-  useEffect(() => { setVisibleCount(PAGE); }, [debouncedQuery, activeAgent, activeProject]);
-  const filteredSessions = matchedSessions.slice(0, visibleCount);
-  const hasMore = matchedSessions.length > visibleCount;
+  const [searchCount, setSearchCount] = useState(PAGE);
+  const filteredRows = rows.slice(0, visibleCount);
+  const liveSessionFolders = useMemo(() => new Map(state.terminals
+    .filter(session => session.resumeToken && session.folderPath)
+    .map(session => [`${session.tool}:${session.resumeToken}`, session.folderPath!])), [state.terminals]);
+  const sessionGitTarget = (session: SavedSession): GitStatusTarget => {
+    const liveFolder = liveSessionFolders.get(`${session.tool}:${session.session_token}`);
+    return { folder: liveFolder ?? (session.git_context ? session.cwd : ''), context: session.git_context };
+  };
+  const gitTargets = filteredRows.map(row => row.kind === 'project' ? { folder: row.group.cwd } : sessionGitTarget(row.session));
+  const gitStatuses = useProjectGitStatuses(gitTargets);
+  const searchResults = searchOpen ? matchedSessions.slice(0, searchCount) : [];
+  const selectedSearchIndex = Math.min(searchSelection, Math.max(0, searchResults.length - 1));
+  const hasMore = rows.length > visibleCount;
+  const searchHasMore = matchedSessions.length > searchCount;
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const searchSentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!hasMore) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(entries => {
-      if (entries.some(e => e.isIntersecting)) {
-        setVisibleCount(c => c + PAGE);
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) {
+        if (entry.target === sentinelRef.current) setVisibleCount(count => count + PAGE);
+        else setSearchCount(count => count + PAGE);
       }
-    }, { rootMargin: '200px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasMore]);
+    }, { rootMargin: '100px' });
+    if (hasMore && sentinelRef.current) observer.observe(sentinelRef.current);
+    if (searchOpen && searchHasMore && searchSentinelRef.current) observer.observe(searchSentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, searchOpen, searchHasMore, debouncedQuery]);
+  useEffect(() => {
+    if (searchOpen) searchResultsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [searchOpen, selectedSearchIndex, debouncedQuery]);
+  const openSearch = () => {
+    setPreview(null); setSessionSearchQuery(''); setDebouncedQuery(''); setSearchSelection(0); setSearchCount(PAGE); setSearchOpen(true);
+  };
+  const openSearchResult = (session: SavedSession) => { searchDialogRef.current?.close(); handleViewHistory(session); };
 
   // Enter inline-rename mode on a card (invoked from the context menu).
   const startRename = (saved: SavedSession) => {
+    setPreview(null);
     const k = `${saved.tool ?? ''}:${saved.id}`;
     cancelRenameRef.current = false;
     setRenamingKey(k);
     setRenameValue(renamed[k] ?? saved.name ?? '');
   };
 
-  const handleViewHistory = (saved: SavedSession) => {
-    // Click = resume directly. The old flow opened an intermediate read-only
-    // preview and made the user click "Continue this session"
-    // inside it; that intermediate step was slower than just resuming —
-    // claude --resume loads its own TUI history faster than the bubble
-    // view renders, and the extra tab was one more concept to navigate.
-    // Now a click stages a real terminal tab with resumeToken;
-    // TierTerminal's mount effect spawns `<tool> --resume <token>` in
-    // saved.cwd. Sessions without a token (legacy / unresolved cwd) are
-    // silently skipped — nothing to resume.
+  const handleViewHistory = async (saved: SavedSession, split?: SessionSplitPlacement) => {
+    setAgentError('');
+    if (saved.tool === 'coffee-agent') {
+      dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
+      openAgentConversation(saved.id).catch(error => setAgentError(String(error)));
+      return;
+    }
+    const live = liveSessions.find(session => `live:${session.id}` === saved.id);
+    if (live) {
+      dispatch(split ? { type: 'OPEN_SESSION_SPLIT', id: live.id, ...split } : { type: 'SET_ACTIVE_TERMINAL', id: live.id });
+      return;
+    }
     if (!saved.session_token) return;
+    // Fresh CLI tabs may already own this conversation without a resumeToken
+    // in UI state. Read only authoritative native IDs, never guess by cwd.
+    if (isTauri && !state.terminals.some(session => session.tool === saved.tool && session.resumeToken === saved.session_token)) {
+      try {
+        await Promise.all(state.terminals.filter(session => session.tool === saved.tool && !session.resumeToken).map(async session => {
+          const token = await commands.getTerminalSessionToken(session.id);
+          if (token) dispatch({ type: 'SET_SESSION_TOKEN', id: session.id, token });
+        }));
+      } catch (error) {
+        setAgentError(String(error));
+        return;
+      }
+    }
     const targetId = crypto.randomUUID();
+    let mode: 'terminal' | 'conversation' = 'conversation';
+    try { if (localStorage.getItem(`coffee:${saved.tool}-launch-mode`) === 'terminal') mode = 'terminal'; } catch { /* optional preference */ }
     dispatch({
       type: 'ADD_TERMINAL',
-      session: { id: targetId, tool: saved.tool as ToolType, folderPath: saved.cwd, resumeToken: saved.session_token }
+      split,
+      session: { id: targetId, tool: saved.tool as ToolType, folderPath: saved.cwd, resumeToken: saved.session_token, claudeMode: saved.tool === 'claude' ? mode : undefined, codexMode: saved.tool === 'codex' ? mode : undefined }
     });
-    dispatch({ type: 'SET_ACTIVE_TERMINAL', id: targetId });
   };
 
-  return (
-    <>
-      <div className="agent-session-search-row">
-        <div className="agent-session-search-wrap">
-          <svg className="agent-session-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
-          <input
-            type="text"
-            className="agent-session-search"
-            placeholder={t('task.search_sessions') || 'Search sessions...'}
-            value={sessionSearchQuery}
-            onChange={e => setSessionSearchQuery(e.target.value)}
-            onContextMenu={(e) => openCtxMenu(e, setSessionSearchQuery)}
-          />
-        </div>
-        <button
-          ref={agentFilterTriggerRef}
-          type="button"
-          className={`history-tool-filter-trigger${activeAgent ? ' active' : ''}`}
-          onClick={() => toggleFilterMenu('agent')}
-          aria-label={t('task.filter_agent') || 'Filter by agent'}
-          title={t('task.filter_agent') || 'Filter by agent'}
-        >
-          <span className="history-filter-trigger-icon">{activeAgent ? getToolIcon(activeAgent) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>
-            </svg>
-          )}</span>
-          <span className="history-tool-filter-label">
-            {activeAgent ? getToolName(activeAgent) : (t('task.filter_all_agents') || 'All agents')}
-          </span>
-          <svg className="history-filter-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
-        <button
-          ref={projectFilterTriggerRef}
-          type="button"
-          className={`history-tool-filter-trigger${activeProject ? ' active' : ''}`}
-          onClick={() => toggleFilterMenu('project')}
-          aria-label={t('task.filter_project') || 'Filter by project'}
-          title={t('task.filter_project') || 'Filter by project'}
-        >
-          <span className="history-filter-trigger-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-          </span>
-          <span className="history-tool-filter-label">
-            {activeProject
-              ? projectLabel(projectCounts.find(p => p.key === activeProject)?.cwd ?? pathBasename(activeProject))
-              : (t('task.filter_all_projects') || 'All projects')}
-          </span>
-          <svg className="history-filter-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
-      </div>
-      <div className="task-list" style={{ marginTop: '0', paddingBottom: '20px' }}>
-      {isLoading && Array.from({ length: 6 }).map((_, i) => (
-        <div key={`skel-${i}`} className="history-card history-card-skeleton" aria-hidden="true">
-          <div className="history-card-content">
-            <span className="skeleton-bar skeleton-bar-title" />
-            <div className="history-card-meta">
-              <span className="skeleton-bar skeleton-bar-meta" />
-            </div>
-          </div>
-        </div>
-      ))}
-      {!isLoading && filteredSessions.map(session => {
+  const handleDeleteHistory = async (saved: SavedSession) => {
+    setAgentError('');
+    setPreview(null);
+    const closing = state.terminals.filter(tab => tab.tool === saved.tool &&
+      (`live:${tab.id}` === saved.id || !!saved.session_token && tab.resumeToken === saved.session_token));
+    if (!closing.length && isTauri && saved.session_token) {
+      try {
+        const candidates = state.terminals.filter(tab => tab.tool === saved.tool && !tab.resumeToken);
+        const tokens = await Promise.all(candidates.map(tab => commands.getTerminalSessionToken(tab.id)));
+        closing.push(...candidates.filter((_, index) => tokens[index] === saved.session_token));
+      } catch (error) {
+        setAgentError(String(error));
+        return;
+      }
+    }
+    hideSession(saved.tool ?? '', saved.id);
+    for (const tab of closing) dispatch({ type: 'REMOVE_TERMINAL', id: tab.id });
+    if (saved.tool === 'coffee-agent' && saved.id === activeAgentConversation) dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'agent' });
+  };
+
+  const removeWorker = async (task: OrchestrationTask) => {
+    if (removingWorkers.current.has(task.id)) return;
+    removingWorkers.current.add(task.id);
+    try {
+      const snapshot = await commands.orchestrationRemoveWorker(task.id);
+      const nativeId = task.nativeId ?? state.terminals.find(tab => tab.id === task.sessionId)?.resumeToken;
+      hideSession(task.tool, `live:${task.sessionId}`);
+      if (nativeId) hideSession(task.tool, `${task.tool}_native_${nativeId}`);
+      for (const saved of baseSessions.filter(saved => saved.tool === task.tool && nativeId && saved.session_token === nativeId)) hideSession(task.tool, saved.id);
+      dispatch({ type: 'REMOVE_TERMINAL', id: task.sessionId });
+      receiveOrchestration(snapshot);
+    } finally { removingWorkers.current.delete(task.id); }
+  };
+  const requestWorkerRemoval = (task: OrchestrationTask) => {
+    setPreview(null);
+    const child = state.terminals.find(tab => tab.id === task.sessionId);
+    if (['starting', 'running', 'uncertain'].includes(task.phase) || child?.agentStatus === 'working' || child?.agentStatus === 'wait_input') setRemoveWorkerTarget({ task });
+    else void removeWorker(task).catch(error => setRemoveWorkerTarget({ task, error: String(error) }));
+  };
+  const openWorker = async (task: OrchestrationTask, savedParent: SavedSession, independent = false) => {
+    if (openingWorkers.current.has(task.id)) return;
+    openingWorkers.current.add(task.id); setAgentError(''); setPreview(null);
+    try {
+      let tabs = stateRef.current.terminals;
+      let child = tabs.find(tab => tab.tool === task.tool && (tab.id === task.sessionId || task.nativeId && tab.resumeToken === task.nativeId));
+      if (child && !independent) { dispatch({ type: 'SET_ACTIVE_TERMINAL', id: child.id }); return; }
+      if (child) { dispatch({ type: 'RESTORE_WORKER_SESSION', child }); return; }
+      if (!task.nativeId) throw new Error(t('orchestration.history_unavailable'));
+      const parentToken = task.parentNativeId ?? savedParent.session_token;
+      if (isTauri) {
+        const observed = await Promise.all(tabs.filter(tab => !tab.resumeToken && (tab.tool === task.tool || !independent && tab.tool === task.parentTool && parentToken)).map(async tab => ({ id: tab.id, token: await commands.getTerminalSessionToken(tab.id) })));
+        for (const { id, token } of observed) if (token) dispatch({ type: 'SET_SESSION_TOKEN', id, token });
+        tabs = stateRef.current.terminals.map(tab => { const token = observed.find(value => value.id === tab.id)?.token; return token ? { ...tab, resumeToken: token } : tab; });
+        child = tabs.find(tab => tab.tool === task.tool && tab.resumeToken === task.nativeId);
+        if (child && !independent) { dispatch({ type: 'SET_ACTIVE_TERMINAL', id: child.id }); return; }
+        if (child) { dispatch({ type: 'RESTORE_WORKER_SESSION', child }); return; }
+      }
+      const parent = tabs.find(tab => tab.tool === task.parentTool && (tab.id === task.parentId || `live:${tab.id}` === savedParent.id || parentToken && tab.resumeToken === parentToken));
+      if (!independent && !parent && !parentToken) throw new Error(t('orchestration.history_unavailable'));
+      const parentId = parent?.id ?? task.parentId;
+      const snapshot = await commands.orchestrationRestoreWorker(task.id, parentId, task.sessionId);
+      const restored: TerminalSession = { id: task.sessionId, tool: task.tool, folderPath: task.cwd, resumeToken: task.nativeId, toolTitle: task.title, strictCwd: true, claudeMode: task.tool === 'claude' ? 'conversation' : undefined, codexMode: task.tool === 'codex' ? 'conversation' : undefined };
+      dispatch({ type: 'RESTORE_WORKER_SESSION', parent: independent ? undefined : parent ?? { id: parentId, tool: task.parentTool as ToolType, folderPath: savedParent.cwd || task.cwd, resumeToken: parentToken ?? undefined, toolTitle: savedParent.name, strictCwd: true, claudeMode: 'conversation' }, child: restored });
+      receiveOrchestration(snapshot);
+    } catch (error) { setAgentError(String(error)); }
+    finally { openingWorkers.current.delete(task.id); }
+  };
+  const detachWorker = async (task: OrchestrationTask, parent: SavedSession) => {
+    setAgentError('');
+    try {
+      const snapshot = await commands.orchestrationDetachWorker(task.id);
+      const detached = snapshot.tasks.find(value => value.id === task.id)!;
+      receiveOrchestration(snapshot);
+      await openWorker(detached, parent, true);
+    } catch (error) { setAgentError(String(error)); }
+  };
+  const contextWorker = ctxMenu?.workerId ? orchestration.tasks.find(task => task.id === ctxMenu.workerId) : undefined;
+  const contextParent = ctxMenu?.workerParent;
+  const contextChild = contextWorker ? state.terminals.find(tab => tab.id === contextWorker.sessionId) : undefined;
+  const canDetachWorker = contextWorker && (contextChild || contextWorker.nativeId) && !['starting', 'running', 'uncertain'].includes(contextWorker.phase) && !['working', 'wait_input'].includes(contextChild?.agentStatus ?? '');
+  const renderSession = (session: SavedSession, grouped = false) => {
         // Parse saved_at carefully to handle unix ms strings or invalid SystemTime strings
         let savedMs = Date.parse(session.saved_at);
         if (isNaN(savedMs)) {
@@ -527,44 +489,58 @@ export function HistoryBoard() {
         let dateStr = '';
         const now = new Date(nowMs);
         const savedDate = new Date(savedMs);
-        
         const isSameDay = now.getDate() === savedDate.getDate() && now.getMonth() === savedDate.getMonth() && now.getFullYear() === savedDate.getFullYear();
-        
         const yesterday = new Date(nowMs - 86400000);
         const isYesterday = yesterday.getDate() === savedDate.getDate() && yesterday.getMonth() === savedDate.getMonth() && yesterday.getFullYear() === savedDate.getFullYear();
-
-        if (dateDiff < 3600000) {
-          dateStr = t('time.just_now') || 'Just now';
-        } else if (isSameDay) {
-          dateStr = t('time.today') || 'Today';
-        } else if (isYesterday) {
-          dateStr = t('time.yesterday') || 'Yesterday';
-        } else {
+        if (dateDiff < 3600000) dateStr = t('time.just_now') || 'Just now';
+        else if (isSameDay) dateStr = t('time.today') || 'Today';
+        else if (isYesterday) dateStr = t('time.yesterday') || 'Yesterday';
+        else {
           const days = Math.floor(dateDiff / 86400000);
-          if (days < 7) {
-            dateStr = (t('time.days_ago') || '{days} days ago').replace('{days}', days.toString());
-          } else {
-            const locale = state.currentLang === 'zh-CN' ? 'zh-CN' : 'en-US';
-            dateStr = savedDate.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
-          }
+          dateStr = days < 7 ? (t('time.days_ago') || '{days} days ago').replace('{days}', days.toString()) : savedDate.toLocaleDateString(state.currentLang === 'zh-CN' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' });
         }
-
         const sessionKey = `${session.tool ?? ''}:${session.id}`;
         const displayName = renamed[sessionKey] ?? session.name;
         const isRenaming = renamingKey === sessionKey;
+        const owner = state.terminals.find(tab => `live:${tab.id}` === session.id || tab.tool === session.tool && session.session_token && tab.resumeToken === session.session_token);
+        const workers = orchestration.tasks.filter(task => !task.hidden && !task.detached && (task.parentId === owner?.id || task.parentTool === session.tool && task.parentNativeId && task.parentNativeId === session.session_token)).slice(-6);
+        const isWorking = owner?.agentStatus === 'working' || Boolean(session.session_token && workingSessions.has(`${session.tool}:${session.session_token}`));
+        const needsAttention = owner?.agentStatus === 'wait_input' || Boolean(session.session_token && waitingSessions.has(`${session.tool}:${session.session_token}`));
+        const isUnread = !isWorking && !needsAttention && Boolean(session.session_token && unreadReplies.has(sessionReplyKey(session.tool, session.session_token)));
+        const isActive = owner?.id === state.activeTerminalId && !state.agentPageActive && !state.diffTabActive || session.tool === 'coffee-agent' && session.id === activeAgentConversation && state.agentPageActive === 'agent';
+        const gitStatus = gitStatuses.get(gitStatusKey(sessionGitTarget(session)));
         return (
+          <div key={`${sessionKey}:${session.file_path ?? session.saved_at}`} className="history-family">
           <div
-            key={`${sessionKey}:${session.file_path ?? session.saved_at}`}
-            className="history-card"
-            onClick={() => handleViewHistory(session)}
+            className={`history-card${isWorking ? ' history-card-working' : ''}${needsAttention ? ' history-card-needs-attention' : ''}${isUnread ? ' history-card-unread' : ''}${grouped ? ' history-card-grouped' : ''}${isActive ? ' history-card-active' : ''}`}
+            aria-describedby={preview?.key === sessionKey ? previewId : undefined}
+            onPointerDown={event => {
+              if (isRenaming || session.tool === 'coffee-agent') return;
+              setPreview(null);
+              splitDrag.begin(event, owner?.id, placement => { setPreview(null); void handleViewHistory(session, placement); });
+            }}
+            onDragStart={event => event.preventDefault()}
+            onMouseEnter={(event) => {
+              if (isRenaming || ctxMenu || searchOpen) return;
+              const rect = event.currentTarget.getBoundingClientRect();
+              const width = Math.min(320, window.innerWidth - 16);
+              setPreview({ key: sessionKey, left: Math.max(8, Math.min(rect.right + 8, window.innerWidth - width - 8)), top: Math.max(8, Math.min(rect.top + (rect.height - 72) / 2, window.innerHeight - 80)) });
+            }}
+            onMouseLeave={() => setPreview(null)}
+            onClick={() => { setPreview(null); if (!splitDrag.suppressClick.current) void handleViewHistory(session); }}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              setPreview(null);
+              if (session.tool === 'coffee-agent') return;
               setCtxMenu({ session, x: e.clientX, y: e.clientY });
             }}
           >
             <div className="history-card-content">
               <div className="history-card-title-row">
+                <span className="history-card-tool-icon" aria-hidden="true">
+                  {session.tool !== 'coffee-agent' && getToolIcon(session.tool)}
+                </span>
                 {isRenaming ? (
                   <input
                     className="history-card-rename-input"
@@ -600,16 +576,19 @@ export function HistoryBoard() {
                 ) : (
                   <>
                     <span className="history-card-title">{displayName}</span>
+                    {needsAttention ? <span className="history-card-attention-indicator" role="img" aria-label={t('history.needs_attention')}>{t('history.needs_attention')}</span>
+                      : isWorking ? <span className="history-card-working-indicator" role="img" aria-label={t('claude.status.working')}><span /></span>
+                      : isUnread ? <span className="history-card-unread-indicator" role="img" aria-label={t('history.unread_reply')} />
+                      : <HistoryGitMark status={gitStatus} />}
                     {/* One-click soft-delete (hide), revealed in the title row.
                         stopPropagation keeps it from resuming the session. */}
                     <button
                       type="button"
                       className="history-card-delete-btn"
                       aria-label={t('menu.delete')}
-                      title={t('menu.delete')}
                       onClick={(e) => {
                         e.stopPropagation();
-                        hideSession(session.tool ?? '', session.id);
+                        void handleDeleteHistory(session);
                       }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -622,16 +601,61 @@ export function HistoryBoard() {
                   </>
                 )}
               </div>
-              <div className="history-card-meta">
-                <span className="history-card-tool-wrap">
-                  {getToolIcon(session.tool)}
-                  <span className="history-card-meta-text">{projectName(session.cwd, session.tool)} &middot; {dateStr} {session.turn_count ? ` · ${(t('task.messages') || '{count} messages').replace('{count}', session.turn_count.toString())}` : ''}</span>
-                </span>
-              </div>
             </div>
+            {preview?.key === sessionKey && !isRenaming && createPortal(<div id={previewId} className="history-card-preview" role="tooltip" style={{ left: preview.left, top: preview.top }}>
+              <div className="history-card-preview-title">{displayName}</div>
+              <div className="history-card-meta"><span className="history-card-tool-wrap">{session.tool !== 'coffee-agent' && getToolIcon(session.tool)}<span className="history-card-meta-text">{(needsAttention || isUnread) && <span className="history-card-preview-status">{t(needsAttention ? 'history.needs_attention' : 'history.unread_reply')} &middot; </span>}{session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(session.cwd, session.tool)} &middot; {dateStr} {session.turn_count ? ` · ${(t('task.messages') || '{count} messages').replace('{count}', session.turn_count.toString())}` : ''}</span></span></div>
+            </div>, document.body)}
+          </div>
+            {workers.length > 0 && <div className="history-workers" onPointerDown={event => event.stopPropagation()}>
+              {workers.map(task => {
+                const child = state.terminals.find(tab => tab.id === task.sessionId), status = workerState(task, child);
+                return <div key={task.id} data-enter={task.phase === 'starting' || undefined} className={`history-worker${child?.id === state.activeTerminalId && !state.agentPageActive && !state.diffTabActive ? ' is-active' : ''}`} onMouseEnter={event => {
+                  if (ctxMenu || searchOpen) return;
+                  const rect = event.currentTarget.getBoundingClientRect(), width = Math.min(320, window.innerWidth - 16);
+                  setPreview({ key: `worker:${task.id}`, left: Math.max(8, Math.min(rect.right + 8, window.innerWidth - width - 8)), top: Math.max(8, Math.min(rect.top + (rect.height - 72) / 2, window.innerHeight - 80)) });
+                }} onMouseLeave={() => setPreview(null)} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); setPreview(null); setCtxMenu({ workerId: task.id, workerParent: session, session: { id: `${task.tool}_native_${task.nativeId ?? task.id}`, tool: task.tool, name: task.title, cwd: task.cwd, session_token: task.nativeId, saved_at: session.saved_at }, x: event.clientX, y: event.clientY }); }}>
+                  <button type="button" className="history-worker-open" aria-describedby={preview?.key === `worker:${task.id}` ? previewId : undefined} aria-label={`${getToolName(task.tool)} · ${task.title} · ${t(`orchestration.${status}`)}`} onClick={event => { event.stopPropagation(); void openWorker(task, session); }}><span className="history-worker-icon" aria-hidden="true">{getToolIcon(task.tool)}</span><span className="history-worker-title">{task.title}</span></button>
+                  <span className="history-worker-actions">{status === 'working' || status === 'starting' ? <span className="history-card-working-indicator" role="img" aria-label={t('claude.status.working')}><span /></span> : status === 'waiting' ? <span className="orchestration-status" data-state={status} aria-hidden="true" /> : null}<button type="button" className="history-worker-delete" aria-label={`${t('menu.delete')} ${task.title}`} onClick={event => { event.stopPropagation(); requestWorkerRemoval(task); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="m19 6-.867 13.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button></span>
+                  {preview?.key === `worker:${task.id}` && createPortal(<div id={previewId} className="history-card-preview" role="tooltip" style={{ left: preview.left, top: preview.top }}><div className="history-card-preview-title">{task.title}</div><div className="history-card-meta"><span className="history-card-tool-wrap">{getToolIcon(task.tool)}<span className="history-card-meta-text">{getToolName(task.tool)} &middot; {projectName(task.cwd, task.tool)}{status !== 'closed' && <> &middot; {t(`orchestration.${status}`)}</>}</span></span></div></div>, document.body)}
+                </div>;
+              })}
+            </div>}
           </div>
         );
-      })}
+  };
+
+  return (
+    <>
+      <button type="button" className="history-search-trigger" onClick={openSearch}>
+        {/* Lucide search; license in /icons/LICENSE-lucide.txt. */}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+        <span>{t('history.search')}</span>
+      </button>
+      <button type="button" className="history-layout-toggle" aria-label={t(layout === 'list' ? 'history.projects' : 'history.list')} aria-pressed={layout === 'projects'} onClick={() => { setPreview(null); setLayout(layout === 'list' ? 'projects' : 'list'); setVisibleCount(PAGE); }}>
+        <span>{t(layout === 'list' ? 'history.list' : 'history.projects')}</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{layout === 'list' ? <><path d="M3 7h6l2 3h10v10H3z" /><path d="M7 3h6l2 3h6" /></> : <><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></>}</svg>
+      </button>
+      {agentError && <p className="agent-feedback error" role="alert">{agentError}</p>}
+      <div className="task-list history-session-list" style={{ marginTop: '0', paddingBottom: '20px' }}>
+      {isLoading && Array.from({ length: 6 }).map((_, i) => (
+        <div key={`skel-${i}`} className="history-card history-card-skeleton" aria-hidden="true">
+          <div className="history-card-content">
+            <span className="skeleton-bar skeleton-bar-title" />
+          </div>
+        </div>
+      ))}
+      {!isLoading && filteredRows.map(row => row.kind === 'session' ? renderSession(row.session, row.grouped) : (
+        <button type="button" key={row.group.key} className="history-project-row" aria-expanded={!collapsedProjects.has(row.group.key)} onClick={() => {
+          setPreview(null);
+          setCollapsedProjects(current => { const next = new Set(current); if (next.has(row.group.key)) next.delete(row.group.key); else next.add(row.group.key); return next; });
+        }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+          <span>{row.group.name}</span>
+          <HistoryGitMark status={gitStatuses.get(gitFolderKey(row.group.cwd))} />
+          <svg className="history-project-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m5 3 5 5-5 5" /></svg>
+        </button>
+      ))}
 
       {hasMore && (
         <>
@@ -645,9 +669,6 @@ export function HistoryBoard() {
             <div key={`load-skel-${i}`} className="history-card history-card-skeleton" aria-hidden="true">
               <div className="history-card-content">
                 <span className="skeleton-bar skeleton-bar-title" />
-                <div className="history-card-meta">
-                  <span className="skeleton-bar skeleton-bar-meta" />
-                </div>
               </div>
             </div>
           ))}
@@ -655,90 +676,48 @@ export function HistoryBoard() {
         </>
       )}
 
-      {!isLoading && filteredSessions.length === 0 && (
+      {!isLoading && availableSessions.length === 0 && (
         <div className="task-empty">
-          <div className="task-empty-text">
-            {sessionSearchQuery || activeAgent || activeProject
-              ? (t('task.no_matching_sessions') || 'No sessions match the selected filters')
-              : (t('menu.no_recent') || 'No recent sessions')}
-          </div>
+          <div className="task-empty-text">{t('menu.no_recent') || 'No recent sessions'}</div>
         </div>
       )}
     </div>
-    {filterMenuOpen && filterMenuPos && createPortal(
-      <>
-        <div className="history-tool-filter-backdrop" onClick={() => setFilterMenuOpen(null)} />
-        <div
-          className="history-tool-filter-menu"
-          style={{ position: 'fixed', left: filterMenuPos.left, top: filterMenuPos.top, width: filterMenuPos.width }}
-        >
-          {filterMenuOpen === 'agent' ? (
-            <>
-              <button
-                type="button"
-                className={`history-tool-filter-opt${activeAgent === null ? ' active' : ''}`}
-                onClick={() => { setActiveAgent(null); setFilterMenuOpen(null); }}
-              >
-                <span className="history-filter-option-icon">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>
-                  </svg>
-                </span>
-                <span className="history-tool-filter-opt-name">{t('task.filter_all_agents') || 'All agents'}</span>
-                <span className="history-tool-filter-count">{agentCounts.reduce((n, item) => n + item.count, 0)}</span>
-              </button>
-              {agentCounts.map(({ tool, count }) => (
-                <button
-                  type="button"
-                  key={tool}
-                  className={`history-tool-filter-opt${activeAgent === tool ? ' active' : ''}`}
-                  onClick={() => { setActiveAgent(activeAgent === tool ? null : tool); setFilterMenuOpen(null); }}
-                >
-                  <span className="history-filter-option-icon">{getToolIcon(tool)}</span>
-                  <span className="history-tool-filter-opt-name">{getToolName(tool)}</span>
-                  <span className="history-tool-filter-count">{count}</span>
-                </button>
-              ))}
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={`history-tool-filter-opt${activeProject === null ? ' active' : ''}`}
-                onClick={() => { setActiveProject(null); setFilterMenuOpen(null); }}
-              >
-                <span className="history-filter-option-icon">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18M6 12h12M10 18h4"/>
-                  </svg>
-                </span>
-                <span className="history-tool-filter-opt-name">{t('task.filter_all_projects') || 'All projects'}</span>
-                <span className="history-tool-filter-count">{baseSessions.reduce((n, s) => (hidden.has(`${s.tool ?? ''}:${s.id}`) ? n : n + 1), 0)}</span>
-              </button>
-              {projectCounts.map((p) => (
-                <button
-                  type="button"
-                  key={p.key}
-                  className={`history-tool-filter-opt${activeProject === p.key ? ' active' : ''}`}
-                  onClick={() => { setActiveProject(activeProject === p.key ? null : p.key); setFilterMenuOpen(null); }}
-                >
-                  <span className="history-filter-option-icon">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                  </span>
-                  <span className="history-tool-filter-opt-name">{projectLabel(p.cwd)}</span>
-                  <span className="history-tool-filter-count">{p.count}</span>
-                </button>
-              ))}
-            </>
-          )}
-        </div>
-      </>,
-      document.body
-    )}
-    {ctxMenu && <SessionContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} onRename={startRename} />}
+    {createPortal(<dialog className="history-search-dialog" ref={searchDialogRef} aria-labelledby={searchId} onKeyDown={event => event.stopPropagation()} onClose={() => setSearchOpen(false)} onMouseDown={event => {
+      if (event.target !== event.currentTarget) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close();
+    }}>
+      <header className="history-search-header"><h2 id={searchId}>{t('history.search_title')}</h2><button type="button" className="close-button" aria-label={t('history.close_search')} onClick={() => searchDialogRef.current?.close()}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m3 3 10 10M3 13 13 3" /></svg></button></header>
+      <div className="agent-session-search-wrap">
+        <svg className="agent-session-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></svg>
+        <input ref={searchInputRef} className="agent-session-search" role="combobox" aria-label={t('history.search_title')} aria-autocomplete="list" aria-expanded={searchOpen} aria-controls={searchId + '-results'} aria-activedescendant={searchResults.length ? searchId + '-result-' + selectedSearchIndex : undefined} placeholder={t('history.search_title')} value={sessionSearchQuery} onChange={event => { setSessionSearchQuery(event.target.value); setSearchSelection(0); setSearchCount(PAGE); }} onContextMenu={event => openCtxMenu(event, setSessionSearchQuery)} onKeyDown={event => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSearchSelection(index => Math.max(0, Math.min(searchResults.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))); }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const selected = sessionSearchQuery === debouncedQuery ? searchResults[selectedSearchIndex] : availableSessions.find(session => matchesQuery(session, sessionSearchQuery));
+            if (selected) openSearchResult(selected);
+          }
+        }} />
+      </div>
+      <div className="history-search-results" id={searchId + '-results'} ref={searchResultsRef} role="listbox" aria-label={t('explorer.tab.history')}>
+        {searchResults.map((session, index) => <button type="button" tabIndex={-1} key={session.tool + ':' + session.id} id={searchId + '-result-' + index} className="history-search-result" role="option" aria-selected={selectedSearchIndex === index} onMouseEnter={() => setSearchSelection(index)} onClick={() => openSearchResult(session)}>
+          {session.tool !== 'coffee-agent' && getToolIcon(session.tool)}
+          <span><strong>{renamed[session.tool + ':' + session.id] ?? session.name}</strong><small>{session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(session.cwd ?? '', session.tool)}</small></span>
+        </button>)}
+        {searchHasMore && <div ref={searchSentinelRef} className="history-search-sentinel" />}
+        {!searchResults.length && <div className="history-search-empty"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></svg><span>{t(isLoading ? 'diff.loading' : 'menu.no_recent')}</span></div>}
+      </div>
+      <footer className="history-search-footer">{t('history.search_hint')}</footer>
+    </dialog>, document.body)}
+    {ctxMenu && <SessionContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} onRename={startRename} onDelete={saved => contextWorker ? requestWorkerRemoval(contextWorker) : void handleDeleteHistory(saved)}
+      onOpenWorker={contextWorker && contextParent ? () => void openWorker(contextWorker, contextParent) : undefined}
+      onDetachWorker={canDetachWorker && contextWorker && contextParent ? () => void detachWorker(contextWorker, contextParent) : undefined}
+      onOpenSplit={state.terminals.some(tab => tab.id === state.activeTerminalId && tab.tool) && (ctxMenu.session.session_token || liveSessions.some(tab => `live:${tab.id}` === ctxMenu.session.id)) ? saved => { void handleViewHistory(saved, { targetId: state.activeTerminalId!, edge: 'right' }); } : undefined}
+      splitFull={splitSessionIds(state.sessionSplit).includes(state.activeTerminalId ?? '') && splitSessionIds(state.sessionSplit).length >= 4 && !state.terminals.some(tab => splitSessionIds(state.sessionSplit).includes(tab.id) && (`live:${tab.id}` === ctxMenu.session.id || tab.tool === ctxMenu.session.tool && tab.resumeToken === ctxMenu.session.session_token))} />}
+    {splitDrag.overlay}
     {ctxMenuEl}
+    {removeWorkerTarget && <RemoveWorkerDialog title={removeWorkerTarget.task.title} error={removeWorkerTarget.error} onRemove={() => removeWorker(removeWorkerTarget.task)} onClose={() => setRemoveWorkerTarget(null)} />}
   </>
   );
 }

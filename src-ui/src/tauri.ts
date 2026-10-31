@@ -17,6 +17,8 @@ export const isTauri =
   typeof window !== 'undefined' &&
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__);
 
+export interface CliUpdateStatus { tool: string; current: string | null; latest: string | null; available: boolean }
+
 // Resolve the invoke function across Tauri v1 / v2
 function resolveInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
   const w = window as unknown as Record<string, unknown>;
@@ -78,9 +80,46 @@ export type GitChanges =
       session_commits: CommitMeta[];
     };
 
+export interface GitProjectStatus {
+  repo_root: string;
+  branch: string;
+  github: 'ok' | 'unavailable' | 'not_github';
+  pull_request: { number: number; url: string; state: 'open' | 'draft' | 'merged' | 'closed'; ci: 'success' | 'failure' | 'pending' | null } | null;
+}
+
+export interface SessionGitContext {
+  branch: string | null;
+  pull_requests: string[];
+}
+
+const sharedReads = new Map<string, Promise<unknown>>();
+const orderedRequests = new Map<string, Promise<unknown>>();
+const readCommands = new Set(['get_tool_control', 'check_tools_installed', 'detect_shells', 'list_system_fonts']);
+
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!_invoke) throw new Error('Tauri IPC not available');
-  return _invoke(cmd, args) as Promise<T>;
+  const controlKind = cmd === 'install_browser_control' ? 'browser' : args?.kind;
+  const controlKey = `get_tool_control:${JSON.stringify({ kind: controlKind })}`;
+  const changesControl = cmd === 'set_tool_control' || cmd === 'install_browser_control' || cmd === 'check_tool_control';
+  if (changesControl) sharedReads.delete(controlKey);
+  const key = readCommands.has(cmd) ? `${cmd}:${JSON.stringify(args ?? {})}` : null;
+  if (key && sharedReads.has(key)) return sharedReads.get(key) as Promise<T>;
+  // Pipe writes are ordered per tab and generation. Watcher changes are ordered separately,
+  // so a late start cannot overwrite a newer folder or restart after stop.
+  // Unrelated commands, particularly close, never wait behind these queues.
+  const writeKey = cmd === 'tier_terminal_input' || cmd === 'tier_terminal_raw_write' ? `terminal:${args?.sessionId}`
+    : cmd === 'claude_session_send' ? `claude:${args?.id}:${args?.generation}`
+    : cmd === 'start_fs_watcher' || cmd === 'stop_fs_watcher' ? 'fs-watcher' : null;
+  const previous = writeKey ? orderedRequests.get(writeKey) : undefined;
+  const request = previous ? previous.catch(() => {}).then(() => _invoke!(cmd, args)) : _invoke(cmd, args);
+  const settled = request.finally(() => {
+    if (key && sharedReads.get(key) === settled) sharedReads.delete(key);
+    if (writeKey && orderedRequests.get(writeKey) === settled) orderedRequests.delete(writeKey);
+    if (changesControl) sharedReads.delete(controlKey);
+  });
+  if (key) sharedReads.set(key, settled);
+  if (writeKey) orderedRequests.set(writeKey, settled);
+  return settled as Promise<T>;
 }
 
 // ─── Type Definitions ────────────────────────────────────────────────────────
@@ -97,6 +136,7 @@ export interface SavedSession {
   created_at?: string;
   file_path?: string;
   turn_count?: number;
+  git_context?: SessionGitContext | null;
 }
 
 export interface ChatSessionRead {
@@ -141,8 +181,47 @@ export type EditorSaveResponse =
 
 // ─── Typed Commands ──────────────────────────────────────────────────────────
 
+export interface ToolMemoryDocument {
+  path: string | null;
+  content: string | null;
+}
+
+export interface ToolSkill { name: string; description: string; source: string | null; path: string; managed: boolean; update: boolean; modified: boolean }
+export interface SkillInventory { supported: boolean; skills: ToolSkill[] }
+export interface CatalogSkill { source: string; name: string; description: string }
+
+export interface ToolControlStatus { supported: boolean; installed: boolean; ready: boolean; browser: string | null; agents: { tool: string; supported: boolean; enabled: boolean; conflict: boolean; issue?: string | null }[] }
+
 export const commands = {
+  checkCliUpdate: (tool: string) => invoke<CliUpdateStatus>('check_cli_update', { tool }),
+  updateCli: (tool: string) => invoke<CliUpdateStatus>('update_cli', { tool }),
+  orchestrationGet: () => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_get'),
+  orchestrationSetAgent: (tool: string, enabled: boolean) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_set_agent', { tool, enabled }),
+  orchestrationSync: (sessions: unknown[]) => invoke<import('./lib/orchestration').ResultDelivery[]>('orchestration_sync', { sessions }),
+  orchestrationCloseGroup: (id: string, keepChildren: boolean) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_close_group', { id, keepChildren }),
+  orchestrationRemoveWorker: (taskId: string) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_remove_worker', { taskId }),
+  orchestrationRestoreWorker: (taskId: string, parentId: string, sessionId: string) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_restore_worker', { taskId, parentId, sessionId }),
+  orchestrationDetachWorker: (taskId: string) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_detach_worker', { taskId }),
+  orchestrationPending: (requestId: string) => invoke<boolean>('orchestration_pending', { requestId }),
+  orchestrationResolve: (requestId: string, result: unknown) => invoke<void>('orchestration_resolve', { requestId, result }),
+  getToolControl: (kind: 'computer' | 'browser') => invoke<ToolControlStatus>('get_tool_control', { kind }),
+  checkToolControl: (kind: 'computer' | 'browser') => invoke<ToolControlStatus>('check_tool_control', { kind }),
+  installBrowserControl: () => invoke<ToolControlStatus>('install_browser_control'),
+  setToolControl: (kind: 'computer' | 'browser', tool: string, enabled: boolean) => invoke<ToolControlStatus>('set_tool_control', { kind, tool, enabled }),
+  getToolSkills: (tool: string) => invoke<SkillInventory>('get_tool_skills', { tool }),
+  searchToolSkills: async (query: string, onUpdate?: (items: CatalogSkill[]) => void) => {
+    const updates = new (await import('@tauri-apps/api/core')).Channel<CatalogSkill[]>(onUpdate);
+    return invoke<CatalogSkill[]>('search_tool_skills', { query, onUpdate:updates });
+  },
+  getToolSkillDescription: (source: string, name: string) => invoke<string>('get_tool_skill_description', { source, name }),
+  installToolSkill: (tool: string, source: string, name: string) => invoke<SkillInventory>('install_tool_skill', { tool, source, name }),
+  removeToolSkill: (tool: string, path: string) => invoke<SkillInventory>('remove_tool_skill', { tool, path }),
+  checkToolSkillUpdates: (tool: string) => invoke<SkillInventory>('check_tool_skill_updates', { tool }),
+  readToolMemory: (tool: string) => invoke<ToolMemoryDocument>('read_tool_memory', { tool }),
+  saveToolMemory: (tool: string, path: string, original: string | null, content: string) =>
+    invoke<ToolMemoryDocument>('save_tool_memory', { tool, path, original, content }),
   pickFolder: () => invoke<string>('pick_folder'),
+  playNotifySound: (kind: 'done' | 'wait') => invoke<void>('play_notify_sound', { kind }),
 
   // Window decorators
   windowMinimize: () => invoke<void>('window_minimize'),
@@ -150,8 +229,8 @@ export const commands = {
   windowClose: () => invoke<void>('window_close'),
 
   // Tier Terminal API
-  tierTerminalStart: (sessionId: string, tool: string | null, cols: number, rows: number, themeMode: string, locale?: string, toolData?: string, cwd?: string, resumeToken?: string, shell?: string) =>
-    invoke<void>('tier_terminal_start', { sessionId, tool, toolData: toolData ?? null, cols, rows, themeMode, locale: locale ?? null, cwd: cwd ?? null, resumeToken: resumeToken ?? null, shell: shell ?? null }),
+  tierTerminalStart: (sessionId: string, tool: string | null, cols: number, rows: number, themeMode: string, locale?: string, toolData?: string, cwd?: string, resumeToken?: string, shell?: string, strictCwd = false) =>
+    invoke<void>('tier_terminal_start', { sessionId, tool, toolData: toolData ?? null, cols, rows, themeMode, locale: locale ?? null, cwd: cwd ?? null, resumeToken: resumeToken ?? null, shell: shell ?? null, strictCwd }),
   tierTerminalInput: (sessionId: string, data: string) => 
     invoke<void>('tier_terminal_input', { sessionId, data }),
   /** Suspend/resume the agent process tree without closing its PTY. */
@@ -226,8 +305,7 @@ export const commands = {
    *  Loaded once at app boot and cached; see `lib/tool-info.ts`. */
   listTools: () => invoke<{ id: string; displayName: string }[]>('list_tools'),
 
-
-  /** Re-run legacy cleanup and non-hook presentation migration for one tool. */
+  /** Apply non-hook presentation maintenance for one tool. */
   maintainToolIntegration: (tool: string) =>
     invoke<void>('maintain_tool_integration', { tool }),
 
@@ -246,6 +324,7 @@ export const commands = {
   prepareImagePaths: (paths: string[]) => invoke<string[]>('prepare_image_paths', { paths }),
 
   listDirectory: (path: string) => invoke<DirEntryInfo[]>('list_directory', { path }),
+  checkProjectDirectories: (paths: string[]) => invoke<{ path: string; status: import('./lib/session-directory').DirectoryStatus }[]>('check_project_directories', { paths }),
   listSystemFonts: () => invoke<FontInfo[]>('list_system_fonts'),
 
   // ── Git-backed changes panel ──────────────────────────────────────
@@ -255,6 +334,7 @@ export const commands = {
   // DiffPanel pulls each side's blob via `gitShowFile` and feeds the existing
   // jsdiff + Shiki pipeline.
   gitChanges: (folder: string) => invoke<GitChanges>('git_changes', { folder }),
+  gitProjectStatus: (folder: string, context?: SessionGitContext | null) => invoke<GitProjectStatus | null>('git_project_status', { folder, context: context ?? null }),
   // Content of `<spec>` — e.g. "HEAD:src/a.ts" (committed) or ":src/a.ts"
   // (staged/index blob). null when the path doesn't exist at that revision;
   // the panel treats null as an empty side (file renders as all-additions).
@@ -315,6 +395,7 @@ export const commands = {
     invoke<void>('delete_password', { host, username }),
   openUrl: (url: string) =>
     invoke<void>('open_url', { url }),
+  computerName: () => invoke<string>('computer_name'),
 
   // In-app self-update (Windows): download the latest installer from
   // the distribution endpoint with streamed progress, launch it, exit.

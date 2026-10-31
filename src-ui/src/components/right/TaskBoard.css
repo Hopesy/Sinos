@@ -3,16 +3,23 @@
 /* ─── Container ─────────────────────────────────────────────────────────────── */
 
 .task-board {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-  /* No top padding: the account header that used to sit here (and cancel a
-     16px top padding via negative margin) was removed in #57, so a bare 16px
-     was left padding the tabs ~16px lower than the center/left tab baseline.
-     Only the .right-tabs top margin spaces the tabs now. */
+  min-height: 0;
+  /* The right panel supplies the shared tab strip above the task content. */
   padding: 0 16px 16px;
   gap: 12px;
   overflow: hidden;
+}
+
+.task-send-error {
+  flex-shrink: 0;
+  margin: 0;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* Global cursor override — desktop native (Apple HIG) */
@@ -28,52 +35,6 @@
 .task-board input,
 .task-board textarea {
   cursor: text !important;
-}
-.right-tabs {
-  display: flex;
-  /* Bottom -4 negates 4 of the 12px flex gap so total below-tabs space
-     is 8px — same rhythm as the left Explorer's tab strip. Without it
-     gap + margin stack to 20px and the content reads as detached. */
-  margin: 12px 0 -4px 0;
-  flex-shrink: 0;
-  /* No bg / border / radius / padding — segmented strip has no
-     container layer; active tab is indicated by text color
-     contrast only. Panel shape adds its own border in the
-     data-shape override in global.css. */
-}
-
-.right-tab {
-  flex: 1; /* 50% */
-  min-width: 0;
-  padding: 6px 0;
-  background: transparent;
-  border: none;
-  /* Keep inactive navigation as readable as the "All" directory filter. */
-  color: var(--text-2);
-  font-family: var(--font, system-ui);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: default;
-  transition: color 0.15s ease;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap !important;
-  overflow-wrap: normal;
-  word-break: keep-all;
-  outline: none;
-  position: relative;
-  z-index: 2;
-}
-
-.right-tab:hover:not(.active) {
-  color: var(--text-1);
-}
-
-.right-tab.active {
-  color: var(--text-1);
-  background: transparent;
 }
 /* ─── Task List ─────────────────────────────────────────────────────────────── */
 
@@ -94,7 +55,7 @@
   align-items: center;
   gap: 6px;
   padding: 10px 4px 6px;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -362,7 +323,7 @@
 
 .task-title {
   flex: 1;
-  font-size: 13px;
+  font-size: 14px;
   font-family: var(--font, system-ui);
   color: var(--text-1, #e8e4de);
   line-height: 1.4;
@@ -382,7 +343,7 @@
    manual handle or inner scrollbar appears. */
 .task-title-edit {
   flex: 1;
-  font-size: 13px;
+  font-size: 14px;
   font-family: var(--font, system-ui);
   color: var(--text-1, #e8e4de);
   line-height: 1.4;
@@ -568,7 +529,7 @@
   border: none;
   color: var(--text-2, rgba(255, 255, 255, 0.6));
   font-family: var(--font, system-ui);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   padding: 0;
   resize: vertical;
@@ -619,7 +580,7 @@
   background: transparent;
   color: var(--text-2);
   font-family: var(--font, system-ui);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.15s;

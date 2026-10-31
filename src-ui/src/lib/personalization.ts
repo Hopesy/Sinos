@@ -60,15 +60,16 @@ export function resolveThemeMode(mode: ThemeMode, systemDark: boolean): 'light' 
 // blurred copy of the desktop wallpaper rendered in-page — FrostBackdrop.tsx).
 // App.tsx normalizes it to data-shape="glass" + data-frost="frost" so every
 // [data-shape="glass"] rule applies unchanged.
-export const THEME_SHAPES: { code: ThemeShape; label: string }[] = [
-  { code: 'soft',   label: 'Soft'   },
-  { code: 'slab',   label: 'Slab'   },
-  { code: 'sharp',  label: 'Sharp'  },
-  { code: 'glass',  label: 'Glass'  },
-  { code: 'frost',  label: 'Frost'  },
-  { code: 'panel',  label: 'Panel'  },
-  { code: 'carbon', label: 'Carbon' },
-  { code: 'monogram', label: 'Monogram' },
+export const THEME_SHAPES: { code: ThemeShape; labelKey: I18nKey }[] = [
+  { code: 'soft',   labelKey: 'theme.shape.soft'   },
+  { code: 'slab',   labelKey: 'theme.shape.slab'   },
+  { code: 'sharp',  labelKey: 'theme.shape.sharp'  },
+  { code: 'glass',  labelKey: 'theme.shape.glass'  },
+  { code: 'frost',  labelKey: 'theme.shape.frost'  },
+  { code: 'panel',  labelKey: 'theme.shape.panel'  },
+  { code: 'carbon', labelKey: 'theme.shape.carbon' },
+  { code: 'monogram', labelKey: 'theme.shape.monogram' },
+  { code: 'characters', labelKey: 'theme.shape.characters' },
 ];
 
 // Frost reuses the entire glass chrome treatment; only the frosted backdrop

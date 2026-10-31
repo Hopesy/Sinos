@@ -60,7 +60,7 @@
         0 0 3px rgba(var(--shadow-rgb), 0.40),
         0 0 4px rgba(var(--shadow-rgb), 0.20);
     box-shadow: var(--gambit-shadow);
-    color: var(--text-1, #e8e4de);
+    color: var(--text-2, #bab5ac);
     font-family: inherit;
     overflow: hidden;
     user-select: none;
@@ -79,7 +79,7 @@
     /* Inherits the same 4-layer 80/60/40/20 falloff defined on
        .gambit. With --shadow-rgb=0,0,0 (light theme black) the
        shadow reads naturally against the ivory background. */
-    color: var(--text-1, #2a2823);
+    color: var(--text-2, #50564f);
 }
 
 /* ─── Shape overlays (mirror .task-card / .panel-* styling) ─── */
@@ -106,6 +106,7 @@
 .gambit.gambit--docked {
     animation: none;     /* fade-in is jarring when opening mid-session */
     will-change: auto;   /* not GPU-translated when docked */
+    overflow: visible;   /* let the resize grip straddle the top border */
 }
 
 .gambit.gambit--docked .gambit-textarea {
@@ -122,7 +123,7 @@
    starts below, no spatial overlap, cursor switches reliably.
 
    Hit area (6px) is decoupled from the visible affordance — a short
-   rounded grip bar centred under the top edge that surfaces on hover and
+   rounded grip bar centred on the top edge that surfaces on hover and
    lengthens+deepens while dragging (the note panel's bottom-edge handle
    style). Bar width scales with the dock (clamp on a % of width) since
    Gambit spans the whole centre panel. */
@@ -139,6 +140,7 @@
        with its own !important rule; we follow the same pattern here. */
     cursor: ns-resize !important;
     position: relative;  /* pseudo positioning context */
+    transform: translateY(-50%);
     background: transparent;
 }
 /* Grip bar — a short centred pill, hidden at rest. On hover it surfaces in
@@ -212,31 +214,22 @@
 }
 
 /* ─── Workspace label (footer, far left) ───────────────────── */
-/* Shows the active tab's working-folder name, symmetric to the send button.
-   Read-only info — deliberately no hover tooltip (the app has no hover-tip
-   concept). Text-only: a folder icon was tried but every directory gets the
-   same glyph, so it's noise. Height exactly matches .gambit-send (30px) so
-   the footer stays level; the glyphs + fill are sized up so the chip reads
-   as a real element next to the send circle. Ellipsizes rather than wrapping,
-   so a deep path can't shove the thumbs or send button. */
+/* Read-only target label, styled like the desktop composer's controls.
+   Long names ellipsize so they cannot displace the send button. */
 .gambit-workspace {
     display: flex;
     align-items: center;
     gap: 6px;
     flex: 0 1 auto;
+    margin-right: auto;
     min-width: 0;
     max-width: 200px;
-    height: 30px; /* matches .gambit-send exactly */
-    /* 6px = (30 − 18)/2: the icon's left margin equals its top/bottom margin,
-       and the folder text's right margin matches the icon's left margin — the
-       pill is fully symmetric around the icon+name row. */
-    padding: 0 6px;
-    border-radius: var(--shape-radius-pill, 999px);
-    color: var(--text-1, #e8e4de);
-    background: rgba(255, 255, 255, 0.06);
-    font-size: 13px;
-    font-weight: 600;
-    line-height: 1;
+    height: 26px;
+    padding: 4px 7px;
+    border-radius: var(--shape-radius-btn, 5px);
+    color: var(--text-2);
+    background: var(--bg-hover);
+    font: 12px/16px var(--font);
     white-space: nowrap;
     user-select: none;
 }
@@ -244,145 +237,85 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
-    /* Slightly larger than the pill's default 13px, and its line box equals
-       the icon's 18px height — so the name and the glyph occupy the same
-       centred band inside the pill and read level with each other. */
-    font-size: 14px;
-    line-height: 18px;
+    font: inherit;
 }
-/* Tool glyph — the active tab's icon (SvgClaude / SvgCodex / …), repeated in
-   the chip so it reads as "tool + directory" (mirrors the chrome-tab layout).
-   Icon components size at 1em, so font-size drives the glyph; explicit 18×18
-   box with the chip's 6px padding gives it uniform margins on all four sides. */
+.gambit-footer--claude .gambit-workspace {
+    max-width: min(200px, 24%);
+    margin-right: 0;
+}
+/* Match the glyph's size to the desktop composer's compact controls. */
 .gambit-workspace-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 18px;
-    height: 18px;
-    font-size: 18px;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
 }
 
-.gambit-view-toggle {
-    position: relative;
-    isolation: isolate;
-    display: inline-flex;
-    flex: 0 0 auto;
-    width: 64px;
-    height: 30px;
-    gap: 0;
-    padding: 2px;
-    border: 0;
-    overflow: hidden;
-    border-radius: var(--shape-radius-pill, 999px);
-    background: var(--bg-hover);
-}
-
-/* One continuous two-segment selector: the shared track supplies the single
-   silhouette while this 30px thumb glides between icon positions. Both radii
-   use shape tokens, so Soft/Glass become a pill, Slab stays gently squared,
-   and Panel/Sharp become a clean rectangle. */
-.gambit-view-toggle::before {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    z-index: 0;
-    width: 30px;
-    height: 26px;
-    border-radius: var(--shape-radius-pill, 999px);
-    background: color-mix(in srgb, var(--accent) 20%, var(--bg-panel));
-    transform: translateX(0);
-    transition: transform 180ms cubic-bezier(0.22, 0.8, 0.24, 1);
-}
-
-.gambit-view-toggle[data-view-mode="terminal"]::before {
-    transform: translateX(30px);
-}
-
-.gambit-view-toggle-btn {
-    position: relative;
-    z-index: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 26px;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    color: var(--text-2);
-    background: transparent;
-    cursor: pointer;
-    transition: color 140ms ease;
-}
-
-.gambit-view-toggle-btn:hover {
-    color: var(--text-1);
-}
-
-.gambit-view-toggle-btn[aria-pressed="true"] {
-    color: var(--accent);
-}
-
-.gambit-view-toggle-btn svg {
-    transition: transform 120ms ease;
-}
-
-.gambit-view-toggle-btn:active svg {
-    transform: scale(0.9);
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .gambit-view-toggle::before,
-    .gambit-view-toggle-btn {
-        transition: none;
-    }
-}
-
-/* ─── Thumbnail strip (derived view of image paths in draft) ─ */
-/* Pure visual — no state of its own. Regex scans draft text for
-   absolute image paths; each unique match gets a thumb. Clicking a
-   thumb selects the matching path in the textarea, so Backspace
-   deletes the path (and hence the thumb) in one stroke. */
-/* Lives inside .gambit-footer as the left flex item. Thumbs align
-   left (default), send button sits flush right. Scrolls horizontally
-   when too many. min-width:0 so the flex item can actually shrink
-   below its content width (default would push the send button
-   off-screen with many thumbs). Thumb size matches the send button
-   (30×30) so the footer height stays constant whether thumbs are
-   present or not. */
-.gambit-thumb-strip {
+/* Shared attachment row above the input, derived from draft paths. */
+.gambit-attachments {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex: 1;
-    min-width: 0;
-    overflow-x: auto;
-    /* Scrollbar hidden via global rule. */
-}
-
-.gambit-thumb {
     flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--shape-radius-btn, 6px);
-    overflow: hidden;
-    cursor: pointer;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    min-width: 0;
+    padding: 4px 12px 7px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
 }
-.gambit-thumb img {
-    width: 100%;
-    height: 100%;
+.gambit-attachment {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 5px;
+    max-width: 260px;
+    height: 28px;
+    padding: 0 4px 0 6px;
+    border-radius: var(--shape-radius-btn, 6px);
+    background: var(--bg-hover);
+    color: var(--text-2);
+}
+.gambit-attachment-content {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-2);
+    font: 12px var(--font);
+}
+.gambit-attachment-content span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gambit-attachment-content svg { flex-shrink: 0; }
+.gambit-attachment-content img {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
     object-fit: cover;
     display: block;
+    border-radius: var(--shape-radius-btn, 6px);
     user-select: none;
     -webkit-user-drag: none;
 }
-.gambit-thumb--broken {
-    display: none;
+.gambit-attachment-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--shape-radius-btn, 6px);
+    background: transparent;
+    color: var(--text-3);
+}
+.gambit-attachment-remove:hover, .gambit-attachment-remove:focus-visible {
+    background: var(--bg-panel);
+    color: var(--text-1);
 }
 
 /* ─── Preview overlay (fullscreen zoom-in) ───────────────────── */
@@ -432,6 +365,18 @@
     gap: 8px;
     flex-shrink: 0;
 }
+.gambit-footer--capabilities .gambit-workspace { margin-right:0; }
+/* Terminal attach button sits right after the workspace label, matching the desktop composer's paperclip. */
+.gambit-attach { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:26px; height:26px; padding:0; border:0; border-radius:var(--shape-radius-btn,5px); color:var(--text-2); background:var(--bg-hover); cursor:pointer; }
+.gambit-attach:hover { color:var(--text-1); background:var(--accent-bg,var(--bg-hover)); }
+.gambit-footer--attach .gambit-workspace { margin-right:0; }
+.gambit-footer--attach:not(.gambit-footer--capabilities) .gambit-attach { margin-right:auto; }
+.gambit-capabilities { display:flex; align-items:center; gap:5px; min-width:0; margin-right:auto; overflow:hidden; }
+.gambit-capability { min-width:0; padding:4px 7px; border-radius:var(--shape-radius-btn,5px); background:color-mix(in srgb,var(--capability-color) 12%,transparent); color:var(--capability-color); font:12px var(--font); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gambit-capability.is-orchestration { --capability-color:var(--green); }
+.gambit-capability.is-computer { --capability-color:var(--blue); }
+.gambit-capability.is-browser { --capability-color:#b59cce; }
+[data-mode="light"] .gambit-capability.is-browser { --capability-color:#7a6095; }
 
 /* Compact footer tools stay icon-only so the dock remains usable at narrow
    widths. Upload opens the native image picker. */

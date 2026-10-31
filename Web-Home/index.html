@@ -15,7 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   
   <!-- External CSS -->
-  <link rel="stylesheet" href="./css/style.css?v=0.4.6">
+  <link rel="stylesheet" href="./css/style.css?v=0.4.8">
 </head>
 <body>
 
@@ -24,14 +24,8 @@
     <!-- Removed Cinematic Video Background to favor Minimalist Theme -->
   </div>
 
-  <!-- Dot field: regular grid of small dots drifting downward as one
-       sheet at uniform speed. Each dot has a subtle breathing pulse
-       (size + alpha sine-wave with per-dot phase offset). Within
-       the cursor's hover region (~130px) the dots morph into a "$"
-       glyph (value motif), drawn in the Outfit 800 brand weight. Crossfade between dot and glyph
-       is smooth, not popping. Pointer-events: none, theme-adaptive,
-       retina-crisp, reduced-motion friendly. -->
-  <canvas class="dot-field" aria-hidden="true"></canvas>
+  <!-- Client-style character ribbons; clicks gently steer the existing flow. -->
+  <canvas class="character-field" aria-hidden="true"></canvas>
 
   <!-- Navigation -->
   <header class="navbar">
@@ -207,7 +201,6 @@
   <!-- Demo Showcase Section -->
   <section class="demo-section">
     <div class="demo-wrapper">
-
       <div class="demo-screen">
         <div class="demo-screen-inner">
           <img id="demo-gif" src="demo/wallpaper.jpg" alt="Sinos CLI demo" />
@@ -286,6 +279,6 @@
     </div>
   </footer>
 
-  <script src="./js/main.js?v=0.9.9"></script>
+  <script src="./js/main.js?v=0.9.15"></script>
 </body>
 </html>

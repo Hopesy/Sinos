@@ -17,6 +17,8 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+semver = "1"
+tempfile = "3"
 # Tier Terminal — PTY (portable-pty, WezTerm's cross-platform PTY library)
 portable-pty = "0.9"
 # Remote transport, owned Codex engine and background filesystem/font tasks.
@@ -25,9 +27,9 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
 aes-gcm = "0.10"
 crypto_box = "0.9"
-sha2 = "0.10"
 url = "2"
 tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "system-proxy"] }
 
 # Regex (used by terminal.rs for ANSI strip)
 regex = "1"
@@ -47,9 +49,14 @@ tauri-plugin-clipboard-manager = "2"
 # Utilities
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+toml = "0.9"
+toml_edit = "0.25"
 # Preserve comments and formatting in Devin's JSONC hook configuration.
 jsonc-parser = { version = "0.33.1", features = ["cst", "serde", "serde_json"] }
 anyhow = "1"
+# Windows paths passed to CMD must use the compatible drive-letter form.
+dunce = "1"
 
 log = "0.4"
 dirs = "5"
@@ -70,7 +77,7 @@ notify = "6.1.1"
 # single handler callback so the frontend doesn't re-scan 50 times.
 notify-debouncer-full = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
+keyring = "3"
 
 # Multi-agent MCP server (v1.0: 3 tools, HTTP Streamable transport)
 # See docs/MULTI-AGENT-ARCHITECTURE.md §5.5 for why HTTP over stdio.
@@ -79,6 +86,13 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 rmcp = { version = "0.8", features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.7"
 uuid = { version = "1", features = ["v4"] }
+# Usage/balance meters (ported from EchoBird usage_providers).
+async-trait = "0.1"
+chrono = "0.4"
+# Oh My Pi keeps providers in YAML; serde_yaml is archived, this is the maintained fork.
+serde_yaml_ng = "0.10"
+# DeepSeek Harness stores Session logs as concatenated zstd frames.
+zstd = "0.13"
 
 [profile.release]
 opt-level = "z"
@@ -116,9 +130,11 @@ tauri-plugin-single-instance = "2"
 #     installer etc. — replaces the old 5-dir hardcoded PATH repair
 #     (src/windows_path.rs).
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Media_Audio",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_Security",
@@ -138,6 +154,9 @@ windows = { version = "0.58", features = [
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 window-vibrancy = "0.6"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
 # `libc::kill(pid, 0)` for process-liveness probe in cli::mcp_status.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -150,6 +169,7 @@ libc = "0.2"
 # Other compositors keep the same genuinely transparent, theme-tinted window
 # without pretending that an in-page wallpaper is the desktop.
 [target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust", "vendored"] }
 raw-window-handle = "0.6"
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-client = { version = "0.31", features = ["system", "dlopen"] }

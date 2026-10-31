@@ -20,11 +20,13 @@ import { IS_MACOS, IS_WINDOWS } from '../../lib/platform';
 import { TERM_COLOR_SCHEMES } from '../center/TierTerminal';
 import { commands, type FontInfo } from '../../tauri';
 import { FontPicker } from './FontPicker';
+import { SettingsSlider } from './SettingsSlider';
+import { setUiScale, useUiScale } from '../../lib/ui-scale';
 import { THEME_COLORS, THEME_MODES, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
 import { RelaySettings } from './RelaySettings';
 import './SettingsModal.css';
 
-type Section = 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'tasks' | 'language' | 'feedback';
+type Section = 'general' | 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'language' | 'feedback';
 
 // Trailing "opens outside the app" affordance on the feedback cards.
 const ExternalLinkArrow = () => (
@@ -94,10 +96,10 @@ const ICONS: Record<Section, ReactNode> = {
       <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10" />
     </svg>
   ),
-  tasks: (
+  general: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6" />
-      <path d="m9 11 3 3L22 4" />
+      <path d="M4 7h9m4 0h3M4 17h3m4 0h9" />
+      <circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" />
     </svg>
   ),
   language: (
@@ -125,7 +127,12 @@ export function SettingsModal() {
   const { state } = useAppState();
   const dispatch = useAppDispatch();
   const t = useT();
-  const [section, setSection] = useState<Section>('appearance');
+  const [section, setSection] = useState<Section>('general');
+  const uiScale = useUiScale();
+  const scalePercent = uiScale.requestedPercent ?? uiScale.percent;
+  const [dragPercent, setDragPercent] = useState<number | null>(null);
+  const sliderPercent = dragPercent ?? scalePercent;
+  const finishScaleDrag = () => setDragPercent(null);
   const [version, setVersion] = useState('');
   // Installed fonts for the terminal font picker — loaded lazily (Rust scan)
   // the first time the Terminal section is opened. null = not loaded yet.
@@ -148,7 +155,7 @@ export function SettingsModal() {
   const [soundWait, setSoundWait] = useState(() => readSoundPref('cc-sound-wait'));
 
   const open = state.settingsOpen;
-  const close = () => dispatch({ type: 'SET_SETTINGS_OPEN', open: false });
+  const close = () => { finishScaleDrag(); dispatch({ type: 'SET_SETTINGS_OPEN', open: false }); };
 
   // App version for the rail footer — pulled from the Tauri runtime (matches
   // tauri.conf.json) once, lazily so non-Tauri dev just shows nothing.
@@ -266,13 +273,13 @@ export function SettingsModal() {
   const modKey = IS_MACOS ? '⌘' : 'Ctrl';
 
   const SECTIONS: { id: Section; label: string }[] = [
+    { id: 'general',    label: t('settings.general') },
     { id: 'appearance', label: t('settings.appearance') },
     { id: 'wallpaper',  label: t('settings.wallpaper') },
     { id: 'terminal',   label: t('settings.terminal') },
     { id: 'remote',     label: t('settings.remote') },
     { id: 'gambit',     label: t('settings.gambit') },
     { id: 'sound',      label: t('settings.sound') },
-    { id: 'tasks',      label: t('settings.tasks') },
     { id: 'language',   label: t('settings.language') },
     { id: 'feedback',   label: t('settings.feedback') },
   ];
@@ -292,7 +299,7 @@ export function SettingsModal() {
             <button
               key={s.id}
               className={`settings-rail-item${section === s.id ? ' active' : ''}`}
-              onClick={() => setSection(s.id)}
+              onClick={() => { finishScaleDrag(); setSection(s.id); }}
             >
               <span className="settings-rail-icon">{ICONS[s.id]}</span>
               {s.label}
@@ -315,7 +322,7 @@ export function SettingsModal() {
         <section className="settings-content">
           <header className="settings-header">
             <span className="settings-header-title">{currentLabel}</span>
-            <button className="settings-close" onClick={close} aria-label="Close">
+            <button className="settings-close close-button" onClick={close} aria-label="Close">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 6 6 18" /><path d="m6 6 12 12" />
               </svg>
@@ -397,7 +404,7 @@ export function SettingsModal() {
                       className={`settings-chip${s.code === state.currentShape ? ' active' : ''}`}
                       onClick={() => setShape(s.code)}
                     >
-                      {s.label}
+                      {t(s.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -437,21 +444,20 @@ export function SettingsModal() {
                   )}
                 </div>
 
-                <div className="settings-section-label">{t('settings.wallpaper.opacity')}</div>
-                <div className="settings-slider-row">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={5}
-                    value={state.wallpaperOpacity}
-                    onChange={e => setOpacity(parseInt(e.target.value, 10))}
-                    className="settings-slider"
-                    disabled={!hasBg}
-                    aria-label="Wallpaper opacity"
-                  />
-                  <span className="settings-slider-value">{state.wallpaperOpacity}%</span>
+                <div className="settings-section-head">
+                  <label className="settings-section-label" htmlFor="settings-wallpaper-opacity">{t('settings.wallpaper.opacity')}</label>
+                  <div className="settings-scale-actions"><output htmlFor="settings-wallpaper-opacity">{state.wallpaperOpacity}%</output></div>
                 </div>
+                <SettingsSlider
+                  id="settings-wallpaper-opacity"
+                  min={0} max={100} step={5}
+                  ticks={[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]}
+                  marks={[0, 50, 100]}
+                  value={state.wallpaperOpacity}
+                  onChange={setOpacity}
+                  disabled={!hasBg}
+                  label={t('settings.wallpaper.opacity')}
+                />
               </>
             )}
 
@@ -674,8 +680,27 @@ export function SettingsModal() {
               </>
             )}
 
-            {section === 'tasks' && (
+            {section === 'general' && (
               <>
+                <div className="settings-section-head">
+                  <label className="settings-section-label" htmlFor="settings-ui-scale">{t('settings.uiScale')}</label>
+                  <div className="settings-scale-actions">
+                    <output htmlFor="settings-ui-scale">{Math.round(sliderPercent / 10) * 10}%</output>
+                    <button type="button" className="settings-scale-reset" disabled={uiScale.pending || uiScale.percent === 100 && !uiScale.failed} onClick={() => void setUiScale(100)}>{t('settings.uiScale.reset')}</button>
+                  </div>
+                </div>
+                <SettingsSlider
+                  id="settings-ui-scale"
+                  label={t('settings.uiScale')}
+                  min={70} max={150} step={10}
+                  ticks={[70, 80, 90, 100, 110, 120, 130, 140, 150]}
+                  marks={[70, 100, 150]}
+                  value={scalePercent}
+                  commitOnRelease
+                  onChange={percent => void setUiScale(percent)}
+                  onPreview={setDragPercent}
+                />
+                {uiScale.failed && <div className="settings-scale-error" role="alert">{t('settings.uiScale.error')}</div>}
                 <div className="settings-section-label">{t('settings.tasks.view')}</div>
                 <div className="settings-key-row">
                   {TASK_VIEW_MODES.map(m => {

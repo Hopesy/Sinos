@@ -9,8 +9,8 @@
 //
 // Image paste behavior: pasted images are saved to a temp file via Rust, and
 // the absolute path is inserted directly into the textarea as plain text at
-// the cursor position. No attachment chips, no thumbnails — just a visible,
-// editable path string. AI CLI agents that support local image paths (e.g.
+// the cursor position. The attachment row above the input derives from those
+// editable path strings. AI CLI agents that support local image paths (e.g.
 // Claude Code) will read the file; agents that don't just see the raw path.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -22,6 +22,12 @@ import { useT } from '../../i18n/useT';
 import { useAppState, type AgentStatus } from '../../store/app-state';
 import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-drop';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
+import { ClaudeComposerControls, AttachIcon } from './ClaudeComposerControls';
+import { CodexComposerControls } from './CodexComposerControls';
+import { DshComposerControls } from './DshComposerControls';
+import { UsageMeter } from './UsageMeter';
+import { useUsageQuota } from '../../lib/usage-quota';
+import { gambitAttachments, removeGambitAttachment } from '../../lib/gambit-attachments';
 import './Gambit.css';
 
 interface GambitProps {
@@ -34,11 +40,23 @@ interface GambitProps {
    *  in multi-agent mode, xterm not yet mounted, etc.). Gambit uses this
    *  signal to decide whether to clear the draft — failed sends preserve
    *  the text so the user never loses what they typed. */
-  onSend: (text: string) => boolean;
+  onSend: (text: string) => boolean | Promise<boolean>;
+  running?: boolean;
+  claude?: boolean;
+  codex?: boolean;
+  /** DeepSeek Harness desktop conversation (always desktop in Coffee CLI). */
+  dsh?: boolean;
+  /** Local file paths are meaningful to this target (false for SSH tabs). */
+  attachable?: boolean;
+  onCancel?: () => void;
+  sendFailedHint?: string;
   /** Suspend/resume the active agent process without recreating its PTY. */
-  onTogglePause: (paused: boolean) => Promise<boolean>;
+  onTogglePause?: (paused: boolean) => Promise<boolean>;
   /** Native title status, when the active tool exposes one. */
   agentStatus?: AgentStatus;
+  canUseChat?: boolean;
+  viewMode?: 'terminal' | 'chat';
+  onViewModeChange?: (mode: 'terminal' | 'chat') => void;
   /** Whether the left/right side panels are currently hidden. When Gambit
    *  is docked at the bottom it spans the center panel only, so we need
    *  to know which sides are absent to compute the inset offsets. */
@@ -52,9 +70,12 @@ interface GambitProps {
    *  left of the target name so the chip reads as "tool + target",
    *  mirroring the tab's icon+name pairing. undefined hides the icon. */
   toolIcon?: React.ReactNode;
-  canUseChat: boolean;
-  viewMode: 'terminal' | 'chat';
-  onViewModeChange: (mode: 'terminal' | 'chat') => void;
+  /** Active tab's tool id and folder; the plan-usage meter reads the tool's own configuration. */
+  tool?: string;
+  cwd?: string;
+  orchestration?: boolean;
+  computer?: boolean;
+  browser?: boolean;
 }
 
 // Matches any absolute image path inside the compose draft — both our
@@ -93,7 +114,6 @@ function wrapImagePathsForSend(text: string): string {
 // Docked height: Gambit lives flush at the bottom of the center panel.
 // Height is user-resizable via the top edge and persists across sessions,
 // mirroring how VS Code's bottom panel works.
-const DOCK_DEFAULT_HEIGHT = 200;
 const DOCK_MIN_HEIGHT = 120;
 const DOCK_MAX_HEIGHT_RATIO = 0.7; // never let the dock eat more than 70% of viewport height
 const LS_DOCK_H = 'cc-gambit-dock-h';
@@ -105,18 +125,36 @@ function GambitImpl({
   onClose,
   onSend,
   onTogglePause,
-  agentStatus,
+  agentStatus, canUseChat = false, viewMode = 'terminal', onViewModeChange,
+  running = false,
+  claude = false,
+  codex = false,
+  dsh = false,
+  attachable = false,
+  onCancel,
+  sendFailedHint,
   leftPanelHidden,
   rightPanelHidden,
   workspaceName,
   toolIcon,
-  canUseChat,
-  viewMode,
-  onViewModeChange,
+  tool,
+  cwd,
+  orchestration,
+  computer,
+  browser,
 }: GambitProps) {
   const t = useT();
+  // Desktop conversations own their composer controls and send prompts verbatim.
+  const desktop = claude || codex || dsh;
+  const usage = useUsageQuota(sessionId, tool, cwd, claude ? 'claude' : codex ? 'codex' : dsh ? 'dsh' : null);
+  const usageMeter = <UsageMeter quotas={usage.quotas} onRefresh={usage.refresh} />;
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const claudeKeyHandler = useRef<((event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | undefined>(undefined);
+  const codexSubmitHandler = useRef<((text: string) => boolean) | undefined>(undefined);
+  const sendingRef = useRef(false);
+  const latestDraftRef = useRef(draft);
+  latestDraftRef.current = draft;
   // The scroll container that owns the vertical scrollbar (the textarea itself
   // is overflow:hidden and auto-grows to its full content height). We need a
   // handle to it so the auto-grow effect can preserve / follow its scrollTop.
@@ -157,7 +195,7 @@ function GambitImpl({
       const n = raw ? parseInt(raw, 10) : NaN;
       if (Number.isFinite(n) && n >= DOCK_MIN_HEIGHT) return n;
     } catch { /* optional preference */ }
-    return DOCK_DEFAULT_HEIGHT;
+    return DOCK_MIN_HEIGHT;
   });
   // Caches the latest height written to the DOM during a resize drag, so
   // onUp commits it back to React state once without thrashing intermediate
@@ -251,10 +289,8 @@ function GambitImpl({
   // attachment state. User edits/deletes the path string → thumbnails
   // update automatically. Paths remain the only source of truth; they
   // travel with the text through copy/paste/send.
-  const pastedImagePaths = useMemo(() => {
-    const matches = draft.match(IMAGE_PATH_RE);
-    return matches ? Array.from(new Set(matches)) : [];
-  }, [draft]);
+  const attachments = useMemo(() => Array.from(new Map(gambitAttachments(draft).map(item => [item.path, item])).values()), [draft]);
+  const pastedImagePaths = useMemo(() => attachments.filter(item => item.image).map(item => item.path), [attachments]);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   // Use a stable key so the effect only re-fires when the set of paths
   // actually changes, not on every keystroke that leaves paths intact.
@@ -285,9 +321,7 @@ function GambitImpl({
   const onDraftChangeRef = useRef(onDraftChange);
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { onDraftChangeRef.current = onDraftChange; }, [onDraftChange]);
-
-  const insertPathsAtCursor = useCallback((paths: string[]) => {
-    if (paths.length === 0) return;
+  const insertPaths = useCallback((paths: string[]) => {
     const formatted = formatPathsForInsert(paths);
     const textarea = textareaRef.current;
     const cur = draftRef.current;
@@ -302,19 +336,23 @@ function GambitImpl({
       textarea.selectionEnd = start + formatted.length;
     });
   }, []);
-
-  useEffect(() => {
-    return registerFileDropTarget({
-      priority: 200,
-      rect: () => rootRef.current?.getBoundingClientRect() ?? null,
-      insert: insertPathsAtCursor,
-    });
-  }, [insertPathsAtCursor]);
+  useEffect(() => registerFileDropTarget({ priority: 200, rect: () => rootRef.current?.getBoundingClientRect() ?? null, insert: insertPaths }), [insertPaths]);
+  // Picked files insert exactly like dropped ones: at the caret, quoted only when needed.
+  const attachFiles = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const picked = await open({ multiple: true, directory: false });
+    if (picked) insertPaths(Array.isArray(picked) ? picked : [picked]);
+  };
 
   // Click a thumbnail → open a full-size preview overlay AND select the
   // matching path text in the textarea (so once the overlay closes, the
   // caret is conveniently placed at the path for easy Backspace-delete).
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const removeAttachment = (path: string) => {
+    onDraftChange(removeGambitAttachment(latestDraftRef.current, path));
+    if (previewPath === path) setPreviewPath(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
   const openThumbPreview = (path: string) => {
     setPreviewPath(path);
     const textarea = textareaRef.current;
@@ -586,20 +624,18 @@ function GambitImpl({
     return true;
   }, [history, draft, onDraftChange]);
 
+  const handlePause = async () => {
+    if (!onTogglePause || pausePending) return;
+    const shouldPause = executionState === 'running';
+    setPausePending(true);
+    try {
+      if (await onTogglePause(shouldPause)) setExecutionState(shouldPause ? 'paused' : 'running');
+      else setSendFailed(true);
+    } finally { setPausePending(false); }
+  };
+
   const handleSend = useCallback(async () => {
-    if (executionState !== 'idle') {
-      if (pausePending) return;
-      const shouldPause = executionState === 'running';
-      setPausePending(true);
-      const ok = await onTogglePause(shouldPause);
-      setPausePending(false);
-      if (ok) {
-        setExecutionState(shouldPause ? 'paused' : 'running');
-      } else {
-        setSendFailed(true);
-      }
-      return;
-    }
+    if (running && !claude && !dsh) return;
     // CRITICAL: the draft text is the ONLY thing that gets sent.
     // Thumbnails rendered from pastedImagePaths are a pure derived view
     // with zero data-side responsibility. DO NOT re-append paths or
@@ -611,8 +647,12 @@ function GambitImpl({
       setSendEmpty(true);
       return;
     }
-    const body = wrapImagePathsForSend(text);
-    const ok = onSend(body);
+    if ((codex || dsh) && codexSubmitHandler.current?.(text)) return;
+    const body = desktop ? text : wrapImagePathsForSend(text);
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    let ok = false;
+    try { ok = await onSend(body); } finally { sendingRef.current = false; }
     if (!ok) {
       // Preserve draft so the user does not lose what they typed. They
       // likely just need to click the target pane first, then Send again.
@@ -624,12 +664,8 @@ function GambitImpl({
     // Sent -> leave history navigation mode so the next recall starts from
     // the newest entry (which is the one we just pushed).
     historyCursorRef.current = null;
-    // The PTY may not publish its first native "working" title until after
-    // the click has returned. Mark the control as running immediately so the
-    // same button becomes Pause without a timing gap.
-    setExecutionState('running');
-    onDraftChange('');
-  }, [draft, executionState, onDraftChange, onSend, onTogglePause, pausePending]);
+    if (latestDraftRef.current === draft) onDraftChange('');
+  }, [draft, onSend, onDraftChange, running, claude, codex, dsh, desktop]);
 
   // Scroll the active agent surface in small increments while the Gambit
   // textarea stays focused. The textarea is a controlled editor, so letting
@@ -651,6 +687,7 @@ function GambitImpl({
     // IME composition in progress — let the IME keep Enter for confirming
     // candidates. nativeEvent.isComposing is the canonical flag.
     if (e.nativeEvent.isComposing) return;
+    if (!desktop) {
     // Bare ←/→ recall history only from an empty prompt, or while already
     // browsing history. With regular text in the box they retain native
     // caret movement, including Shift+arrow selection and modifier chords.
@@ -667,6 +704,18 @@ function GambitImpl({
     // step. Smooth scrolling keeps key-repeat movement readable and precise.
     if (bareArrow && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       if (scrollAgentView(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
+      return;
+    }
+    }
+    if (desktop && claudeKeyHandler.current?.(e)) return;
+    // History recall is gated behind Alt+↑/↓. Bare ↑/↓ stays native caret
+    // movement — users complained that hijacking them stole vertical caret
+    // positioning inside a multi-line draft. Alt+arrow has no native
+    // behavior in a textarea, so it's a conflict-free dedicated gesture
+    // (Shift+arrow is off-limits — that's the browser's vertical text
+    // selection). The placeholder advertises "Alt+↑↓ 翻历史".
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey) {
+      if (navigateHistory(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
       return;
     }
     // Send key is user-configurable (settings modal → Keyboard), because the
@@ -728,7 +777,7 @@ function GambitImpl({
     const after = draft.slice(selEnd);
     const leftPad = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
     const rightPad = after.length > 0 && !/^\s/.test(after) ? ' ' : '';
-    const inserted = leftPad + paths.join(' ') + rightPad;
+    const inserted = leftPad + paths.map(path => desktop && /\s/.test(path) ? `"${path}"` : path).join(' ') + rightPad;
     const newDraft = before + inserted + after;
     onDraftChange(newDraft);
     requestAnimationFrame(() => {
@@ -760,7 +809,7 @@ function GambitImpl({
         : selected
           ? [selected]
           : [];
-      insertPathsAtCursor(paths);
+      insertPaths(paths);
     } catch (error) {
       console.error('[Gambit] image picker failed', error);
     } finally {
@@ -787,6 +836,12 @@ function GambitImpl({
     height: dockedH,
   };
 
+  const capabilitiesStatus = (orchestration || computer || browser) && <div className="gambit-capabilities" role="status">
+    {orchestration && <span className="gambit-capability is-orchestration">{t('tools.tab.orchestration')}</span>}
+    {computer && <span className="gambit-capability is-computer">{t('control.computer_label')}</span>}
+    {browser && <span className="gambit-capability is-browser">{t('control.browser_label')}</span>}
+  </div>;
+
   return (
     <div
       ref={rootRef}
@@ -800,6 +855,16 @@ function GambitImpl({
     >
       {/* Top-edge handle for vertical height resize (VS Code bottom-panel style). */}
       <div className="gambit-dock-resize" onMouseDown={onDockResizeStart} />
+
+      {attachments.length > 0 && <div className="gambit-attachments">
+        {attachments.map(({ path, image }) => <div className="gambit-attachment" key={path}>
+          <button className="gambit-attachment-content" aria-label={t(image ? 'gambit.preview_attachment' : 'gambit.attachment', { path })} onClick={() => { if (image) openThumbPreview(path); }}>
+            {image && thumbUrls[path] ? <img src={thumbUrls[path]} alt="" draggable={false} onError={e => { e.currentTarget.style.display = 'none'; }} /> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M14 2H6v20h12V6zM14 2v5h5M8 12h8M8 16h8" /></svg>}
+            <span>{path.split(/[\\/]/).pop()}</span>
+          </button>
+          <button className="gambit-attachment-remove close-button" aria-label={t('gambit.remove_attachment', { path })} onClick={() => removeAttachment(path)}><svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="m3 3 6 6m0-6-6 6" /></svg></button>
+        </div>)}
+      </div>}
 
       {/* Input box: the textarea auto-grows to fit its content. */}
       <div
@@ -831,7 +896,7 @@ function GambitImpl({
         />
       </div>
 
-      <div className="gambit-footer">
+      <div className={`gambit-footer${desktop ? ' gambit-footer--claude' : ''}${!desktop && attachable ? ' gambit-footer--attach' : ''}${capabilitiesStatus ? ' gambit-footer--capabilities' : ''}`}>
 
         {/* Target label — leftmost footer item, symmetric to the send button.
             Shows the active tab's folder or remote host so a prompt can't be
@@ -845,36 +910,17 @@ function GambitImpl({
             <span className="gambit-workspace-name">{workspaceName}</span>
           </span>
         )}
+        {claude && <ClaudeComposerControls sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} quota={usageMeter}>{capabilitiesStatus}</ClaudeComposerControls>}
+        {codex && <CodexComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</CodexComposerControls>}
 
-        {/* Thumbnail strip lives in the footer, left-aligned, so it shares
-            the same row as the send button. Empty when no image paths are
-            present — keeps the footer visually stable either way. */}
-        <div className="gambit-thumb-strip">
-          {pastedImagePaths.map((path) => (
-            <div
-              key={path}
-              className="gambit-thumb"
-              onClick={() => openThumbPreview(path)}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              {thumbUrls[path] && (
-                <img
-                  src={thumbUrls[path]}
-                  alt=""
-                  draggable={false}
-                  onError={(e) => {
-                    // File doesn't exist or can't be loaded — hide silently.
-                    // The path text stays; the AI can still try to read it.
-                    (e.currentTarget.parentElement as HTMLElement).classList.add('gambit-thumb--broken');
-                  }}
-                />
-              )}
-            </div>
-          ))}
-        </div>
+        {dsh && <DshComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</DshComposerControls>}
+        {!desktop && attachable && <button type="button" className="gambit-attach" aria-label={t('claude.attach')} onClick={() => { void attachFiles(); }}><AttachIcon /></button>}
+        {!desktop && capabilitiesStatus}
+        {!desktop && usageMeter}
+
         {sendFailed && (
           <span className="gambit-send-hint" role="status">
-            {t('gambit.send_failed_hint')}
+            {sendFailedHint ?? t('gambit.send_failed_hint')}
           </span>
         )}
         {sendEmpty && (
@@ -882,6 +928,12 @@ function GambitImpl({
             {t('gambit.send_empty_hint')}
           </span>
         )}
+
+        {!desktop && attachable && <button type="button" className="gambit-tool-btn gambit-upload"
+          aria-label={t('gambit.upload_image')} title={t('gambit.upload_image')}
+          onClick={() => { void handleUploadImages(); }} disabled={uploadingImages}>
+          <AttachIcon />
+        </button>}
         {canUseChat && (
           <div
             className="gambit-view-toggle"
@@ -893,7 +945,7 @@ function GambitImpl({
               className="gambit-view-toggle-btn"
               aria-label="Conversation view"
               aria-pressed={viewMode === 'chat'}
-              onClick={() => onViewModeChange('chat')}
+              onClick={() => onViewModeChange?.('chat')}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 15a4 4 0 0 1-4 4H8l-5 3 1.7-5.1A7 7 0 0 1 3 12V8a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
@@ -903,7 +955,7 @@ function GambitImpl({
               className="gambit-view-toggle-btn"
               aria-label="Terminal view"
               aria-pressed={viewMode === 'terminal'}
-              onClick={() => onViewModeChange('terminal')}
+              onClick={() => onViewModeChange?.('terminal')}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polyline points="4 7 9 12 4 17" />
@@ -912,22 +964,19 @@ function GambitImpl({
             </button>
           </div>
         )}
+        {!onTogglePause && <>
         <button
-          type="button"
-          className="gambit-tool-btn gambit-upload"
-          aria-label={t('gambit.upload_image')}
-          title={t('gambit.upload_image')}
-          onClick={() => { void handleUploadImages(); }}
-          disabled={uploadingImages}
+          className={`gambit-send${sendFailed ? ' gambit-send--failed' : ''}${!running && !draft.trim() ? ' gambit-send--empty' : ''}`}
+          aria-label={t(running && (!(claude || dsh) || !draft.trim()) ? 'gambit.stop' : 'gambit.send')}
+          disabled={running && !onCancel}
+          onClick={running && (!(claude || dsh) || !draft.trim()) ? onCancel : handleSend}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <path d="m21 15-5-5L5 21" />
-            <path d="M17 3v6M14 6h6" />
-          </svg>
+          {running && (!(claude || dsh) || !draft.trim()) ? <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg> : <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 14 V3 M3 8 L8 3 L13 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>}
         </button>
-        {(() => {
+        </>}
+        {onTogglePause && (() => {
           const buttonLabel = executionState === 'running'
             ? t('gambit.pause')
             : executionState === 'paused'
@@ -940,7 +989,7 @@ function GambitImpl({
               className={`gambit-send${sendFailed ? ' gambit-send--failed' : ''}${executionState === 'paused' ? ' gambit-send--paused' : ''}${!draft.trim() && executionState === 'idle' ? ' gambit-send--empty' : ''}`}
               aria-label={buttonLabel}
               title={buttonLabel}
-              onClick={() => { void handleSend(); }}
+              onClick={() => { if (executionState === 'idle') void handleSend(); else void handlePause(); }}
               disabled={buttonDisabled}
             >
               {executionState === 'running' ? (

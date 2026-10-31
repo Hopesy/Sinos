@@ -1,223 +1,258 @@
-// terminal-output-scheduler.ts — Single shared cooperative output scheduler.
-//
-// BEFORE this existed, every TierTerminal's onOutput handler called
-// `xterm.write(data)` directly on every PTY chunk. xterm.js gives each
-// Terminal its own internal WriteBuffer timer (~12ms), so with N tabs each
-// producing output, N timers competed on the shared renderer main thread and
-// starved the focused terminal — the "3rd tab hangs" symptom. Orca's own
-// comment describes this verbatim ("non-focused panes can produce output
-// continuously. Letting every pane call xterm.write immediately schedules one
-// xterm WriteBuffer timer per pane, which starves the focused terminal on the
-// shared renderer thread").
-//
-// This module is the Coffee CLI port of Orca's `pane-terminal-output-scheduler`:
-//   • ONE module-global drain timer for ALL background tabs (not one per tab).
-//   • Foreground (active) tab writes immediately via xterm.write — xterm's
-//     own WriteBuffer paces it, and there's only ONE fg tab so no competition.
-//   • Background tabs buffer into a per-session queue, drained at a 16ms
-//     interval, max 2 writes / 8ms time-budget per tick (cooperative — yields
-//     so a bg tab running `yes` cannot pin the UI).
-//   • 2MB LOSSY cap per background tab: once exceeded, chunks are dropped and a
-//     one-time in-order warning is enqueued. This is the correct trade for our
-//     AI-CLI use case — a backgrounded agent MUST keep running (backpressure to
-//     the child would stall Claude Code's own stdout write), and dropped
-//     terminal display is acceptable because the agent's full conversation is
-//     preserved in its own JSONL session file (--resume recovers it).
-//
-// Visibility routing is driven by the same IntersectionObserver that flips
-// `setSessionActive` to the Rust backend (TierTerminal.tsx) — setActive(true)
-// also triggers a bounded resume drain (Phase 3) so switching back to a tab
-// that ran a build doesn't beachball for 2s parsing megabytes.
-//
-// References: D:/Coffee-CLI/reference/orca/src/renderer/src/lib/pane-manager/
-// pane-terminal-output-scheduler.ts (~1100 lines; this is a simplified port —
-// drops Orca's BSU/ESU ?2026 synchronized-output cursor-show stripping, which
-// we don't need yet).
+// Shared scheduling for visible panes and hidden terminals. Timing write() alone
+// does not bound xterm's deferred parsing. Keep one bounded write in flight per
+// session, and rotate sessions between tasks to leave room for input and paint.
+// Hidden terminals must still parse: onWriteParsed drives agent interactions.
 
 import type { Terminal } from '@xterm/xterm';
 
-// ── Tunables ──────────────────────────────────────────────────────────────────
-
-/** Per-background-tab byte cap. Exceeding → drop + one-time in-order warning. */
-const MAX_BG_QUEUE = 2 * 1024 * 1024; // 2 MB
-/** Interval between background drain ticks (single shared timer). */
+// Counts are UTF-16 code units (String.length), not memory or UTF-8 bytes.
+const MAX_BG_QUEUE = 2 * 1024 * 1024;
+const WRITE_CHUNK_CHARS = 64 * 1024;
 const BG_DRAIN_INTERVAL_MS = 16;
-/** Max term.write() calls per background session per drain tick. */
 const MAX_WRITES_PER_DRAIN = 2;
-/** Cooperative time budget per drain tick across ALL sessions — yield after. */
 const DRAIN_BUDGET_MS = 8;
-/** On tab activation, sync-flush up to this many bytes for immediate content. */
-const RESUME_FLUSH_SYNC = 256 * 1024; // 256 KB
 
-/** One-time in-order warning when the 2MB cap is hit. Pushed as a chunk so it
- *  lands at the correct position (where drops started) in the buffer. */
+// Retain the existing lossy background-display policy; never pause the PTY.
 const DROP_WARNING =
   '\r\n\x1b[33m[Sinos CLI: 后台输出积压超过 2MB,已丢弃部分历史输出。切回此 tab 查看实时输出,完整对话见 session 文件]\x1b[0m\r\n';
 
-// ── Per-session state ────────────────────────────────────────────────────────
-
 interface SessionQueue {
+  id: string;
   term: Terminal;
-  /** FIFO of buffered PTY chunks awaiting term.write while backgrounded. */
   chunks: string[];
-  /** Total bytes currently in `chunks` (for the 2MB cap check). */
-  bytes: number;
-  /** True once the 2MB cap has been hit — guards the one-time warning. */
+  head: number;
+  offset: number;
+  queuedChars: number;
+  inFlight: { chars: number } | null;
   dropped: boolean;
-  /** Foreground (write immediately) vs background (buffer + drain). */
   isActive: boolean;
+  failed: boolean;
+  receivedSequence: number;
+  enqueuedChars: number;
+  parsedChars: number;
+  parsedRevision: number;
+  lastReceivedAt: number | null;
+  lastParsedAt: number | null;
+  waiters: Set<{ target: number; finish: (state: TerminalFlushState) => void }>;
 }
 
+export type TerminalFlushState = 'flushed' | 'timeout' | 'unavailable';
+
+export interface TerminalOutputMetrics {
+  pendingChars: number;
+  inFlightChars: number;
+  receivedSequence: number;
+  parsedRevision: number;
+  lastReceivedAt: number | null;
+  lastParsedAt: number | null;
+  gap: boolean;
+  failed: boolean;
+}
+
+// Reinsert a served session at the end for round-robin within each priority.
 const sessions = new Map<string, SessionQueue>();
-
-/** Single shared drain timer across all background sessions. null = idle. */
-let sharedDrainTimer: ReturnType<typeof setTimeout> | null = null;
-
-// ── Public API ───────────────────────────────────────────────────────────────
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
+let drainAt = 0;
+let nextBackgroundAt = performance.now() + BG_DRAIN_INTERVAL_MS;
 
 export function registerSession(id: string, term: Terminal): void {
+  const previous = sessions.get(id);
+  if (previous) finishWaiters(previous, 'unavailable');
   sessions.set(id, {
-    term,
-    chunks: [],
-    bytes: 0,
-    dropped: false,
-    // Defaults ACTIVE (foreground). This is intentionally ASYMMETRIC with the
-    // Rust side's `is_tab_active` default (false): the Rust default throttles
-    // IPC emit rate (slow = safe on observer failure), while the frontend
-    // default of "write immediately" is safe on observer failure — a missed
-    // observer just means the tab keeps writing directly (the original
-    // behavior, no 2MB drop risk). A backgrounded tab briefly writes directly
-    // until the observer fires false (~one frame), then buffers — negligible
-    // cost for the safety of never dropping output on an observer race.
-    isActive: true,
+    id, term, chunks: [], head: 0, offset: 0, queuedChars: 0,
+    inFlight: null, dropped: false, isActive: true, failed: false,
+    receivedSequence: 0, enqueuedChars: 0, parsedChars: 0, parsedRevision: 0,
+    lastReceivedAt: null, lastParsedAt: null, waiters: new Set(),
   });
+  scheduleDrain();
 }
 
 export function unregisterSession(id: string): void {
+  const q = sessions.get(id);
+  if (q) finishWaiters(q, 'unavailable');
   sessions.delete(id);
-  // If the shared timer is now idle (no bg sessions left), cancel it.
-  if (sharedDrainTimer !== null && !hasBgWork()) {
-    clearTimeout(sharedDrainTimer);
-    sharedDrainTimer = null;
-  }
+  scheduleDrain();
 }
 
-/** Route a PTY output chunk. Foreground → write immediately; background →
- *  buffer (2MB lossy). Called from TierTerminal's onOutput handler INSTEAD OF
- *  `term.write(data)` — all other per-chunk tracking (hasOutput, alt-screen,
- *  sentinel scan) stays in the handler and runs synchronously before this. */
 export function enqueue(id: string, data: string): void {
   const q = sessions.get(id);
-  if (!q) return;
-  if (q.isActive) {
-    // Foreground: xterm.write queues internally + paces via its own WriteBuffer
-    // timer (~12ms). Only ONE tab is fg, so there's no cross-tab competition —
-    // this is the Orca win (bg tabs don't each schedule their own timer).
-    try { q.term.write(data); } catch { /* term disposed */ }
-    return;
-  }
-  // Background: buffer with 2MB lossy cap.
-  if (q.bytes + data.length > MAX_BG_QUEUE) {
+  if (!q || q.failed || data.length === 0) return;
+  q.receivedSequence += 1;
+  q.lastReceivedAt = Date.now();
+  if (!q.isActive && q.queuedChars + (q.inFlight?.chars ?? 0) + data.length > MAX_BG_QUEUE) {
     if (!q.dropped) {
       q.dropped = true;
-      // Enqueue the warning IN-ORDER as a chunk so it lands at the position
-      // where drops started, not out of order via a direct term.write. Small
-      // (~150B) and one-time, so it doesn't meaningfully change the cap.
       q.chunks.push(DROP_WARNING);
-      q.bytes += DROP_WARNING.length;
+      q.queuedChars += DROP_WARNING.length;
+      q.enqueuedChars += DROP_WARNING.length;
     }
-    // Drop this chunk (lossy). The agent's own JSONL preserves the full
-    // conversation; only the terminal DISPLAY loses this slice.
+    scheduleDrain();
     return;
   }
+  const idle = q.queuedChars === 0 && q.inFlight === null;
   q.chunks.push(data);
-  q.bytes += data.length;
-  scheduleBgDrain();
+  q.queuedChars += data.length;
+  q.enqueuedChars += data.length;
+  // Preserve immediate echo on an idle visible terminal, including split panes.
+  // Remaining slices yield even when xterm invokes the callback synchronously.
+  if (q.isActive && idle) writeNext(q);
+  scheduleDrain();
 }
 
-/** Flip a session between foreground (immediate write) and background
- *  (buffered drain). On fg, runs the bounded resume drain (Phase 3) so a tab
- *  that accumulated output while hidden doesn't beachball on switch-back. */
 export function setActive(id: string, active: boolean): void {
   const q = sessions.get(id);
   if (!q) return;
   q.isActive = active;
-  if (active) {
-    resumeDrain(q);
+  // Activation changes priority, not FIFO or the in-flight allowance.
+  scheduleDrain();
+}
+
+export function getSessionMetrics(id: string, term: Terminal): TerminalOutputMetrics | null {
+  const q = sessions.get(id);
+  if (!q || q.term !== term) return null;
+  return {
+    pendingChars: q.queuedChars + (q.inFlight?.chars ?? 0),
+    inFlightChars: q.inFlight?.chars ?? 0,
+    receivedSequence: q.receivedSequence,
+    parsedRevision: q.parsedRevision,
+    lastReceivedAt: q.lastReceivedAt,
+    lastParsedAt: q.lastParsedAt,
+    gap: q.dropped,
+    failed: q.failed,
+  };
+}
+
+/** Wait only for output accepted before this call, not a continuously growing queue. */
+export function flushSession(id: string, term: Terminal, timeoutMs = 250): Promise<TerminalFlushState> {
+  const q = sessions.get(id);
+  if (!q || q.term !== term || q.failed) return Promise.resolve('unavailable');
+  const target = q.enqueuedChars;
+  if (q.parsedChars >= target) return Promise.resolve('flushed');
+  return new Promise(resolve => {
+    const waiter = {
+      target,
+      finish: (state: TerminalFlushState) => {
+        clearTimeout(timer);
+        q.waiters.delete(waiter);
+        resolve(state);
+      },
+    };
+    const timer = setTimeout(() => waiter.finish('timeout'), timeoutMs);
+    q.waiters.add(waiter);
+  });
+}
+
+function finishWaiters(q: SessionQueue, state?: TerminalFlushState): void {
+  for (const waiter of q.waiters) {
+    if (state || q.parsedChars >= waiter.target) waiter.finish(state ?? 'flushed');
   }
 }
 
-// ── Internals ────────────────────────────────────────────────────────────────
-
-function hasBgWork(): boolean {
+function nextReady(active: boolean): SessionQueue | undefined {
   for (const q of sessions.values()) {
-    if (!q.isActive && q.chunks.length > 0) return true;
+    if (q.isActive === active && !q.failed && !q.inFlight && q.queuedChars > 0) return q;
   }
-  return false;
 }
 
-function scheduleBgDrain(): void {
-  if (sharedDrainTimer !== null) return; // already armed
-  sharedDrainTimer = setTimeout(bgDrain, BG_DRAIN_INTERVAL_MS);
+function scheduleDrain(): void {
+  const visible = nextReady(true);
+  const background = nextReady(false);
+  if (!visible && !background) {
+    if (drainTimer !== null) clearTimeout(drainTimer);
+    drainTimer = null;
+    return;
+  }
+  const now = performance.now();
+  const at = visible ? now : Math.max(now, nextBackgroundAt);
+  if (drainTimer !== null) {
+    if (drainAt <= at) return;
+    clearTimeout(drainTimer); // Visible output must not wait for a background tick.
+  }
+  drainAt = at;
+  drainTimer = setTimeout(drain, Math.max(0, at - now));
 }
 
-/** One drain tick: iterate ALL background sessions with pending chunks, write
- *  up to MAX_WRITES_PER_DRAIN chunks each, yield after DRAIN_BUDGET_MS. Re-arms
- *  itself if any session still has pending chunks. */
-function bgDrain(): void {
-  sharedDrainTimer = null;
+function drain(): void {
+  drainTimer = null;
   const started = performance.now();
-  let anyRemaining = false;
-
-  for (const q of sessions.values()) {
-    if (q.isActive || q.chunks.length === 0) continue;
-
-    let writes = 0;
-    while (writes < MAX_WRITES_PER_DRAIN && q.chunks.length > 0) {
-      const chunk = q.chunks.shift()!;
-      q.bytes -= chunk.length;
-      try { q.term.write(chunk); } catch { /* term disposed */ }
-      writes++;
-      // Cooperative: yield if the whole tick has overrun its budget. Remaining
-      // chunks stay queued and get picked up by the next armed tick.
-      if (performance.now() - started > DRAIN_BUDGET_MS) {
-        if (q.chunks.length > 0) anyRemaining = true;
-        break;
-      }
-    }
-    if (q.chunks.length > 0) anyRemaining = true;
-    // Tick-wide cooperative yield: if this session already blew the budget,
-    // stop processing further bg sessions this tick (not just this one's
-    // inner loop) so a tick can't overrun ~2×(N-1) writes with N backlogged
-    // tabs. Remaining bg sessions are picked up by the next armed tick.
-    if (performance.now() - started > DRAIN_BUDGET_MS) {
-      anyRemaining = true;
-      break;
-    }
+  const backgroundDue = started >= nextBackgroundAt;
+  let wroteBackground = false;
+  for (let writes = 0; writes < MAX_WRITES_PER_DRAIN; writes++) {
+    const visible = nextReady(true);
+    const background = backgroundDue ? nextReady(false) : undefined;
+    // Serve due background work first: a synchronous visible parse may consume
+    // the whole submission budget and otherwise starve every hidden terminal.
+    const q = writes === 0 ? background ?? visible : visible ?? background;
+    if (!q) break;
+    wroteBackground ||= !q.isActive;
+    writeNext(q);
+    // Submission time only: the chunk/in-flight limits bound deferred work.
+    // This is not a promise about total parse or render CPU time.
+    if (performance.now() - started >= DRAIN_BUDGET_MS) break;
   }
-
-  if (anyRemaining) scheduleBgDrain();
+  if (wroteBackground) nextBackgroundAt = performance.now() + BG_DRAIN_INTERVAL_MS;
+  scheduleDrain();
 }
 
-/** Phase 3: on tab activation, sync-flush up to RESUME_FLUSH_SYNC bytes for an
- *  immediate visible viewport, then write the rest via xterm.write (xterm's
- *  WriteBuffer paces the rest without blocking the main thread — streams in
- *  over ~1s for a large backlog). Order is preserved (FIFO from chunks). */
-function resumeDrain(q: SessionQueue): void {
-  let flushed = 0;
-  while (q.chunks.length > 0 && flushed < RESUME_FLUSH_SYNC) {
-    const chunk = q.chunks.shift()!;
-    q.bytes -= chunk.length;
-    try { q.term.write(chunk); } catch { /* term disposed */ }
-    flushed += chunk.length;
+function takeChunk(q: SessionQueue): string {
+  const parts: string[] = [];
+  let remaining = WRITE_CHUNK_CHARS;
+  while (remaining > 0 && q.head < q.chunks.length) {
+    const chunk = q.chunks[q.head];
+    let end = Math.min(chunk.length, q.offset + remaining);
+    // Avoid introducing a split inside a surrogate pair. xterm already handles
+    // original PTY chunk boundaries and split ANSI sequences as a stream.
+    if (end < chunk.length && end > q.offset) {
+      const last = chunk.charCodeAt(end - 1);
+      const next = chunk.charCodeAt(end);
+      if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+    }
+    if (end === q.offset) break;
+    parts.push(chunk.slice(q.offset, end));
+    const consumed = end - q.offset;
+    q.queuedChars -= consumed;
+    remaining -= consumed;
+    q.offset = end;
+    if (end === chunk.length) {
+      q.chunks[q.head++] = ''; // Release strings without repeated O(n) shifts.
+      q.offset = 0;
+    }
   }
-  if (q.chunks.length > 0) {
-    // Join the residual into one write — xterm queues + paces it via its
-    // internal WriteBuffer timer. New fg output arriving via enqueue() lands
-    // after this residual (FIFO), so order is preserved.
-    const rest = q.chunks.join('');
+  if (q.head === q.chunks.length) {
     q.chunks = [];
-    q.bytes = 0;
-    try { q.term.write(rest); } catch { /* term disposed */ }
+    q.head = 0;
+  } else if (q.head > 128 && q.head > q.chunks.length / 2) {
+    q.chunks = q.chunks.slice(q.head);
+    q.head = 0;
+  }
+  return parts.join('');
+}
+
+function writeNext(q: SessionQueue): void {
+  const data = takeChunk(q);
+  const pending = { chars: data.length };
+  q.inFlight = pending;
+  sessions.delete(q.id);
+  sessions.set(q.id, q);
+  try {
+    q.term.write(data, () => {
+      // Disposed terminals may acknowledge late or never. Object identity also
+      // isolates a replacement with the same id and duplicate callbacks.
+      if (sessions.get(q.id) !== q || q.inFlight !== pending) return;
+      q.inFlight = null;
+      q.parsedChars += pending.chars;
+      q.parsedRevision += 1;
+      q.lastParsedAt = Date.now();
+      finishWaiters(q);
+      scheduleDrain(); // Never recurse into xterm from its own parse callback.
+    });
+  } catch {
+    // A rejected write cannot be replayed safely. Isolate it until remount.
+    q.failed = true;
+    q.dropped = true;
+    q.inFlight = null;
+    q.chunks = [];
+    q.head = q.offset = q.queuedChars = 0;
+    finishWaiters(q, 'unavailable');
   }
 }

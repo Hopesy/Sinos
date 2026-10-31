@@ -10,11 +10,10 @@
 //! `collect_opencode_heatmap_entries`.
 //!
 //! Like MiMo Code, the fork ships OpenCode's opaque #000 TUI default, so it
-//! joins the install dispatch (`cleanup_tool` in hook_installer.rs) purely
+//! joins the maintenance dispatch (`maintain_tool` in hook_installer.rs) purely
 //! for the `ensure_opencode_tui_theme_default(home, "kilo")` write that stamps
 //! `~/.config/kilo/tui.json` with the transparent `lucent-orng` theme. No
-//! OpenCode status plugin was ever installed for Kilo (new tool), so
-//! `cleanup_opencode_plugin` is a no-op safety net.
+//! OpenCode status plugin was ever installed for Kilo (new tool).
 
 use super::{HistoryShape, ToolDescriptor};
 

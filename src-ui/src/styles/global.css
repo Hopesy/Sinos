@@ -48,13 +48,18 @@
     font-display: swap;
 }
 
-/* ─── CJK rendering (no embedded font) ──
-   Mac → PingFang SC (built-in since 10.11). Windows → Microsoft YaHei
-   (built-in since Vista). Linux → distro Noto CJK / WenQuanYi. Bundling
-   our own 16 MB Noto OTF was redundant: every target OS already ships
-   a perfectly readable Chinese face, and the bundled font was never
-   reached on Mac (PingFang resolved earlier in the cascade) and just
-   duplicated YaHei on Windows. */
+/* Sidebar CJK font, bundled under SIL OFL 1.1; see /fonts/OFL-NotoSansSC.txt.
+   Native macOS faces precede it in --font-nav. */
+@font-face {
+    font-family: 'Coffee Navigation CJK';
+    src: url('/fonts/noto-sans-sc.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* Conversation CJK text keeps using OS fonts: PingFang on macOS,
+   Microsoft YaHei on Windows, and distro fonts on Linux. */
 
 /* ─── Brand Serif (splash-label "art font") ──
    Lora italic 500, Latin + Latin-Ext only (~36 KB total). Splash text is
@@ -95,6 +100,11 @@ textarea,
 [contenteditable='']
 {
     cursor: text !important;
+}
+
+.close-button:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
 }
 
 /* ─── Scrollbars: completely hidden, app-wide ──────────
@@ -168,6 +178,13 @@ textarea,
 .cc-scrollbar.is-dragging .cc-scrollbar-slider {
     opacity: 0.56;
 }
+.cc-scrollbar-wide {
+    width: 12px;
+}
+.cc-scrollbar-wide .cc-scrollbar-slider {
+    width: 8px;
+    border-radius: 4px;
+}
 .cc-scrollbar-slim {
     width: 7px;
 }
@@ -187,6 +204,11 @@ textarea,
     --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Hiragino Sans GB', 'Apple SD Gothic Neo',
         'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
+        Helvetica, Arial, sans-serif,
+        'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    --font-nav: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Hiragino Sans GB', 'Apple SD Gothic Neo',
+        'Coffee Navigation CJK', 'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
         Helvetica, Arial, sans-serif,
         'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
     --font-serif: 'Lora', ui-serif, Georgia, Cambria, "Times New Roman",
@@ -219,7 +241,7 @@ textarea,
     --gap: 16px;
 
     /* ─── Shape form defaults (overridden by [data-shape]) ──────── */
-    --shape-radius-tab: 10px 10px 0 0;
+    --shape-radius-tab: var(--shape-radius-btn);
     --shape-radius-panel: var(--radius-md);
     --shape-radius-btn: var(--radius-sm);
     --shape-radius-pill: var(--radius-pill);
@@ -242,7 +264,6 @@ textarea,
     --radius-md: 16px;
     --radius-lg: 24px;
     --radius-pill: 9999px;
-    --shape-radius-tab: 10px 10px 0 0;
     --shape-radius-panel: 16px;
     --shape-radius-btn: 8px;
     --shape-radius-pill: 9999px;
@@ -255,7 +276,6 @@ textarea,
     --radius-md: 4px;
     --radius-lg: 6px;
     --radius-pill: 4px;
-    --shape-radius-tab: 3px 3px 0 0;
     --shape-radius-panel: 4px;
     --shape-radius-btn: 3px;
     --shape-radius-pill: 4px;
@@ -271,7 +291,6 @@ textarea,
     --radius-md: 0px;
     --radius-lg: 0px;
     --radius-pill: 0px;
-    --shape-radius-tab: 0;
     --shape-radius-panel: 0;
     --shape-radius-btn: 0;
     --shape-radius-pill: 0;
@@ -289,7 +308,6 @@ textarea,
     --radius-md: 16px;
     --radius-lg: 24px;
     --radius-pill: 9999px;
-    --shape-radius-tab: 10px 10px 0 0;
     --shape-radius-panel: 16px;
     --shape-radius-btn: 8px;
     --shape-radius-pill: 9999px;
@@ -303,7 +321,6 @@ textarea,
     --radius-md: 0px;
     --radius-lg: 0px;
     --radius-pill: 0px;
-    --shape-radius-tab: 0;
     --shape-radius-panel: 0;
     --shape-radius-btn: 0;
     --shape-radius-pill: 0;
@@ -326,7 +343,6 @@ textarea,
     --radius-md: 16px;
     --radius-lg: 24px;
     --radius-pill: 9999px;
-    --shape-radius-tab: 10px 10px 0 0;
     --shape-radius-panel: 16px;
     --shape-radius-btn: 8px;
     --shape-radius-pill: 9999px;
@@ -1134,12 +1150,7 @@ html.is-macos #root {
 /* ─── Custom Titlebar ────────────────────────────────── */
 .titlebar {
     height: 40px;
-    /* Same surface as the side panels (--bg-panel), so the titlebar + left rail
-       + right rail read as one continuous "brighter frame" around the darker
-       terminal centre. The active tab (--bg-terminal, darker) then sits as a
-       recessed notch that seams into the content below. Ties to --bg-panel so
-       every theme aligns automatically; the old per-theme --bg-titlebar token
-       is now unused. */
+    /* Share the side panels' surface; active tabs use the terminal tone. */
     background: var(--bg-panel);
     display: flex;
     /* Tool tabs (left) → flexible drag spacer → layout toggles + window
@@ -1151,9 +1162,7 @@ html.is-macos #root {
        so tab clicks / pointer-reorder win. Do NOT add `-webkit-app-region:
        drag` here; it races Tauri's drag and stalls paint on direction
        reversal. */
-    /* Tabs bottom-aligned so a reserve strip sits ABOVE them (like Chrome / the
-       OS terminals) — a grab-handle over the tabs and a less cramped bar. The
-       right-side button clusters opt out with align-self: center. */
+    /* The full-height tab slot centers its tabs independently. */
     align-items: flex-end;
     user-select: none;
     flex-shrink: 0;
@@ -1210,9 +1219,8 @@ html.is-macos .titlebar-left-slot.is-collapsed {
 
 .titlebar-tabs {
     display: flex;
-    /* Bottom-align the portaled strip so the tabs hug the bar's bottom edge
-       (flush with the content below) while the reserve sits above them. */
-    align-items: flex-end;
+    /* A 30px strip in the 40px titlebar leaves 5px above and below. */
+    align-items: center;
     min-width: 0;
     height: 100%;
 }
@@ -1483,7 +1491,7 @@ body.resizing-panels .pane-resizer {
     font-family: var(--font, system-ui);
     font-size: 16px;
     letter-spacing: 0.02em;
-    color: var(--text-1); /* Stark white text contrasting the accent icon */
+    color: var(--text-2);
 }
 
 .brand-icon {
@@ -1578,14 +1586,6 @@ body.gambit-docked .tier-terminal,
 body.gambit-docked .launchpad-container,
 body.gambit-docked .multi-agent-grid-standalone {
     padding-bottom: calc(var(--gambit-dock-h, 200px) + 16px);
-}
-
-/* Keep ConversationView full-height so its wallpaper continues through the
-   breathing gap and behind Gambit exactly like TierTerminal. Only shrink the
-   inner scroll owner: messages, clipping edge, and scrollbar stop above the
-   dock while the background layer remains visually continuous. */
-body.gambit-docked .conversation-scroll {
-    height: calc(100% - var(--gambit-dock-h, 200px) - 16px);
 }
 
 .tab-actions {
@@ -1756,17 +1756,15 @@ body.gambit-docked .conversation-scroll {
         inset -1px -1px 0 0 var(--shape-edge-light-bottom);
 }
 
-[data-shape="slab"] .chrome-tab.active {
+[data-shape="slab"] .chrome-tab:is(.active, .orchestration-family-active) {
     box-shadow:
         inset 1px 1px 0 0 var(--shape-edge-light-top),
-        inset -1px 0 0 0 var(--shape-edge-light-bottom);
+        inset -1px -1px 0 0 var(--shape-edge-light-bottom);
 }
 
-/* Slab tabs use 3px micro-radius; the 12px chrome flare bridge doesn't
-   align with it and leaves a visible gap at the outer bottom corners.
-   Hide the flare and flatten the outer bottom so the tab sits flush. */
-[data-shape="slab"] .chrome-tab.active::before,
-[data-shape="slab"] .chrome-tab.active::after {
+/* Detached tabs have no corner bridges into the content. */
+[data-shape="slab"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="slab"] .chrome-tab:is(.active, .orchestration-family-active)::after {
     display: none;
 }
 
@@ -1781,16 +1779,15 @@ body.gambit-docked .conversation-scroll {
         0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-[data-shape="sharp"] .chrome-tab.active,
-[data-shape="panel"] .chrome-tab.active {
-    box-shadow: inset 0 1px 0 0 var(--accent); /* VSCode-style 1px top accent bar */
+[data-shape="sharp"] .chrome-tab:is(.active, .orchestration-family-active) {
+    box-shadow: inset 0 0 0 1px var(--border);
 }
 
-/* Hide chrome flare pseudo-elements for zero-radius shapes */
-[data-shape="sharp"] .chrome-tab.active::before,
-[data-shape="sharp"] .chrome-tab.active::after,
-[data-shape="panel"] .chrome-tab.active::before,
-[data-shape="panel"] .chrome-tab.active::after {
+/* Flat styles do not use rounded corner bridges. */
+[data-shape="sharp"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="sharp"] .chrome-tab:is(.active, .orchestration-family-active)::after,
+[data-shape="panel"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="panel"] .chrome-tab:is(.active, .orchestration-family-active)::after {
     display: none;
 }
 
@@ -1915,10 +1912,16 @@ html.is-windows[data-frost="frost"] #root {
    untouched. */
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-left :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line),
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-right :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line),
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-center :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line) {
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-center :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line, .session-split-pane, .session-split-divider, .tool-control-runtime, .tool-control-agent, .skill-card, .skill-card *, .control-demo, .control-demo *) {
     background: transparent !important;
     border-color: transparent !important;
     box-shadow: none !important;
+}
+
+/* Keep configuration cards on the same surface as favorite-tool cards.
+   Demonstrations own their nested desktop surfaces and must keep their fills. */
+:is([data-shape="carbon"], [data-shape="monogram"]) .panel-center :is(.tool-control-runtime, .tool-control-agent, .skill-card, .control-demo) {
+    background: var(--bg-card);
 }
 
 /* Cards & inputs — same Liquid-Glass treatment as the active tab:
@@ -1961,7 +1964,8 @@ html.is-windows[data-frost="frost"] #root {
 [data-shape="glass"] .task-prompt-card,
 [data-shape="glass"] .guide-card,
 [data-shape="glass"] .chat-input-container,
-[data-shape="glass"] .library-item {
+[data-shape="glass"] .library-item,
+[data-shape="glass"] .panel-center :is(.tool-control-runtime, .tool-control-agent, .skill-card, .control-demo) {
     background: rgba(255, 255, 255, 0.04);
     backdrop-filter: blur(20px) saturate(160%);
     -webkit-backdrop-filter: blur(20px) saturate(160%);
@@ -1985,29 +1989,16 @@ html.is-windows[data-frost="frost"] #root {
         0 24px 64px rgba(0, 0, 0, 0.5);
 }
 
-/* Tab family — chrome / Explorer / TaskBoard tab strips go fully
-   transparent in glass. Active state indicated by text-1 color
-   contrast alone (source default). No container pill, no active
-   fill, no outline. Matches the "全部透明,只靠主背景半透层"
-   architecture: every tab IS the body's --glass-tint — adding any
-   local bg would stack a second visible layer.
-   Library Agents↔Skills is NOT in this group — it's a discrete
-   segmented control, not a tab strip; treated below with its own
-   pill container + lit-up active segment. */
-[data-shape="glass"] .chrome-tab.active,
-[data-shape="glass"] .right-tab.active,
+/* Glass tabs keep the brighter selected text against the translucent surface. */
+[data-shape="glass"] .chrome-tab:is(.active, .orchestration-family-active),
 [data-shape="glass"] .explorer-tab.active {
     color: var(--text-1);
 }
 
-/* Chrome-tabs moved into the titlebar — OUTSIDE the `.panel-*` nuclear rule
-   (above) that used to strip their background in the transparent shapes. So
-   re-strip here: every tab (active + hover included) stays fully transparent
-   and shows the body's single --glass-tint / carbon mesh, instead of stacking
-   an opaque --bg-terminal fill. The active tab is distinguished by brighter
-   text (rule above / --text-1), not a fill — the glass "no local layer" rule. */
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .chrome-tab {
-    background: transparent !important;
+/* A light translucent fill keeps selected tabs visible without hiding the
+   glass backdrop or the carbon/monogram material. Hover uses the theme tone. */
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .chrome-tab:is(.active, .orchestration-family-active) {
+    background: color-mix(in srgb, var(--text-1) 10%, transparent);
 }
 
 /* Library chrome buttons in glass — back chevron + per-card gear.
@@ -2017,15 +2008,6 @@ html.is-windows[data-frost="frost"] #root {
    In glass we promote the default state to the same brightness
    the source uses for HOVER, so the buttons are always legible
    without needing the user to find them first. */
-
-/* Back chevron is the only one of its kind in this view — safe to
-   paint accent + full opacity (the source-default hover reward)
-   as the new baseline. No additional hover lift needed; reads as
-   "always primary action" against the frosted chrome. */
-[data-shape="glass"] .mode-switch-btn {
-    color: var(--accent);
-    opacity: 1;
-}
 
 /* Per-card gear renders 4–8× simultaneously, so painting all of
    them accent would compete with the toggle's accent color.
@@ -2054,7 +2036,7 @@ html.is-windows[data-frost="frost"] #root {
    + outer drop shadow combo, so every floating overlay sits on
    the same Liquid-Glass tier above the panels. */
 [data-shape="glass"] .ctx-menu,
-[data-shape="glass"] .history-tool-filter-menu {
+[data-shape="glass"] .history-search-dialog {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.14);
     backdrop-filter: var(--glass-blur);
@@ -2070,7 +2052,7 @@ html.is-windows[data-frost="frost"] #root {
    smoked theme fill). Give it the same smoked fill, kept on the glass tier
    with its frosted blur. Frost normalizes to data-shape="glass", so this
    covers frost too. */
-[data-shape="glass"] .history-tool-filter-menu {
+[data-shape="glass"] .history-search-dialog {
     background: color-mix(in oklab, var(--bg-app) 76%, transparent);
     background-image: none;
 }
@@ -2115,18 +2097,14 @@ html.is-windows[data-frost="frost"] #root {
     background: rgba(255, 255, 255, 0.06);
 }
 
-/* Left-panel controls in the transparent shapes — workspace dir button +
-   history search box + the directory-filter dropdown trigger next to the
-   search box. The nuclear layer-strip rule only targets div/section
+/* Workspace directory and search input in the transparent shapes.
+   The nuclear layer-strip rule only targets div/section
    descendants; inputs/buttons need an explicit material-aware surface. */
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn,
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search,
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger {
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.10);
 }
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn:hover,
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger:hover,
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .agent-session-search:focus {
     background: rgba(255, 255, 255, 0.06);
     border-color: rgba(255, 255, 255, 0.22);
@@ -2135,8 +2113,7 @@ html.is-windows[data-frost="frost"] #root {
 /* Glass and Frost use the exact material tier of the launchpad cards. Frost
    normalizes to data-shape="glass", so both stay translucent over wallpaper. */
 [data-shape="glass"] .workspace-dir-btn,
-[data-shape="glass"] .agent-session-search,
-[data-shape="glass"] .history-tool-filter-trigger {
+[data-shape="glass"] .agent-session-search {
     background: rgba(255, 255, 255, 0.04);
     backdrop-filter: blur(20px) saturate(160%);
     -webkit-backdrop-filter: blur(20px) saturate(160%);
@@ -2147,13 +2124,10 @@ html.is-windows[data-frost="frost"] #root {
 /* Carbon/Monogram use an opaque-looking painted material rather than blur;
    retain their warmer light-mode surface instead of applying glass frost. */
 [data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn,
-[data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .agent-session-search,
-[data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger {
+[data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .agent-session-search {
     background: color-mix(in oklab, var(--bg-card) 65%, transparent);
     border: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
 }
-[data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .workspace-dir-btn:hover,
-[data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .history-tool-filter-trigger:hover,
 [data-mode="light"]:is([data-shape="carbon"], [data-shape="monogram"]) .agent-session-search:focus {
     background: color-mix(in oklab, var(--bg-card) 72%, transparent);
     border-color: color-mix(in oklab, var(--accent) 55%, transparent);
@@ -2187,20 +2161,6 @@ html.is-windows[data-frost="frost"] #root {
     box-shadow:
         inset 0 1px 0 0 rgba(255, 255, 255, 0.24),
         0 12px 40px rgba(0, 0, 0, 0.40);
-}
-
-/* Gambit's active view segment must remain glass as well. The base thumb
-   mixes accent into opaque --bg-panel, which is appropriate for solid
-   shapes but reads as a painted disk inside Glass/Frost. Frost normalizes to
-   data-shape="glass", so this one translucent accent wash covers both. */
-[data-shape="glass"] .gambit-view-toggle::before {
-    background: color-mix(in srgb, var(--accent) 28%, transparent);
-    backdrop-filter: blur(8px) saturate(150%);
-    -webkit-backdrop-filter: blur(8px) saturate(150%);
-    border: 1px solid rgba(255, 255, 255, 0.20);
-    box-shadow:
-        inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
-        inset 0 -1px 0 0 rgba(0, 0, 0, 0.08);
 }
 
 /* Primary action dots (Gambit send ↑ + TaskBoard add +).
@@ -2239,8 +2199,8 @@ html.is-windows[data-frost="frost"] #root {
    bg below. In glass that bg is translucent --glass-tint, so the
    opaque arcs read as stray dark dots at the tab's bottom corners.
    Hide them. */
-[data-shape="glass"] .chrome-tab.active::before,
-[data-shape="glass"] .chrome-tab.active::after {
+[data-shape="glass"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="glass"] .chrome-tab:is(.active, .orchestration-family-active)::after {
     display: none;
 }
 
@@ -2311,20 +2271,12 @@ html.is-windows[data-frost="frost"] #root {
     border-bottom: 1px solid var(--border);
 }
 
-/* ─── Side panel tab rows (左 explorer-tabs / 右 right-tabs) ─────
-   Default in every other shape: no container at all (segmented strip
-   inherits panel bg, active tab = text color contrast only).
-   Panel shape is the lone exception — a "drawn-on-terminal" chrome
-   aesthetic that wants a visible bordered rectangle around the tabs,
-   like classic tmux / iTerm2 split panes. */
-[data-shape="panel"] .explorer-tabs,
-[data-shape="panel"] .right-tabs,
+/* Left navigation stays borderless; Panel settings retain their framed tabs. */
 [data-shape="panel"] .settings-mode-tabs {
     border: 1px solid var(--border);
 }
 
-[data-shape="panel"] .explorer-tab,
-[data-shape="panel"] .right-tab {
+[data-shape="panel"] .explorer-tab {
     padding: 8px 0;
     border-radius: 0;
 }
@@ -2336,38 +2288,32 @@ html.is-windows[data-frost="frost"] #root {
     border-radius: 0;
 }
 
-[data-shape="panel"] .explorer-tab + .explorer-tab,
-[data-shape="panel"] .right-tab + .right-tab,
 [data-shape="panel"] .settings-mode-tab + .settings-mode-tab {
     border-left: 1px solid var(--border);
 }
 
 [data-shape="panel"] .explorer-tab.active,
-[data-shape="panel"] .right-tab.active,
 [data-shape="panel"] .settings-mode-tab.active {
     background: var(--bg-hover);
     color: var(--text-1);
 }
 
-/* ─── Panel shape: chrome-tabs now live in the titlebar ───
-   The titlebar's own border-bottom (see `[data-shape="panel"] .titlebar` above)
-   is the single divider / top edge of the content box. The ACTIVE tab breaks
-   through it (−1px bottom) so its --bg-app fill seams into main-content below —
-   the "terminal-tube" merge — with a 3-side outline (top/left/right) framing
-   it; inactive tabs just sit in the bar.
+/* Panel's line frame joins the selected tab to the content below. */
+[data-shape="panel"] .titlebar-tabs {
+    align-items: flex-end;
+}
 
-   Previously .chrome-tabs-header carried its OWN border-bottom and EVERY tab a
-   −1px margin, because the strip sat directly above main-content in the center
-   column. Both are gone now: with the strip in the titlebar, the header border
-   stacked under the titlebar border as one chunky 2px line, and its border-box
-   ate 1px off the tab height (the "line too thick / top −1px" report). */
-[data-shape="panel"] .chrome-tab.active {
-    margin-bottom: -1px;
+[data-shape="panel"] .chrome-tabs-header {
+    height: 31px;
+}
+
+[data-shape="panel"] .chrome-tab:is(.active, .orchestration-family-active) {
+    height: calc(100% + 1px); /* Cover the titlebar's bottom divider. */
     background: var(--bg-app);
     box-shadow:
-        inset 0 1px 0 0 var(--border),     /* top */
-        inset 1px 0 0 0 var(--border),     /* left */
-        inset -1px 0 0 0 var(--border);    /* right */
+        inset 0 1px 0 0 var(--border),
+        inset 1px 0 0 0 var(--border),
+        inset -1px 0 0 0 var(--border);
 }
 
 [data-shape="panel"] .main-content {
@@ -2491,6 +2437,30 @@ html.is-windows[data-frost="frost"] #root {
     background: rgba(255, 255, 255, 0.18);
 }
 
+/* Character flow shares Carbon's transparent chrome, with one GPU canvas
+   replacing the static material. Keep it inside the root's rounded clip. */
+[data-background="characters"] #root {
+    background: var(--bg-app);
+}
+[data-background="characters"] #root::before,
+[data-background="characters"] #root::after {
+    display: none;
+}
+.character-background,
+.character-background canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+.character-background {
+    z-index: -1;
+}
+.character-background canvas {
+    display: block;
+}
+
 /* Chrome goes transparent so the unified carbon backdrop reads across the
    whole window (same idea as Glass, minus the blur). Inner content keeps
    its own surfaces for readability; per-region tints can be tightened
@@ -2523,8 +2493,8 @@ html.is-windows[data-frost="frost"] #root {
 [data-shape="monogram"] .ctx-menu,
 [data-shape="carbon"] .term-ctx-menu,
 [data-shape="monogram"] .term-ctx-menu,
-[data-shape="carbon"] .history-tool-filter-menu,
-[data-shape="monogram"] .history-tool-filter-menu {
+[data-shape="carbon"] .history-search-dialog,
+[data-shape="monogram"] .history-search-dialog {
     background-color: color-mix(in oklab, var(--bg-app) 76%, transparent) !important;
     background-image: none !important;
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
@@ -2534,10 +2504,10 @@ html.is-windows[data-frost="frost"] #root {
    light theme) to bridge the tab into the terminal below. On carbon the
    content area is transparent mesh, so those arcs read as stray white
    corners. Hide them — same as glass/slab/sharp/panel already do. */
-[data-shape="carbon"] .chrome-tab.active::before,
-[data-shape="monogram"] .chrome-tab.active::before,
-[data-shape="carbon"] .chrome-tab.active::after,
-[data-shape="monogram"] .chrome-tab.active::after {
+[data-shape="carbon"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="monogram"] .chrome-tab:is(.active, .orchestration-family-active)::before,
+[data-shape="carbon"] .chrome-tab:is(.active, .orchestration-family-active)::after,
+[data-shape="monogram"] .chrome-tab:is(.active, .orchestration-family-active)::after {
     display: none;
 }
 

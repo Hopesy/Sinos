@@ -1,5 +1,5 @@
 <!-- CodeBuddy (Tencent) brand mark — white glyph on a teal→violet gradient
-     squircle. Full-color (NOT currentColor, unlike Cursor/Cline/Pi/Grok), so
+     squircle. Full-color (NOT currentColor, unlike Cursor/Cline/Grok), so
      it keeps its own fills and renders as an inline SVG; CenterPanel and
      HistoryBoard inline these same bytes (?raw) the way they do for OpenClaw.
      Source: codebuddy.ai brand asset. width/height="100%" so it fills the 1em

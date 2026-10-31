@@ -2,10 +2,14 @@
 
 import { createContext, useContext, useLayoutEffect, useReducer, useRef } from 'react';
 import type { ReactNode, RefObject } from 'react';
+import { isConversationSession, supportsEnhancedTool } from '../lib/chat-tools';
+import { supportsAdditionalAgentStatus } from '../lib/terminal-agent-status';
+import { insertSessionSplit, removeSessionSplit, replaceSplitSession, splitSessionIds, setSessionSplitRatio, type SessionSplitLayout, type SplitEdge } from '../lib/session-split-layout';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type ToolType = 'claude' | 'qwen' | 'installer' | 'hermes' | 'opencode' | 'mimocode' | 'kilo' | 'openclaw' | 'codex' | 'grok' | 'antigravity' | 'pi' | 'crush' | 'aider' | 'kimicode' | 'goose' | 'copilot' | 'cursor' | 'cline' | 'omp' | 'codebuddy' | 'terminal' | 'remote' | 'two-split' | 'three-split' | 'four-split' | null;
+export type ToolType = 'claude' | 'qwen' | 'hermes' | 'opencode' | 'mimocode' | 'kilo' | 'openclaw' | 'codex' | 'grok' | 'antigravity' | 'pi' | 'crush' | 'aider' | 'kimicode' | 'goose' | 'copilot' | 'cursor' | 'cline' | 'omp' | 'codebuddy' | 'muse' | 'kiro' | 'minimax' | 'dsh' | 'terminal' | 'remote' | 'two-split' | 'three-split' | 'four-split' | null;
+export type ClaudeMode = 'conversation' | 'terminal';
 
 /**
  * Tab status shown as an animated 9-dot glyph. Three states only —
@@ -20,14 +24,16 @@ export type ToolType = 'claude' | 'qwen' | 'installer' | 'hermes' | 'opencode' |
  */
 export type AgentStatus = 'idle' | 'working' | 'wait_input';
 
-/** True only when the upstream CLI exposes authoritative state via OSC title. */
+/** True only when the upstream tool exposes authoritative state: an OSC title,
+ * or DeepSeek Harness's session protocol in its conversation tab. */
 export function supportsNativeAgentStatus(tool: ToolType): boolean {
-  return tool === 'claude' || tool === 'codex' || tool === 'grok' || tool === 'omp';
+  return tool === 'claude' || tool === 'codex' || tool === 'omp' || tool === 'grok' || tool === 'dsh';
 }
 
-/** Includes the source-verified Kimi screen protocol without removing native tools. */
+/** OpenCode v2's process-local adapter and native titles can report status
+ * without a conversation view or rendered-screen interaction parser. */
 export function supportsAgentStatus(tool: ToolType): boolean {
-  return supportsNativeAgentStatus(tool) || tool === 'kimicode';
+  return tool === 'opencode' || supportsNativeAgentStatus(tool) || supportsEnhancedTool(tool) || supportsAdditionalAgentStatus(tool);
 }
 
 // Theme: color palette family (orthogonal to shape and to mode).
@@ -50,7 +56,7 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type ThemeShape =
   | 'soft' | 'slab' | 'sharp' | 'glass'
   | 'frost'
-  | 'panel' | 'carbon' | 'monogram';
+  | 'panel' | 'carbon' | 'monogram' | 'characters';
 // Icon theme: visual style for file/folder icons in the explorer.
 // 8 themes, each with genuinely distinct folder silhouette + file icon style.
 // Fetched upstream (6): material, vscode-icons, catppuccin-mocha, devicon, fluent, symbols
@@ -115,47 +121,12 @@ export function schemeLabels(scheme: HotkeyScheme): Record<HotkeyAction, string>
   };
 }
 
-/// One pane inside a multi-agent Tab. `paneIdx` is 1-indexed (1..4)
-/// matching the user-visible badge and the MCP session id suffix —
-/// sessionId = `${tabId}::pane-${paneIdx}`. The Rust MCP server's
-/// list_panes returns the same ids, so when the user says "pane 2"
-/// a CLI's MCP call can target it verbatim.
-export interface MultiAgentPane {
-  paneIdx: number;
-  tool: ToolType;
-  toolData?: string;
-  agentStatus?: AgentStatus;
-  // Per-pane working directory. Only used by the four-split (independent quad) tab
-  // where each pane can run in its own project. Multi-agent panes ignore this
-  // and use the tab-level folderPath (all 4 panes share one workspace because
-  // they coordinate via MCP against that workspace's config).
-  folderPath?: string | null;
-  // Sentinel Protocol (opt-in per pane). When true, TierTerminal scans the
-  // PTY output stream of this pane for the marker `[COFFEE-DONE:pane<N>]`
-  // that the user instructs their agent to emit on task completion. On a
-  // match, completionTs is set to Date.now() — the pane number badge
-  // renders a small green dot while the timestamp is fresh.
-  sentinelEnabled?: boolean;
-  completionTs?: number;
-}
-
-/// State attached to a Tab with `tool === 'multi-agent'`. All four panes
-/// are peers — there is no primary/worker distinction — so this type is
-/// deliberately minimal. Each pane's CLI and toolData live on
-/// `MultiAgentPane`; focus tracking happens inside `<MultiAgentGrid/>`.
-interface MultiAgentState {
-  panes: MultiAgentPane[];
-  // Independent split (`*-split`) only: which pane the user last focused.
-  // Drives left Explorer + right Changes target — without it the file panels
-  // can't tell which pane's project they should reflect. Multi-agent tabs
-  // (`*-agent`, shared folder) ignore this field.
-  focusedPaneIdx?: number | null;
-}
-
 export interface TerminalSession {
   id: string;
   tool: ToolType;
   toolData?: string;  // Extra context for the tool (e.g. SSH connection JSON for remote)
+  claudeMode?: ClaudeMode;
+  codexMode?: ClaudeMode;
   folderPath: string | null;
   /// Live terminal title set by the tool via OSC 0/2 (e.g. Claude Code's
   /// conversation summary). When set, the tab shows this instead of the cwd
@@ -167,23 +138,21 @@ export interface TerminalSession {
   /// which spawns the tool with its `--resume <token>` flag instead of a
   /// fresh launch. Cleared on any subsequent SET_TERMINAL_TOOL.
   resumeToken?: string;
+  strictCwd?: boolean;
+  parentId?: string;
   isHidden?: boolean;
   agentStatus?: AgentStatus;
   gambitDraft?: string;    // Unsent textarea content, preserved across tab switches
-  /** Per-tab center surface. The PTY stays mounted while chat is visible so
-   *  switching views never interrupts the running CLI or loses output. */
-  viewMode?: 'terminal' | 'chat';
-  /** Optimistic prompt shown before the CLI has flushed it to native history. */
-  chatPending?: { text: string; sentAt: number };
   /** Local launch timestamp used to reject older history files when binding
    *  a live conversation to this terminal tab. */
   startedAt?: number;
-  /// When present, this Tab renders as a 2×2+ pane grid instead of a
-  /// single terminal. See docs/MULTI-AGENT-ARCHITECTURE.md §5.7 and §7.
-  multiAgent?: MultiAgentState;
+  viewMode?: 'terminal' | 'chat';
+  chatPending?: { text: string; sentAt: number };
 }
 
 // ─── State Shape ─────────────────────────────────────────────────────────────
+
+export type AgentPage = 'agent' | 'config';
 
 export interface AppState {
   // UI
@@ -215,6 +184,10 @@ export interface AppState {
   // Terminals
   terminals: TerminalSession[];
   activeTerminalId: string | null;
+  sessionSplit: SessionSplitLayout | null;
+  agentPages: AgentPage[];
+  agentPageActive: AgentPage | null;
+  tabOrder: string[];
 
   // Gambit (global floating compose window). Visibility is app-wide so the
   // panel doesn't appear/disappear when switching tabs; only the draft is
@@ -241,11 +214,6 @@ export interface AppState {
   // Default both panels visible — matches first-time user expectation.
   leftPanelHidden: boolean;
   rightPanelHidden: boolean;
-
-  // Multi-agent pane arrangement. 'grid' = 2×2 quadrant (default),
-  // 'columns' = 1×4 vertical strip. Only takes effect inside a tab
-  // whose tool is 'multi-agent'; other tabs ignore it.
-  multiAgentLayout: 'grid' | 'columns';
 
   // Right-panel task board form. 'list' = compact to-do checklist (default),
   // 'note' = big sticky-note cards (traffic-light status + timestamp + roomy
@@ -285,6 +253,8 @@ export interface AppState {
   editorTabs: EditorTab[];
   activeEditorId: string | null;
   editorTabActive: boolean;
+  usageOpen: boolean;
+  toolSettingsOpen: boolean;
 }
 
 /// Snapshot of the file the user clicked in ChangesBoard, plus the folderPath
@@ -295,7 +265,8 @@ export interface DiffSelection {
   folderPath: string;   // active terminal tab's cwd at snapshot time (tab title only)
   path: string;         // absolute on-disk path
   rel: string;          // repo-relative path for git specs
-  kind: 'uncommitted' | 'untracked' | 'committed';
+  kind: 'uncommitted' | 'untracked' | 'committed' | 'file';
+  fileSize?: number;    // Explorer's size hint, before reading a file preview
   commitHash?: string;
   added?: number;
   deleted?: number;
@@ -334,8 +305,7 @@ export const paneSessionId = (tabId: string, paneIdx: number, kind: 'split' | 'p
   `${tabId}::${kind}-${paneIdx}`;
 
 // ─── Diff context resolver ──────────────────────────────────────────────────
-// Split tabs route file-stats to the focused pane's own session+folder.
-// Multi-agent and regular tabs use the tab itself. `null` = no diff target.
+// File panels follow the real session focused in either single or split view.
 interface DiffContext {
   sessionId: string;
   folderPath: string;
@@ -343,18 +313,7 @@ interface DiffContext {
 }
 
 export function resolveDiffContext(session: TerminalSession | null | undefined): DiffContext | null {
-  if (!session) return null;
-  if (isSplitTool(session.tool)) {
-    const focusedIdx = session.multiAgent?.focusedPaneIdx ?? null;
-    if (focusedIdx == null) return null;
-    const pane = session.multiAgent?.panes.find(p => p.paneIdx === focusedIdx);
-    if (!pane?.tool || !pane.folderPath) return null;
-    return {
-      sessionId: paneSessionId(session.id, pane.paneIdx, 'split'),
-      folderPath: pane.folderPath,
-      tool: pane.tool,
-    };
-  }
+  if (!session?.tool) return null;
   if (!session.folderPath) return null;
   return { sessionId: session.id, folderPath: session.folderPath, tool: session.tool };
 }
@@ -362,6 +321,8 @@ export function resolveDiffContext(session: TerminalSession | null | undefined):
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
 type Action =
+  | { type: 'SET_USAGE_OPEN'; open: boolean }
+  | { type: 'SET_TOOL_SETTINGS_OPEN'; open: boolean }
   | { type: 'SET_FOLDER'; path: string }
   | { type: 'SET_TERMINAL_CWD'; id: string; path: string }
   | { type: 'CLEAR_FOLDER' }
@@ -370,15 +331,21 @@ type Action =
   | { type: 'SET_SHAPE'; shape: ThemeShape }
   | { type: 'SET_ICON_THEME'; theme: IconTheme }
   | { type: 'SET_LANG'; lang: string }
-  | { type: 'ADD_TERMINAL'; session: TerminalSession }
+  | { type: 'ADD_TERMINAL'; session: TerminalSession; split?: { targetId: string; edge: SplitEdge } }
+  | { type: 'OPEN_SESSION_SPLIT'; id: string; targetId: string; edge: SplitEdge }
+  | { type: 'CLOSE_SESSION_SPLIT'; id: string }
+  | { type: 'RESIZE_SESSION_SPLIT'; path: string; ratio: number }
+  | { type: 'LAUNCH_TERMINAL_TOOL'; id: string; tool: ToolType; cwd?: string; toolData?: string; resumeToken?: string; strictCwd?: boolean; claudeMode?: ClaudeMode; codexMode?: ClaudeMode; parentId?: string; background?: boolean }
   | { type: 'REMOVE_TERMINAL'; id: string }
-  | { type: 'REORDER_TERMINAL'; sessionId: string; beforeId: string | null }
+  | { type: 'CLOSE_TERMINAL_GROUP'; id: string; childIds: string[]; keepChildren: boolean }
+  | { type: 'RESTORE_WORKER_SESSION'; parent?: TerminalSession; child: TerminalSession }
+  | { type: 'REORDER_TAB'; tabId: string; beforeId: string | null }
   | { type: 'SET_ACTIVE_TERMINAL'; id: string | null }
-  | { type: 'SET_TERMINAL_TOOL'; id: string; tool: ToolType; toolData?: string; resumeToken?: string }
+  | { type: 'SET_TERMINAL_TOOL'; id: string; tool: ToolType; toolData?: string; resumeToken?: string; claudeMode?: ClaudeMode; codexMode?: ClaudeMode }
   | { type: 'SET_TERMINAL_HIDDEN'; id: string; isHidden: boolean }
   | { type: 'RESTART_TERMINAL'; id: string; newId: string }
   | { type: 'OPEN_HYPER_AGENT_TAB' }
-  | { type: 'SET_AGENT_STATUS'; id: string; status: AgentStatus }
+  | { type: 'SET_AGENT_STATUS'; id: string; status: AgentStatus | undefined }
   | { type: 'SET_BG'; path: string; bgType: 'image' | 'video' }
   | { type: 'CLEAR_BG' }
   | { type: 'SET_WALLPAPER_OPACITY'; opacity: number }
@@ -395,13 +362,9 @@ type Action =
   | { type: 'APPEND_GAMBIT_DRAFT'; id: string; text: string }
   | { type: 'SET_SESSION_VIEW'; id: string; viewMode: 'terminal' | 'chat' }
   | { type: 'SET_CHAT_PENDING'; id: string; pending?: { text: string; sentAt: number } }
-  | { type: 'SET_PANE_TOOL'; tabId: string; paneIdx: number; tool: ToolType; toolData?: string; folderPath?: string | null }
-  | { type: 'SET_PANE_SENTINEL'; tabId: string; paneIdx: number; enabled: boolean }
-  | { type: 'SET_PANE_COMPLETION'; tabId: string; paneIdx: number; ts: number }
-  | { type: 'SET_FOCUSED_PANE'; tabId: string; paneIdx: number | null }
+  | { type: 'SET_SESSION_TOKEN'; id: string; token: string }
   | { type: 'TOGGLE_LEFT_PANEL' }
   | { type: 'TOGGLE_RIGHT_PANEL' }
-  | { type: 'SET_MULTI_AGENT_LAYOUT'; layout: 'grid' | 'columns' }
   | { type: 'SET_TASK_VIEW_MODE'; mode: 'list' | 'note' | 'prompt' }
   | { type: 'SET_GIT_TRACKING'; path: string; enabled: boolean }
   | { type: 'SET_TAB_TITLE'; id: string; title: string }
@@ -415,12 +378,50 @@ type Action =
   | { type: 'SET_EDITOR_PATH'; id: string; path: string }
   | { type: 'SET_EDITOR_DIRTY'; id: string; dirty: boolean }
   | { type: 'SET_EDITOR_EXTERNAL_CHANGED'; id: string; externalChanged: boolean }
-  | { type: 'CLOSE_EDITOR'; id: string };
+  | { type: 'CLOSE_EDITOR'; id: string }
+  | { type: 'OPEN_AGENT_PAGE'; page: AgentPage }
+  | { type: 'CLOSE_AGENT_PAGE'; page: AgentPage };
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
+export function getTabOrder(state: Pick<AppState, 'terminals' | 'agentPages' | 'tabOrder'>): string[] {
+  const ids = [...state.terminals.map(tab => tab.id), ...state.agentPages.map(page => `agent:${page}`)];
+  const saved = (state.tabOrder ?? []).filter(id => ids.includes(id));
+  return [...saved, ...ids.filter(id => !saved.includes(id))];
+}
+
+function splitForSession(state: AppState, id: string, targetId: string, edge: SplitEdge) {
+  const target = state.terminals.find(session => session.id === targetId);
+  if (!target?.tool) return null;
+  const layout = splitSessionIds(state.sessionSplit).includes(targetId)
+    ? state.sessionSplit! : { type: 'leaf' as const, sessionId: targetId };
+  return insertSessionSplit(layout, targetId, id, edge);
+}
+
 function reducer(state: AppState, action: Action): AppState {
+  if ((state.usageOpen || state.toolSettingsOpen) && !(action.type === 'LAUNCH_TERMINAL_TOOL' && action.background) && ['OPEN_EDITOR', 'OPEN_IMAGE', 'SET_EDITOR_ACTIVE', 'ADD_TERMINAL', 'LAUNCH_TERMINAL_TOOL', 'SET_ACTIVE_TERMINAL', 'OPEN_AGENT_PAGE', 'OPEN_SESSION_SPLIT', 'SET_DIFF_SELECTION', 'SET_DIFF_TAB_ACTIVE'].includes(action.type)) state = { ...state, usageOpen: false, toolSettingsOpen: false };
+  if (state.editorTabActive && !(action.type === 'LAUNCH_TERMINAL_TOOL' && action.background) && ['ADD_TERMINAL', 'LAUNCH_TERMINAL_TOOL', 'OPEN_AGENT_PAGE', 'OPEN_SESSION_SPLIT'].includes(action.type)) state = { ...state, editorTabActive: false };
   switch (action.type) {
+    case 'SET_USAGE_OPEN':
+      return { ...state, usageOpen: action.open, toolSettingsOpen: false };
+    case 'SET_TOOL_SETTINGS_OPEN':
+      return { ...state, toolSettingsOpen: action.open, usageOpen: false };
+    case 'OPEN_SESSION_SPLIT': {
+      const session = state.terminals.find(session => session.id === action.id);
+      if (!session?.tool) return state;
+      const layout = splitForSession(state, action.id, action.targetId, action.edge);
+      if (!layout || !splitSessionIds(layout).includes(action.id)) return state;
+      return { ...state, sessionSplit: layout, activeTerminalId: action.id, agentPageActive: null, diffTabActive: false,
+        terminals: session.isHidden ? state.terminals.map(t => t.id === session.id ? { ...t, isHidden: false } : t) : state.terminals };
+    }
+    case 'CLOSE_SESSION_SPLIT': {
+      if (!splitSessionIds(state.sessionSplit).includes(action.id)) return state;
+      const layout = removeSessionSplit(state.sessionSplit, action.id);
+      return { ...state, sessionSplit: layout,
+        activeTerminalId: state.activeTerminalId === action.id ? splitSessionIds(layout)[0] ?? state.activeTerminalId : state.activeTerminalId };
+    }
+    case 'RESIZE_SESSION_SPLIT':
+      return { ...state, sessionSplit: setSessionSplitRatio(state.sessionSplit, action.path, action.ratio) };
     case 'SET_TERMINAL_CWD': {
       let changed = false;
       const terminals = state.terminals.map(t => {
@@ -428,17 +429,7 @@ function reducer(state: AppState, action: Action): AppState {
           changed = true;
           return { ...t, folderPath: action.path };
         }
-        if (!t.multiAgent) return t;
-        const panes = t.multiAgent.panes.map(p => {
-          if ((paneSessionId(t.id, p.paneIdx, 'split') === action.id
-            || paneSessionId(t.id, p.paneIdx, 'pane') === action.id) && p.folderPath !== action.path) {
-            changed = true;
-            return { ...p, folderPath: action.path };
-          }
-          return p;
-        });
-        return panes.some((p, i) => p !== t.multiAgent!.panes[i])
-          ? { ...t, multiAgent: { ...t.multiAgent, panes } } : t;
+        return t;
       });
       if (!changed) return state;
       if (action.id === state.activeTerminalId) {
@@ -478,14 +469,83 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_LANG':
       return { ...state, currentLang: action.lang };
     case 'ADD_TERMINAL': {
+      // Resolve against current state so rapid history clicks cannot start
+      // multiple writers for the same native conversation.
+      const existing = action.session.resumeToken && state.terminals.find(t =>
+        t.tool === action.session.tool && t.resumeToken === action.session.resumeToken);
+      const layout = action.split ? splitForSession(state, existing ? existing.id : action.session.id, action.split.targetId, action.split.edge) : null;
+      // A stale drop or full layout must not launch an invisible second writer.
+      if (action.split && (!layout || !splitSessionIds(layout).includes(existing ? existing.id : action.session.id))) return state;
+      if (existing) return {
+        ...state,
+        sessionSplit: action.split ? layout : state.sessionSplit,
+        terminals: existing.isHidden ? state.terminals.map(t => t.id === existing.id ? { ...t, isHidden: false } : t) : state.terminals,
+        activeTerminalId: existing.id,
+        agentPageActive: null,
+        diffTabActive: false,
+      };
       const session = action.session.tool && !action.session.startedAt
         ? { ...action.session, startedAt: Date.now() }
         : action.session;
       return { 
         ...state, 
+        sessionSplit: action.split ? layout : state.sessionSplit,
         terminals: [...state.terminals, session],
-        activeTerminalId: session.id
+        tabOrder: [...getTabOrder(state), session.id],
+        activeTerminalId: session.id,
+        agentPageActive: null,
+        diffTabActive: false,
       };
+    }
+    case 'LAUNCH_TERMINAL_TOOL': {
+      const previous = state.terminals.find(tab => tab.id === action.id);
+      const session: TerminalSession = {
+        ...previous, id: action.id, tool: action.tool,
+        folderPath: action.cwd ?? previous?.folderPath ?? null,
+        toolData: action.toolData, resumeToken: action.resumeToken, strictCwd: action.strictCwd,
+        parentId: action.parentId,
+        claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'conversation' : undefined,
+        codexMode: action.tool === 'codex' ? action.codexMode ?? 'terminal' : undefined,
+        toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now(),
+      };
+      if (action.cwd) {
+        try { localStorage.setItem('cc-folder', action.cwd); } catch { /* Best-effort operation; failure is non-fatal. */ }
+      }
+      const order = getTabOrder(state);
+      const family = state.terminals.filter(tab => tab.id === action.parentId || tab.parentId === action.parentId).map(tab => order.indexOf(tab.id));
+      const index = action.parentId && family.length ? Math.max(...family) + 1 : order.length;
+      return {
+        ...state,
+        terminals: previous ? state.terminals.map(tab => tab.id === action.id ? session : tab) : [...state.terminals, session],
+        tabOrder: previous ? state.tabOrder : [...order.slice(0, index), action.id, ...order.slice(index)],
+        activeTerminalId: action.background ? state.activeTerminalId : action.id,
+        agentPageActive: action.background ? state.agentPageActive : null,
+        diffTabActive: action.background ? state.diffTabActive : false,
+      };
+    }
+    case 'RESTORE_WORKER_SESSION': {
+      let next = state;
+      let parentId: string | undefined;
+      if (action.parent) {
+        const parent = next.terminals.find(tab => tab.id === action.parent!.id || tab.tool === action.parent!.tool && action.parent!.resumeToken && tab.resumeToken === action.parent!.resumeToken);
+        parentId = parent?.id ?? action.parent.id;
+        if (!parent) next = reducer(next, { type: 'ADD_TERMINAL', session: action.parent });
+      }
+      const existingChild = next.terminals.find(tab => tab.id === action.child.id || tab.tool === action.child.tool && action.child.resumeToken && tab.resumeToken === action.child.resumeToken);
+      next = existingChild ? reducer(next, { type: 'SET_ACTIVE_TERMINAL', id: existingChild.id }) : reducer(next, { type: 'ADD_TERMINAL', session: { ...action.child, parentId } });
+      const childId = next.activeTerminalId!;
+      const order = getTabOrder(next).filter(id => id !== childId);
+      const family = next.terminals.filter(tab => tab.id === parentId || tab.parentId === parentId && parentId).map(tab => order.indexOf(tab.id)).filter(index => index >= 0);
+      const index = parentId && family.length ? Math.max(...family) + 1 : order.length;
+      return { ...next, terminals: next.terminals.map(tab => tab.id === childId ? { ...tab, parentId, isHidden: false } : tab.id === parentId && tab.isHidden ? { ...tab, isHidden: false } : tab), tabOrder: [...order.slice(0, index), childId, ...order.slice(index)] };
+    }
+    case 'CLOSE_TERMINAL_GROUP': {
+      const children = new Set([...action.childIds, ...state.terminals.filter(tab => tab.parentId === action.id).map(tab => tab.id)]);
+      let next = action.keepChildren ? { ...state, terminals: state.terminals.map(tab => children.has(tab.id) ? { ...tab, parentId: undefined } : tab) } : state;
+      for (const id of [...(action.keepChildren ? [] : children), action.id]) {
+        if (next.terminals.some(tab => tab.id === id)) next = reducer(next, { type: 'REMOVE_TERMINAL', id });
+      }
+      return next;
     }
     case 'REMOVE_TERMINAL': {
       let newTerminals = state.terminals.filter(t => t.id !== action.id);
@@ -497,41 +557,40 @@ function reducer(state: AppState, action: Action): AppState {
         newTerminals = [{ id: defaultId, tool: null, folderPath }];
         newActiveId = defaultId;
       } else if (state.activeTerminalId === action.id) {
-         newActiveId = newTerminals[newTerminals.length - 1].id;
+         // The tool selector has no visible tab; prefer another real session.
+         newActiveId = (newTerminals.filter(session => session.tool !== null).at(-1) ?? newTerminals[newTerminals.length - 1]).id;
       }
-      return { ...state, terminals: newTerminals, activeTerminalId: newActiveId };
+      const layout = removeSessionSplit(state.sessionSplit, action.id);
+      if (state.activeTerminalId === action.id && splitSessionIds(layout).length) newActiveId = splitSessionIds(layout)[0];
+      return { ...state, sessionSplit: layout, terminals: newTerminals, activeTerminalId: newActiveId, tabOrder: getTabOrder(state).filter(id => id !== action.id) };
     }
-    case 'REORDER_TERMINAL': {
-      // Move `sessionId`'s tab so that it sits immediately before
-      // `beforeId` in the array. `beforeId === null` means "drop at end".
-      // Used by browser-style tab reordering: pointer-down a tab, drag
-      // horizontally, drop wherever you want it. CenterPanel does the
-      // pixel-math; the reducer just handles the array surgery.
-      const t = state.terminals;
-      const fromIdx = t.findIndex(x => x.id === action.sessionId);
-      if (fromIdx < 0) return state;
-      const without = t.filter(x => x.id !== action.sessionId);
+    case 'REORDER_TAB': {
+      // Terminal and Agent pages share one strip. Keep terminal order in
+      // sync so Agent session numbers still follow the displayed tabs.
+      const order = getTabOrder(state);
+      if (!order.includes(action.tabId)) return state;
+      const without = order.filter(id => id !== action.tabId);
       const insertIdx = action.beforeId
-        ? without.findIndex(x => x.id === action.beforeId)
+        ? without.indexOf(action.beforeId)
         : without.length;
       if (insertIdx < 0) return state;
-      const moved = t[fromIdx];
-      const next = [...without.slice(0, insertIdx), moved, ...without.slice(insertIdx)];
-      // No-op detection: skip dispatch round-trip when the order didn't
-      // actually change (e.g., user dragged 1px and dropped, or dropped
-      // back into the same gap).
-      if (next.every((x, i) => x.id === t[i].id)) return state;
-      return { ...state, terminals: next };
+      const next = [...without.slice(0, insertIdx), action.tabId, ...without.slice(insertIdx)];
+      if (next.every((id, i) => id === order[i])) return state;
+      return {
+        ...state, tabOrder: next,
+        terminals: [...state.terminals].sort((a, b) => next.indexOf(a.id) - next.indexOf(b.id)),
+        agentPages: [...state.agentPages].sort((a, b) => next.indexOf(`agent:${a}`) - next.indexOf(`agent:${b}`)),
+      };
     }
     case 'SET_ACTIVE_TERMINAL':
       // Activating a terminal tab blurs the diff tab (they're peer tabs in
       // the strip; only one is focused at a time). diffMode is untouched —
       // the diff still renders in its chosen surface, just not focused.
-      return { ...state, activeTerminalId: action.id, diffTabActive: false, editorTabActive: false };
+      return { ...state, activeTerminalId: action.id, diffTabActive: false, editorTabActive: false, agentPageActive: null };
     case 'SET_TERMINAL_TOOL':
       return {
         ...state,
-        terminals: state.terminals.map(t => t.id === action.id ? { ...t, tool: action.tool, toolData: action.toolData, resumeToken: action.resumeToken, toolTitle: undefined, agentStatus: undefined, viewMode: 'terminal', chatPending: undefined, startedAt: Date.now() } : t)
+        terminals: state.terminals.map(t => t.id === action.id ? { ...t, tool: action.tool, claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'conversation' : undefined, codexMode: action.tool === 'codex' ? action.codexMode ?? 'terminal' : undefined, toolData: action.toolData, resumeToken: action.resumeToken, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now() } : t)
       };
     case 'SET_TERMINAL_HIDDEN':
       return {
@@ -541,20 +600,25 @@ function reducer(state: AppState, action: Action): AppState {
     case 'RESTART_TERMINAL':
       return {
         ...state,
+        sessionSplit: replaceSplitSession(state.sessionSplit, action.id, action.newId),
         terminals: state.terminals.map(t =>
-          t.id === action.id ? { ...t, id: action.newId, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, startedAt: Date.now() } : t
+          t.id === action.id ? { ...t, id: action.newId, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now() } : t
         ),
+        tabOrder: getTabOrder(state).map(id => id === action.id ? action.newId : id),
         activeTerminalId: state.activeTerminalId === action.id ? action.newId : state.activeTerminalId
       };
-    case 'SET_AGENT_STATUS':
-      // Native-title tools emit frequent OSC activity frames. Their parsers
-      // dispatch each frame, but equal states must not re-render the app.
-      if (!state.terminals.some(t => t.id === action.id && supportsNativeAgentStatus(t.tool))) return state;
-      if (state.terminals.some(t => t.id === action.id && t.agentStatus === action.status)) return state;
-      return {
-        ...state,
-        terminals: state.terminals.map(t => t.id === action.id ? { ...t, agentStatus: action.status } : t)
-      };
+    case 'SET_AGENT_STATUS': {
+      // Native titles and rendered-screen spinners can both emit frequent
+      // activity frames. Equal states must not re-render the app.
+      let changed = false;
+      const terminals = state.terminals.map(t => {
+        if (t.id === action.id && supportsAgentStatus(t.tool) && t.agentStatus !== action.status) {
+          changed = true; return { ...t, agentStatus: action.status };
+        }
+        return t;
+      });
+      return changed ? { ...state, terminals } : state;
+    }
     case 'SET_BG':
       return { ...state, bgPath: action.path, bgType: action.bgType };
     case 'CLEAR_BG':
@@ -579,6 +643,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, gitTrackingDisabledPaths: nextPaths };
     }
     case 'TOGGLE_GAMBIT':
+      if (!state.agentPageActive && !state.diffTabActive && isConversationSession(state.terminals.find(t => t.id === state.activeTerminalId))) return state;
       return { ...state, gambitOpen: !state.gambitOpen };
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen };
@@ -612,77 +677,8 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         terminals: state.terminals.map(t => t.id === action.id ? { ...t, chatPending: action.pending } : t),
       };
-    case 'SET_PANE_TOOL': {
-      // Seed a MultiAgentState lazily on the first pane selection so
-      // quadrant tabs don't need a separate enable-step — point of entry
-      // is the user clicking a CLI button in any empty pane slot.
-      return {
-        ...state,
-        terminals: state.terminals.map(t => {
-          if (t.id !== action.tabId) return t;
-          const existing = t.multiAgent?.panes
-            ?? ([1, 2, 3, 4].map(i => ({ paneIdx: i, tool: null as ToolType })) as MultiAgentPane[]);
-          const panes = existing.map(p =>
-            p.paneIdx === action.paneIdx
-              ? {
-                  ...p,
-                  tool: action.tool,
-                  toolData: action.toolData,
-                  // Only overwrite folderPath when the action explicitly
-                  // carries one. Clearing a pane (tool=null without folderPath)
-                  // wipes the pane back to empty state, so we also null out
-                  // the stored folder to avoid ghost state.
-                  folderPath: action.folderPath !== undefined
-                    ? action.folderPath
-                    : (action.tool === null ? null : p.folderPath),
-                }
-              : p
-          );
-          return { ...t, multiAgent: { ...t.multiAgent, panes } };
-        }),
-      };
-    }
-    case 'SET_PANE_SENTINEL': {
-      return {
-        ...state,
-        terminals: state.terminals.map(t => {
-          if (t.id !== action.tabId) return t;
-          const existing = t.multiAgent?.panes
-            ?? ([1, 2, 3, 4].map(i => ({ paneIdx: i, tool: null as ToolType })) as MultiAgentPane[]);
-          const panes = existing.map(p =>
-            p.paneIdx === action.paneIdx ? { ...p, sentinelEnabled: action.enabled } : p
-          );
-          return { ...t, multiAgent: { ...t.multiAgent, panes } };
-        }),
-      };
-    }
-    case 'SET_PANE_COMPLETION': {
-      return {
-        ...state,
-        terminals: state.terminals.map(t => {
-          if (t.id !== action.tabId) return t;
-          if (!t.multiAgent) return t;
-          const panes = t.multiAgent.panes.map(p =>
-            p.paneIdx === action.paneIdx ? { ...p, completionTs: action.ts } : p
-          );
-          return { ...t, multiAgent: { ...t.multiAgent, panes } };
-        }),
-      };
-    }
-    case 'SET_FOCUSED_PANE': {
-      const tab = state.terminals.find(t => t.id === action.tabId);
-      if (!tab) return state;
-      if ((tab.multiAgent?.focusedPaneIdx ?? null) === action.paneIdx) return state;
-      return {
-        ...state,
-        terminals: state.terminals.map(t => {
-          if (t.id !== action.tabId) return t;
-          const ma = t.multiAgent
-            ?? { panes: [1, 2, 3, 4].map(i => ({ paneIdx: i, tool: null as ToolType })) as MultiAgentPane[] };
-          return { ...t, multiAgent: { ...ma, focusedPaneIdx: action.paneIdx } };
-        }),
-      };
-    }
+    case 'SET_SESSION_TOKEN':
+      return { ...state, terminals: state.terminals.map(t => t.id === action.id && t.resumeToken !== action.token ? { ...t, resumeToken: action.token } : t) };
     case 'TOGGLE_LEFT_PANEL': {
       const next = !state.leftPanelHidden;
       try { localStorage.setItem('cc-left-hidden', next ? '1' : '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
@@ -692,10 +688,6 @@ function reducer(state: AppState, action: Action): AppState {
       const next = !state.rightPanelHidden;
       try { localStorage.setItem('cc-right-hidden', next ? '1' : '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
       return { ...state, rightPanelHidden: next };
-    }
-    case 'SET_MULTI_AGENT_LAYOUT': {
-      try { localStorage.setItem('cc-ma-layout', action.layout); } catch { /* Best-effort operation; failure is non-fatal. */ }
-      return { ...state, multiAgentLayout: action.layout };
     }
     case 'SET_TASK_VIEW_MODE': {
       try { localStorage.setItem('cc-task-view', action.mode); } catch { /* Best-effort operation; failure is non-fatal. */ }
@@ -710,6 +702,8 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         diffSelection: action.selection,
         editorTabActive: false,
+        rightPanelHidden: state.diffMode === 'overlay' ? false : state.rightPanelHidden,
+        agentPageActive: state.diffMode === 'tab' ? null : state.agentPageActive,
         diffTabActive: state.diffMode === 'tab' ? true : state.diffTabActive,
       };
     case 'CLEAR_DIFF':
@@ -721,15 +715,15 @@ function reducer(state: AppState, action: Action): AppState {
       try { localStorage.setItem('cc-diff-mode', action.mode); } catch { /* Best-effort operation; failure is non-fatal. */ }
       // Entering tab mode focuses the diff tab; leaving blurs it. Keeps the
       // active-surface tracking in lockstep with the surface the diff is on.
-      return { ...state, diffMode: action.mode, diffTabActive: action.mode === 'tab' };
+      return { ...state, diffMode: action.mode, rightPanelHidden: action.mode === 'overlay' ? false : state.rightPanelHidden, diffTabActive: action.mode === 'tab', agentPageActive: action.mode === 'tab' ? null : state.agentPageActive };
     }
     case 'SET_DIFF_TAB_ACTIVE':
-      return { ...state, diffTabActive: action.active, editorTabActive: action.active ? false : state.editorTabActive };
+      return { ...state, diffTabActive: action.active, agentPageActive: action.active ? null : state.agentPageActive, editorTabActive: action.active ? false : state.editorTabActive };
     case 'OPEN_EDITOR': {
       const key = editorPathKey(action.path);
       const existing = state.editorTabs.find(tab => editorPathKey(tab.path) === key);
       if (existing) {
-        return { ...state, activeEditorId: existing.id, editorTabActive: true, diffTabActive: false };
+        return { ...state, activeEditorId: existing.id, editorTabActive: true, agentPageActive: null, usageOpen: false, toolSettingsOpen: false, diffTabActive: false };
       }
       const tab: EditorTab = {
         id: crypto.randomUUID(),
@@ -743,7 +737,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         editorTabs: [...state.editorTabs, tab],
         activeEditorId: tab.id,
-        editorTabActive: true,
+        editorTabActive: true, agentPageActive: null, usageOpen: false, toolSettingsOpen: false,
         diffTabActive: false,
       };
     }
@@ -754,7 +748,7 @@ function reducer(state: AppState, action: Action): AppState {
         return {
           ...state,
           activeEditorId: existing.id,
-          editorTabActive: true,
+          editorTabActive: true, agentPageActive: null, usageOpen: false, toolSettingsOpen: false,
           diffTabActive: false,
           editorTabs: state.editorTabs.map(tab => tab.id === existing.id && tab.kind === 'image'
             ? { ...tab, imageItems: action.items }
@@ -774,13 +768,13 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         editorTabs: [...state.editorTabs, tab],
         activeEditorId: tab.id,
-        editorTabActive: true,
+        editorTabActive: true, agentPageActive: null, usageOpen: false, toolSettingsOpen: false,
         diffTabActive: false,
       };
     }
     case 'SET_EDITOR_ACTIVE':
       if (!state.editorTabs.some(tab => tab.id === action.id)) return state;
-      return { ...state, activeEditorId: action.id, editorTabActive: true, diffTabActive: false };
+      return { ...state, activeEditorId: action.id, editorTabActive: true, agentPageActive: null, usageOpen: false, toolSettingsOpen: false, diffTabActive: false };
     case 'SET_EDITOR_PATH':
       return {
         ...state,
@@ -808,6 +802,17 @@ function reducer(state: AppState, action: Action): AppState {
         activeEditorId: nextActive?.id ?? null,
         editorTabActive: closingActive ? nextActive !== null : state.editorTabActive,
       };
+    }
+    case 'OPEN_AGENT_PAGE':
+      return {
+        ...state,
+        agentPages: state.agentPages.includes(action.page) ? state.agentPages : [...state.agentPages, action.page],
+        tabOrder: state.agentPages.includes(action.page) ? state.tabOrder : [...getTabOrder(state), `agent:${action.page}`],
+        agentPageActive: action.page, editorTabActive: false, usageOpen: false, toolSettingsOpen: false, diffTabActive: false,
+      };
+    case 'CLOSE_AGENT_PAGE': {
+      const agentPages = state.agentPages.filter(page => page !== action.page);
+      return { ...state, agentPages, tabOrder: getTabOrder(state).filter(id => id !== `agent:${action.page}`), agentPageActive: state.agentPageActive === action.page ? agentPages.at(-1) ?? null : state.agentPageActive };
     }
     default:
       return state;
@@ -838,7 +843,7 @@ const VALID_THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
 const VALID_SHAPES: ThemeShape[] = [
   'soft', 'slab', 'sharp', 'glass',
   'frost',
-  'panel', 'carbon', 'monogram',
+  'panel', 'carbon', 'monogram', 'characters',
 ];
 const VALID_ICON_THEMES: IconTheme[] = [
   'outline', 'material', 'vscode-icons', 'catppuccin-mocha',
@@ -846,18 +851,11 @@ const VALID_ICON_THEMES: IconTheme[] = [
 ];
 
 function getInitialState(): AppState {
-  // Default 'obsidian' + 'panel' — the "严谨高级简约" out-of-box. Carbon's
-  // hex-mesh + translucent chrome is polarizing (love-it-or-hate-it); obsidian
-  // (near-black with a neutral accent) + panel (sharp 0-radius corners,
-  // strong 2px borders) reads as a flat, restrained developer-tool aesthetic
-  // that a broader 70% find acceptable vs carbon's 50/50 split. Panel is also
-  // simpler than carbon (no mask/backdrop-filter/:not() nuclear rule), so less
-  // to render-break across edge cases. KEEP index.html's pre-paint default in
-  // sync with these two values or first paint flashes (obsidian/panel → React
-  // hydrate). Existing users keep their saved theme/shape (localStorage wins).
+  // Keep theme/shape defaults in sync with index.html's pre-paint script.
+  // Saved preferences take priority for returning users.
   let theme: ThemeColor = 'obsidian';
   let themeMode: ThemeMode = 'dark';
-  let shape: ThemeShape = 'panel';
+  let shape: ThemeShape = 'characters';
   let iconTheme: IconTheme = 'devicon';
   let lang = 'zh-CN';
   let folderPath: string | null = null;
@@ -941,7 +939,7 @@ function getInitialState(): AppState {
   // Ctrl+QWE preset is opt-in despite clashing with terminal Ctrl+W/E/Q.
   // Overridden only by a stored valid scheme.
   let hotkeyScheme: HotkeyScheme = 'alt-qwe';
-  let titlebarToggleDisplay: TitlebarToggleDisplay = 'icon-hotkey';
+  let titlebarToggleDisplay: TitlebarToggleDisplay = 'icon';
   try {
     const storedPath = localStorage.getItem('cc-bg-path');
     const storedType = localStorage.getItem('cc-bg-type') as 'image' | 'video' | 'none' | null;
@@ -999,7 +997,6 @@ function getInitialState(): AppState {
 
   let leftPanelHidden = false;
   let rightPanelHidden = false;
-  let multiAgentLayout: 'grid' | 'columns' = 'grid';
   // Default 'note' (big sticky-note view) — the welcome guide + the whole
   // task-board UX are tuned for it. A saved pref in localStorage (written by
   // the SET_TASK_VIEW_MODE toggle) still wins for returning users. Previously
@@ -1009,20 +1006,16 @@ function getInitialState(): AppState {
   // Default 'overlay' (the gentle half-height panel) — existing users see no
   // change. Only flips to 'tab' if the user explicitly expanded-to-tab before.
   let diffMode: 'overlay' | 'tab' = 'overlay';
-  // Gambit (compose box) opens by default on launch; the user's open/close
-  // choice persists via cc-gambit-open. NOT force-opened when an agent starts
-  // (that was a v3.3.9 mistake, reverted).
-  let gambitOpen = true;
+  // Gambit starts closed unless the user saved an open preference.
+  let gambitOpen = false;
   try {
     leftPanelHidden = localStorage.getItem('cc-left-hidden') === '1';
     rightPanelHidden = localStorage.getItem('cc-right-hidden') === '1';
-    const savedLayout = localStorage.getItem('cc-ma-layout');
-    if (savedLayout === 'columns' || savedLayout === 'grid') multiAgentLayout = savedLayout;
     const savedTaskView = localStorage.getItem('cc-task-view');
     if (savedTaskView === 'list' || savedTaskView === 'note' || savedTaskView === 'prompt') taskViewMode = savedTaskView;
     const savedDiffMode = localStorage.getItem('cc-diff-mode');
     if (savedDiffMode === 'tab' || savedDiffMode === 'overlay') diffMode = savedDiffMode;
-    gambitOpen = localStorage.getItem('cc-gambit-open') !== '0';
+    gambitOpen = localStorage.getItem('cc-gambit-open') === '1';
   } catch { /* Best-effort operation; failure is non-fatal. */ }
 
   return {
@@ -1039,6 +1032,7 @@ function getInitialState(): AppState {
     defaultShell,
     terminals: [{ id: defaultTerminalId, tool: null, folderPath }],
     activeTerminalId: defaultTerminalId,
+    sessionSplit: null,
     gambitOpen,
     settingsOpen: false,
     gambitEnterToSend,
@@ -1046,7 +1040,6 @@ function getInitialState(): AppState {
     titlebarToggleDisplay,
     leftPanelHidden,
     rightPanelHidden,
-    multiAgentLayout,
     taskViewMode,
     gitTrackingDisabledPaths,
     diffSelection: null,
@@ -1055,6 +1048,11 @@ function getInitialState(): AppState {
     editorTabs: [],
     activeEditorId: null,
     editorTabActive: false,
+    usageOpen: false,
+    toolSettingsOpen: false,
+    agentPages: [],
+    agentPageActive: null,
+    tabOrder: [defaultTerminalId],
   };
 }
 

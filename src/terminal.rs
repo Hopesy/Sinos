@@ -498,6 +498,9 @@ pub struct TerminalSession {
     /// The tool name (e.g. "claude", "qwen") for this session
     #[allow(dead_code)]
     pub tool_name: Option<String>,
+    /// Overrides actually used to start this PTY, independent of later settings edits.
+    pub launch_config: crate::tool_config::ToolConfigEntry,
+    pub launch_cwd: Option<String>,
     /// Captured session token for resume (e.g. Claude Session ID)
     pub session_token: Mutex<Option<String>>,
     /// Hold PTY master alive — dropping this kills the terminal pipe
@@ -680,7 +683,48 @@ pub fn set_process_paused(_pid: u32, _paused: bool) -> Result<(), String> {
     Err("Process pause is not supported on this platform".to_string())
 }
 
+#[derive(Serialize, Clone)]
+pub(crate) struct SessionTokenPayload {
+    pub id: String,
+    pub token: String,
+}
+
+// Claude supports assigning a native ID before launch. This gives fresh tabs
+// the same exact history identity as resumed tabs, without hooks or cwd guesses.
+pub(crate) fn claude_launch_token(args: &mut Vec<String>, assign_new: bool) -> Option<String> {
+    let mut token = None;
+    let mut has_selector = false;
+    for (index, arg) in args.iter().enumerate() {
+        if matches!(arg.as_str(), "--session-id" | "--resume" | "-r") {
+            has_selector = true;
+            token = args.get(index + 1).filter(|value| uuid::Uuid::parse_str(value).is_ok()).cloned();
+        } else if let Some(value) = arg.strip_prefix("--session-id=").or_else(|| arg.strip_prefix("--resume=")) {
+            has_selector = true;
+            token = uuid::Uuid::parse_str(value).ok().map(|_| value.to_string());
+        } else if matches!(arg.as_str(), "--continue" | "-c" | "--fork-session") {
+            // These flags can select/create a different native conversation.
+            return None;
+        }
+    }
+    if !has_selector && assign_new {
+        let id = uuid::Uuid::new_v4().to_string();
+        args.extend(["--session-id".to_string(), id.clone()]);
+        token = Some(id);
+    }
+    token
+}
+
 // ─── Spawn ────────────────────────────────────────────────
+
+pub(crate) fn shell_working_directory(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let path = dunce::simplified(path);
+    #[cfg(windows)]
+    anyhow::ensure!(
+        !path.as_os_str().as_encoded_bytes().starts_with(b"\\\\"),
+        "Windows CMD cannot use this UNC or extended working directory; choose a local drive path"
+    );
+    Ok(path.to_path_buf())
+}
 
 fn initial_pty_size(cols: u16, rows: u16) -> anyhow::Result<portable_pty::PtySize> {
     anyhow::ensure!(cols > 0 && rows > 0, "PTY size must be non-zero");
@@ -714,11 +758,12 @@ pub fn spawn(
     theme_mode: Option<String>,
     locale: Option<String>,
     extra_env: Vec<(String, String)>,
+    launch_config: crate::tool_config::ToolConfigEntry,
 ) -> anyhow::Result<()> {
     use portable_pty::{native_pty_system, CommandBuilder};
 
     let initial_size = initial_pty_size(initial_cols, initial_rows)?;
-    eprintln!("[Tier Terminal] Spawning '{}' args={:?}", program, args);
+    eprintln!("[Tier Terminal] Spawning '{}' args={:?}", program, crate::orchestration::log_args(&args));
     eprintln!(
         "[Tier Terminal] Size: {}x{}",
         initial_size.cols, initial_size.rows
@@ -799,6 +844,10 @@ pub fn spawn(
     for (key, val) in std::env::vars() {
         cmd.env(key, val);
     }
+
+    // Refresh only this child: IDE-private PATH entries must not shadow installed CLIs.
+    #[cfg(target_os = "windows")]
+    cmd.env("PATH", crate::windows_path::terminal_path());
 
     // Terminal capability: all tools get xterm-256color for rich rendering.
     cmd.env("TERM", "xterm-256color");
@@ -984,6 +1033,22 @@ pub fn spawn(
         cmd.env(crate::claude_stream::HOOKS_ENV, "1");
         cmd.env(crate::claude_stream::URL_ENV, &bridge.endpoint);
         cmd.env(crate::claude_stream::TOKEN_ENV, &bridge.token);
+}
+
+    let local_opencode = std::path::Path::new(&program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(name.to_ascii_lowercase().as_str(),
+                "opencode" | "opencode.exe" | "opencode.cmd" | "opencode.ps1" | "opencode2" | "opencode2.exe")
+        });
+    if tool_name.as_deref() == Some("opencode") && local_opencode {
+        match crate::opencode_island::environment(&extra_env) {
+            Ok(content) => {
+                cmd.env("OPENCODE_CLI_CONFIG_CONTENT", content);
+            }
+            Err(error) => eprintln!("[OpenCode island] integration unavailable: {error}"),
+        }
     }
 
     // ── Open PTY pair ──────────────────────────────────────────────────────
@@ -1125,6 +1190,8 @@ pub fn spawn(
                 kill_tx,
                 process_id,
                 tool_name: tool_name.clone(),
+                launch_config,
+                launch_cwd: cwd.clone(),
                 session_token: Mutex::new(None),
                 _master: master_clone,
                 output_buffer: buffer_clone,
@@ -1335,11 +1402,14 @@ pub fn spawn(
                                 if let Ok(map) = session_for_token.lock() {
                                     if let Some(sess) = map.get(&session_id_out) {
                                         if let Ok(mut t) = sess.session_token.lock() {
-                                            *t = Some(token_str);
+                                            *t = Some(token_str.clone());
                                         }
                                     }
                                 }
                                 token_captured = true;
+                                let _ = app_out.emit("tier-terminal-token", SessionTokenPayload {
+                                    id: session_id_out.clone(), token: token_str,
+                                });
                             }
                         }
                     }
@@ -1437,6 +1507,44 @@ fn resolve_program(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_history_identity_respects_existing_launch_selectors() {
+        let mut fresh = Vec::new();
+        let id = claude_launch_token(&mut fresh, true).unwrap();
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_eq!(fresh, vec!["--session-id".to_string(), id.clone()]);
+        assert_eq!(claude_launch_token(&mut fresh, true), Some(id.clone()));
+        assert_ne!(claude_launch_token(&mut Vec::new(), true), Some(id.clone()));
+        for flag in ["--resume", "-r", "--session-id"] {
+            let mut args = vec![flag.to_string(), id.clone()];
+            let original = args.clone();
+            assert_eq!(claude_launch_token(&mut args, true), Some(id.clone()));
+            assert_eq!(args, original);
+        }
+        for flags in [vec!["--continue"], vec!["-c"], vec!["--resume"], vec!["--resume", "named-session"], vec!["--fork-session"]] {
+            let mut args: Vec<String> = flags.iter().map(|value| value.to_string()).collect();
+            let original = args.clone();
+            assert_eq!(claude_launch_token(&mut args, true), None);
+            assert_eq!(args, original);
+        }
+        let mut custom = vec!["wrapper-arg".to_string()];
+        assert_eq!(claude_launch_token(&mut custom, false), None);
+        assert_eq!(custom, vec!["wrapper-arg".to_string()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_directories_use_drive_paths_and_reject_cmd_fallback() {
+        for path in [r"E:\tmp", r"\\?\E:\tmp", r"\\?\E:\Coffee 中文项目"] {
+            let compatible = shell_working_directory(std::path::Path::new(path)).unwrap();
+            assert!(!compatible.as_os_str().as_encoded_bytes().starts_with(b"\\\\"));
+            assert!(compatible.is_absolute());
+        }
+        for path in [r"\\server\share\project", r"\\?\UNC\server\share\project", r"\\?\E:\project."] {
+            assert!(shell_working_directory(std::path::Path::new(path)).is_err());
+        }
+    }
 
     #[test]
     fn initial_pty_size_preserves_the_frontend_grid() {

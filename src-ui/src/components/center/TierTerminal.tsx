@@ -21,24 +21,32 @@ import { rig } from '../../lib/latency-rig';
 import * as outputScheduler from '../../lib/terminal-output-scheduler';
 import { registerTerminalFocus } from '../../lib/focus-registry';
 import { installTerminalLinks } from '../../lib/terminal-links';
-import { registerTabActions, getTabActions } from '../../lib/tab-actions';
+import { registerTabActions } from '../../lib/tab-actions';
 import {
   clearTerminalInteraction, getTerminalInteraction, hasTerminalInteraction,
   parseTerminalAgentStatus, parseTerminalInteraction, readTerminalScreen, setTerminalInteraction, supportsTerminalInteraction,
 } from '../../lib/terminal-interaction';
-import { usesSelfRenderedCaret } from '../../lib/chat-tools';
-import { createTerminalAgentStatus } from '../../lib/terminal-agent-status';
 import { createTerminalInteractionResponder } from '../../lib/terminal-interaction-response';
 import { registerFileDropTarget } from '../../lib/file-drop';
 import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
 import { parseOmpTerminalTitle } from '../../lib/omp-terminal-title';
 import { parseGrokTerminalTitle } from '../../lib/grok-terminal-title';
+import { parseOpenCodeTerminalTitle } from '../../lib/opencode-terminal-title';
 import { markNotifySoundPromptSubmitted } from '../../lib/notify-sound';
+import { markSentinelExit, markSentinelWorking } from '../../lib/agent-sentinel';
+import { usesSelfRenderedCaret } from '../../lib/chat-tools';
 import { onWindowForeground } from '../../lib/window-focus-filter';
 import { createTerminalSizeSync, DEFAULT_TERMINAL_GRID } from '../../lib/terminal-size-sync';
+import { UI_SCALE_CHANGED } from '../../lib/ui-scale';
+import { IS_WINDOWS } from '../../lib/platform';
 import { commands } from '../../tauri';
+import { registerTerminalObserver, getTerminalObserver } from '../../lib/terminal-observer';
+import { readLaunchControls, setSessionControls, clearSessionControls } from '../../lib/session-controls';
+import { createTerminalEnterEncoder } from '../../lib/terminal-enter';
+import { confirmTerminalAgentStatus, forwardTerminalInput, isTerminalSubmitInput, registerTerminalControl, setTerminalControlReady, submitTerminalPrompt, terminalControlStatus } from '../../lib/terminal-control';
 import { supportsAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, type ToolType, type ThemeColor } from '../../store/app-state';
+import { parseAdditionalAgentTitle, supportsAdditionalAgentStatus } from '../../lib/terminal-agent-status';
 import { useT } from '../../i18n/useT';
 import { getToolDisplayName } from '../../lib/tool-info';
 import { THEME_COLORS } from '../../lib/personalization';
@@ -354,7 +362,7 @@ interface TierTerminalProps {
   theme: ThemeColor;
   lang: string;
   isActive: boolean;
-  /** The same PTY is projected through ConversationView while xterm is hidden. */
+  isVisible?: boolean;
   conversationActive?: boolean;
   toolData?: string;
   folderPath?: string | null;
@@ -362,18 +370,12 @@ interface TierTerminalProps {
    *  effect passes it to tierTerminalStart, which spawns the tool with
    *  `--resume <token>` instead of a fresh launch. */
   resumeToken?: string;
+  strictCwd?: boolean;
   hasBg?: boolean;
   bgUrl?: string;
   bgType?: 'image' | 'video' | 'none';
   termColorScheme?: string;
   termFont?: string;
-  /** Multi-agent only. When true, the backend wires this pane's
-   *  `coffee-cli` MCP server + injects the cross-pane protocol prompt
-   *  into the CLI's system instructions. When false (default), the
-   *  pane runs hands-free but with NO peer awareness — it shares only
-   *  the workspace folder with sibling panes. Ignored outside
-   *  multi-agent grids (single-terminal tabs always pass false). */
-  sentinelEnabled?: boolean;
 }
 
 interface RemoteTerminalConfig {
@@ -384,8 +386,8 @@ interface RemoteTerminalConfig {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 function TierTerminalImpl({
-  sessionId, tool, toolName, theme, lang, isActive, conversationActive = false,
-  toolData, folderPath, resumeToken, hasBg, bgUrl, bgType, termColorScheme, termFont,
+  sessionId, tool, toolName, theme, lang, isActive, isVisible = isActive, conversationActive = false,
+  toolData, folderPath, resumeToken, strictCwd, hasBg, bgUrl, bgType, termColorScheme, termFont,
 }: TierTerminalProps) {
   // Tools without a verified self-rendered caret rely on the xterm cursor
   // for their input position. Raw shells and remote SSH always retain it.
@@ -407,24 +409,26 @@ function TierTerminalImpl({
   const agentCursorRestoreTimerRef = useRef<number | undefined>(undefined);
   // Dispatch-only subscription. Never re-renders this component.
   const dispatch = useAppDispatch();
-  // Output handlers need current sibling-pane state, but rendering already
-  // receives its state through props. Avoid subscribing every hidden terminal.
+  // Startup reads the current default shell without subscribing hidden terminals.
   const appStateRef = useAppStateRef();
-  const projectionActiveRef = useRef(isActive || conversationActive);
-  projectionActiveRef.current = isActive || conversationActive;
+  const foregroundActiveRef = useRef(isVisible || conversationActive);
+  foregroundActiveRef.current = isVisible || conversationActive;
 
-  // TierTerminal is the single owner of backend activity cadence. In chat
-  // mode xterm is intentionally non-intersecting, but its PTY is still the
-  // visible conversation's event source and must remain at foreground speed.
+  // Keep every visible terminal at foreground output cadence.
   useEffect(() => {
-    commands.setSessionActive(sessionId, isActive || conversationActive).catch(() => {});
-  }, [sessionId, isActive, conversationActive]);
+    commands.setSessionActive(sessionId, isVisible || conversationActive).catch(() => {});
+  }, [sessionId, isVisible, conversationActive]);
 
   const termRef  = useRef<HTMLDivElement>(null);
   // Frozen helper-textarea position held for the lifetime of an IME
   // composition (Windows) — see the compositionstart/end wiring in the
   // init effect. Null when no composition is active.
   const imeFrozenRef = useRef<{ left: string; top: string } | null>(null);
+  // Last non-parked textarea position (Windows IME): the TUI sometimes parks the
+  // buffer cursor at the right edge after a backspace; freeze() falls back to
+  // this when it detects the cursor parked. Populated by the onCursorMove tracker
+  // in the init effect.
+  const imeLastGoodRef = useRef<{ left: string; top: string } | null>(null);
   const wrapRef  = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   type TerminalSizeSync = ReturnType<typeof createTerminalSizeSync>;
@@ -459,14 +463,6 @@ function TierTerminalImpl({
   const interactionSuppressionRef = useRef<string | null>(null);
   const submitStatusRef = useRef<(() => void) | null>(null);
   const [startFailed, setStartFailed] = useState(false);
-  // Rolling buffer for agent-to-agent marker scanning. PTY chunks can split
-  // `[COFFEE-TELL:...]` / `[COFFEE-DONE:...]` across boundaries; the buffer
-  // reassembles chunks so markers match reliably. `markerScanOffsetRef`
-  // tracks how far we've already scanned to avoid re-firing the same
-  // dispatch when a later chunk arrives and re-triggers the scan. See the
-  // scanner in `onData` below for the consume/advance logic.
-  const markerScanBufRef = useRef<string>('');
-  const markerScanOffsetRef = useRef<number>(0);
 
   // ── Stale-frame ghost suppression on tab switch (issue #47) ──────────────
   // Inactive tabs are display:none (CenterPanel). While hidden, xterm's WebGL
@@ -510,14 +506,10 @@ function TierTerminalImpl({
     if (!termRef.current || xtermRef.current) return;
 
     let mounted = true;
+    let ptyEnded = false;
     const unlisteners: (() => void)[] = [];
     const usesAgentStatus = supportsAgentStatus(tool);
-    const activity = createTerminalAgentStatus(
-      status => { if (mounted && usesAgentStatus) dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status }); },
-      () => hasTerminalInteraction(sessionId), tool === 'omp',
-    );
-    submitStatusRef.current = activity.submitted;
-    unlisteners.push(() => { activity.dispose(); submitStatusRef.current = null; });
+
 
     const fontFamily = buildFontFamily(termFont);
     const term = new Terminal({
@@ -555,7 +547,7 @@ function TierTerminalImpl({
       cursorInactiveStyle: 'bar',
       scrollback: 5000,
       // Required to load Unicode11Addon below (xterm 6 gates the unicode
-      // provider API as proposed). No other proposed API is used.
+      // provider API as proposed). Parser handlers also use this public API.
       allowProposedApi: true,
       theme: buildXtermTheme(
         theme,
@@ -623,6 +615,80 @@ function TierTerminalImpl({
       // quiet window as soon as xterm starts draining the write buffer.
       scheduleAgentCursorRestore();
     };
+    let screenStatus: AgentStatus | null = null;
+    let screenStatusAt = 0;
+    let nativeStatus: AgentStatus | null = null;
+    let screenIdleTimer: number | undefined;
+
+    const clearScreenIdleTimer = () => {
+      if (screenIdleTimer === undefined) return;
+      window.clearTimeout(screenIdleTimer);
+      screenIdleTimer = undefined;
+    };
+    const publishScreenStatus = (status: AgentStatus) => {
+      confirmTerminalAgentStatus(sessionId);
+      clearScreenIdleTimer();
+      screenStatus = status;
+      screenStatusAt = Date.now();
+      if (status === 'working') markSentinelWorking(sessionId);
+      dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status });
+    };
+    const publishNativeStatus = (status: AgentStatus) => {
+      confirmTerminalAgentStatus(sessionId);
+      nativeStatus = status;
+      if (status === 'working') markSentinelWorking(sessionId);
+      const screenIsFresh = Date.now() - screenStatusAt < 2_000;
+      const interactionIsLive = hasTerminalInteraction(sessionId);
+      // A rendered selector is stronger than a coarse native idle title, and
+      // a rendered working row should not be cancelled by an OSC repaint that
+      // briefly drops its spinner frame. Native working/waiting may always
+      // promote an idle/unknown screen state. A published interaction remains
+      // authoritative for its entire lifetime, not just for the first two
+      // seconds: permission prompts commonly stay open much longer than that.
+      if (
+        status === 'idle'
+        && (
+          interactionIsLive
+          || (screenIsFresh && (screenStatus === 'wait_input' || screenStatus === 'working'))
+        )
+      ) return;
+      dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status });
+    };
+    const markAgentSubmission = () => {
+      // OMP and OpenCode's adapter report all three states. Enter
+      // may only advance a selector, so a guessed working state could stick.
+      if (!usesAgentStatus || tool === 'omp' || tool === 'opencode' || supportsAdditionalAgentStatus(tool)) return;
+      clearScreenIdleTimer();
+      // The old selector frame may still be painted, but Enter hands control
+      // back to the agent immediately. The next parsed screen will confirm or
+      // correct this optimistic transition.
+      screenStatus = null;
+      screenStatusAt = 0;
+      dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'working' });
+      // Empty Enter / menu confirmation may not start an agent turn and may
+      // produce no new screen frame. Never leave the island stuck in working;
+      // a real turn's spinner/text repaint will cancel or extend this fallback.
+      scheduleScreenIdle(2_500);
+    };
+    const scheduleScreenIdle = (delayMs = 900) => {
+      if (!usesAgentStatus || tool === 'opencode') return;
+      clearScreenIdleTimer();
+      screenIdleTimer = window.setTimeout(() => {
+        screenIdleTimer = undefined;
+        if (!mounted || ptyEnded) return;
+        // Claude/Codex/OMP expose an authoritative active-turn bit in their
+        // OSC title. Rendered text can pause while the model thinks, so mere
+        // screen stability must never end a turn that the CLI still reports
+        // as working/waiting. The title's later idle transition completes it.
+        if (nativeStatus === 'working' || nativeStatus === 'wait_input') return;
+        const current = parseTerminalAgentStatus(readTerminalScreen(term), tool);
+        if (current) { publishScreenStatus(current); return; }
+        publishScreenStatus('idle');
+      }, delayMs);
+    };
+    unlisteners.push(clearScreenIdleTimer);
+    submitStatusRef.current = markAgentSubmission;
+    unlisteners.push(() => { submitStatusRef.current = null; });
 
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -710,9 +776,11 @@ function TierTerminalImpl({
     };
     document.fonts.addEventListener('loadingdone', onFontsSettled);
     document.fonts.addEventListener('loadingerror', onFontsSettled);
+    window.addEventListener(UI_SCALE_CHANGED, onFontsSettled);
     unlisteners.push(() => {
       document.fonts.removeEventListener('loadingdone', onFontsSettled);
       document.fonts.removeEventListener('loadingerror', onFontsSettled);
+      window.removeEventListener(UI_SCALE_CHANGED, onFontsSettled);
     });
     const initTerminal = async () => {
       await fontReady;
@@ -760,61 +828,109 @@ function TierTerminalImpl({
       //
       // Freeze during composition: a TUI redraws on every keystroke and its
       // buffer cursor can hop between the input box and the output region
-      // mid-composition; xterm's own _syncTextArea drags the helper textarea
+      // mid-composition; xterm's updateCompositionElements drags the helper textarea
       // (and the IME candidate window with it) along every hop — the "jumpy
       // candidate" users feel as 乱跳. We pin the textarea at compositionstart
       // and hold it until compositionend, so the candidate stays put for the
       // whole word/phrase. Clicks still re-anchor between compositions.
       if (!__IS_LINUX__ && navigator.userAgent.toLowerCase().includes('win')) {
         const imeTextarea = termRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
-        const screenEl = termRef.current.querySelector('.xterm-screen') as HTMLElement | null;
-        if (imeTextarea && screenEl) {
+        if (imeTextarea) {
           const freeze = () => {
-            // Calculate the correct buffer cursor position at composition start,
-            // rather than trusting the current textarea position (which may have
-            // been dragged to an animation position by xterm's updateCompositionElements).
-            const cellW = term.cols > 0 ? screenEl.clientWidth / term.cols : 8;
-            const cellH = term.rows > 0 ? screenEl.clientHeight / term.rows : 17;
-            const cx = Math.min(term.buffer.active.cursorX, term.cols - 1);
-            const cy = term.buffer.active.cursorY;
-            const left = `${cx * cellW}px`;
-            const top = `${cy * cellH}px`;
-            imeFrozenRef.current = { left, top };
-            // Snap textarea to the correct position immediately
-            imeTextarea.style.left = left;
-            imeTextarea.style.top = top;
+            // Backport of xterm PR #5759 (upstream issue #5734): re-anchor at
+            // compositionstart so the IME uses the latest cursor, not a stale
+            // mid-parse position. But some TUIs park the buffer cursor at the
+            // right edge after a backspace; anchoring there parks the candidate
+            // window too. When the cursor looks parked (right edge), restore the
+            // last non-parked position tracked by onCursorMove below instead.
+            const b = term.buffer.active;
+            // Parked = the real cursor is NOT at the input box: at the right edge
+            // OR outside the bottom rows. Claude Code (Ink) hides the real cursor
+            // and parks it mid-render while the input box lives at the bottom.
+            const parked = b.cursorX >= term.cols - 4 || b.cursorY < term.rows - 3;
+            if (parked && imeLastGoodRef.current) {
+              imeTextarea.style.left = imeLastGoodRef.current.left;
+              imeTextarea.style.top = imeLastGoodRef.current.top;
+            } else {
+              (term as unknown as { _syncTextArea?: () => void })._syncTextArea?.();
+              // Remember this non-parked position as the last good anchor, so a
+              // later parked composition (Claude Code after backspace) can fall
+              // back to it. The onCursorMove tracker alone missed this because
+              // Claude Code never re-moves the cursor to the input box via CSI.
+              imeLastGoodRef.current = {
+                left: imeTextarea.style.left,
+                top: imeTextarea.style.top,
+              };
+            }
+            imeFrozenRef.current = {
+              left: imeTextarea.style.left,
+              top: imeTextarea.style.top,
+            };
           };
           const unfreeze = () => { imeFrozenRef.current = null; };
+          // Clear the leftover textarea value after composition ends, so the next
+          // composition's caret isn't offset by stale pinyin (valueLen in the old
+          // diagnostic was 7). Must run AFTER xterm's _finalizeComposition reads
+          // the value to send the commit — xterm does that read in its own
+          // setTimeout(0) scheduled from its bubble-phase compositionend, so we
+          // schedule ours from a bubble-phase listener registered after xterm's,
+          // making our setTimeout(0) fire second.
+          const clearLeftover = () => {
+            setTimeout(() => {
+              if (!imeFrozenRef.current) {
+                imeTextarea.value = '';
+              }
+            }, 0);
+          };
           imeTextarea.addEventListener('compositionstart', freeze, { capture: true });
           imeTextarea.addEventListener('compositionend', unfreeze, { capture: true });
+          imeTextarea.addEventListener('compositionend', clearLeftover);
           unlisteners.push(() => {
             imeTextarea.removeEventListener('compositionstart', freeze, { capture: true });
             imeTextarea.removeEventListener('compositionend', unfreeze, { capture: true });
+            imeTextarea.removeEventListener('compositionend', clearLeftover);
           });
-          // xterm's internal _syncTextArea runs off its own cursor-move
-          // listener (registered at open, before ours), so writing the frozen
-          // spot back here wins within the same synchronous dispatch — no
-          // intermediate paint, no visible jitter.
-          const cursorMoveListener = term.onCursorMove(() => {
+          // Track the last non-parked textarea position (see freeze()): xterm's
+          // _syncTextArea runs on cursor move before this listener, so the textarea
+          // is already at the cursor here; snapshot it when NOT parked at the edge.
+          const trackCursor = term.onCursorMove(() => {
+            const cb = term.buffer.active;
+            if (cb.cursorX < term.cols - 4 && cb.cursorY >= term.rows - 3) {
+              imeLastGoodRef.current = {
+                left: imeTextarea.style.left,
+                top: imeTextarea.style.top,
+              };
+            }
+          });
+          unlisteners.push(() => trackCursor.dispose());
+          // During composition xterm's _syncTextArea is a no-op (its isComposing
+          // guard), so cursor moves don't drag the textarea. The only thing that
+          // moves it is CompositionHelper.updateCompositionElements, which runs on
+          // onRender and has a setTimeout async tail. Override onRender to hold
+          // the frozen spot against both the sync and async updates.
+          const reapplyFrozen = () => {
             const f = imeFrozenRef.current;
             if (f) {
               imeTextarea.style.left = f.left;
               imeTextarea.style.top = f.top;
             }
-          });
-          unlisteners.push(() => cursorMoveListener.dispose());
-          // CRITICAL: Windows CompositionHelper.updateCompositionElements runs
-          // in onRender (not just onCursorMove), and has a setTimeout async tail
-          // that moves textarea AFTER our synchronous onCursorMove override. We must
-          // also override in onRender to catch both the sync and async updates.
-          const renderListener = term.onRender(() => {
-            const f = imeFrozenRef.current;
-            if (f) {
-              imeTextarea.style.left = f.left;
-              imeTextarea.style.top = f.top;
-            }
-          });
+          };
+          const renderListener = term.onRender(() => reapplyFrozen());
           unlisteners.push(() => renderListener.dispose());
+          // updateCompositionElements also runs SYNCHRONOUSLY on every
+          // compositionupdate (before onRender) and has a setTimeout(0) tail that
+          // runs after onRender — both drag the textarea back to the parked buffer
+          // cursor. Re-apply the frozen spot synchronously (to win the sync race)
+          // and again in a setTimeout(0) scheduled after xterm's tail (bubble
+          // listener registered later) to win the async race.
+          const onCompositionUpdate = () => {
+            reapplyFrozen();
+            setTimeout(reapplyFrozen, 0);
+          };
+          imeTextarea.addEventListener('compositionupdate', onCompositionUpdate);
+          unlisteners.push(() => {
+            imeTextarea.removeEventListener('compositionupdate', onCompositionUpdate);
+          });
         }
       }
 
@@ -957,9 +1073,7 @@ function TierTerminalImpl({
     // attachWebglRenderer). Only spend a context once this terminal is actually
     // on-screen, so tabs opened but never viewed cost zero context. Recently
     // viewed renderers remain attached within the bounded hidden-tab cache.
-    // This laziness is per-TAB, not per-pane: a split tab (FourSplitGrid) dims
-    // its inactive panes with opacity, not display:none, so every pane in an
-    // ACTIVE split tab already has offsetParent set and attaches WebGL
+    // Every visible split pane has offsetParent set and attaches WebGL
     // synchronously below — a 4-pane split alone can spend 4 of the ~16
     // budget the moment it's opened. The shared latch still caps the damage
     // (falls back to DOM once exhausted); this just isn't "lazy" within a
@@ -1017,17 +1131,19 @@ function TierTerminalImpl({
     // covers xterm's own key handling; the macOS IME symbol-passthrough input
     // listener below calls the same function for IME-committed text that
     // xterm drops (issue #107, WKWebView commit-first ordering).
-    const forwardInput = (rawData: string) => {
+    const forwardInput = (rawData: string, editing = false) => {
       const data = stripRightClickMouse(rawData);
       if (!data) return;
       codexSelection.observe(data);
-      if (data.includes('\r') || data.includes('\n')) {
+      forwardTerminalInput(sessionId, data, editing).catch(() => {});
+      if (isTerminalSubmitInput(sessionId, data)) {
         markNotifySoundPromptSubmitted(sessionId, tool);
-        activity.submitted();
+        markAgentSubmission();
       }
-      commands.tierTerminalInput(sessionId, data).catch(() => {});
     };
-    term.onData(forwardInput);
+    term.onData(data => forwardInput(data));
+    const enterEncoder = createTerminalEnterEncoder(term, tool);
+    unlisteners.push(enterEncoder.dispose);
 
     // ── macOS IME symbol commit passthrough (issue #107) ────────────────
     // `ime` (declared above, next to the macOS input listener) mirrors
@@ -1063,6 +1179,13 @@ function TierTerminalImpl({
           return false; // Keep Enter from submitting before the image paste finishes.
         }
         rig.inputStart();
+        const modifiedEnter = !ptyEnded && enterEncoder.encode(e);
+        if (modifiedEnter) {
+          e.preventDefault();
+          e.stopPropagation();
+          forwardInput(modifiedEnter, true);
+          return false;
+        }
         // macOS pair-inserting IMEs synthesize a caret-move right after
         // committing （）/“”/‘’ — bounce it back to the textarea (moving the
         // hidden caret is harmless) instead of letting xterm fire it into the
@@ -1132,8 +1255,9 @@ function TierTerminalImpl({
     //   • alt-screen + mouse mode  → return true → xterm forwards wheel→mouse
     //                                to the app (Claude/Codex capture the mouse
     //                                and do their own scrolling / Ctrl+T).
-    //   • alt-screen + NO mouse    → emit Up/Down arrows so the TUI navigates,
-    //                                then return false to swallow the no-op.
+    //   • Windows agent + NO mouse → forward SGR wheel reports (ConPTY fix).
+    //   • other alt-screen + NO mouse → emit Up/Down arrows so the TUI navigates,
+    //                                   then return false to swallow the no-op.
     term.attachCustomWheelEventHandler((e) => {
       try {
         const inAltScreen = term.buffer.active.type === 'alternate';
@@ -1152,6 +1276,23 @@ function TierTerminalImpl({
           Math.abs(e.deltaY) / 100;                                // pixels
         const lines = Math.max(1, Math.min(Math.round(notches * 3), 9));
 
+        // ConPTY drops these agents' mouse-enable sequences. Their full-screen
+        // views expect SGR wheel reports; arrows recall prompts instead. Keep
+        // the workaround wheel-only so shell selection and other TUIs retain
+        // their existing behavior. xterm's parsed buffer handles split output.
+        if (IS_WINDOWS && (tool === 'pi' || tool === 'omp' || tool === 'claude')) {
+          const screen = term.element?.querySelector('.xterm-screen')?.getBoundingClientRect();
+          if (screen && screen.width > 0 && screen.height > 0) {
+            const col = Math.max(1, Math.min(term.cols, Math.floor((e.clientX - screen.left) * term.cols / screen.width) + 1));
+            const row = Math.max(1, Math.min(term.rows, Math.floor((e.clientY - screen.top) * term.rows / screen.height) + 1));
+            const button = (e.deltaY > 0 ? 65 : 64) + (e.shiftKey ? 4 : 0) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
+            const reports = Math.max(1, Math.min(Math.round(notches), 9));
+            forwardTerminalInput(sessionId, `\x1b[<${button};${col};${row}M`.repeat(reports)).catch(() => {});
+            e.preventDefault();
+            return false;
+          }
+        }
+
         // App-cursor-keys mode (DECCKM) decides SS3 (ESC O) vs CSI (ESC [);
         // most TUIs accept either, but honor it when xterm exposes it.
         const down = e.deltaY > 0;
@@ -1159,7 +1300,7 @@ function TierTerminalImpl({
         const seq = appCursor
           ? (down ? '\x1bOB' : '\x1bOA')
           : (down ? '\x1b[B' : '\x1b[A');
-        commands.tierTerminalInput(sessionId, seq.repeat(lines)).catch(() => {});
+        forwardTerminalInput(sessionId, seq.repeat(lines)).catch(() => {});
         e.preventDefault(); // we own this wheel event — no default browser scroll
         return false; // handled — suppress xterm's no-op scrollback attempt
       } catch {
@@ -1175,6 +1316,13 @@ function TierTerminalImpl({
     // outputScheduler.enqueue instead of term.write directly, so the session
     // must exist first to avoid a dropped-first-chunk race.
     outputScheduler.registerSession(sessionId, term);
+    unlisteners.push(registerTerminalObserver(sessionId, term));
+    const controlsGeneration = getTerminalObserver(sessionId)!.generation;
+    unlisteners.push(() => clearSessionControls(sessionId, controlsGeneration));
+    unlisteners.push(registerTerminalControl(sessionId, term, statusConfirmed => {
+      markNotifySoundPromptSubmitted(sessionId, tool);
+      if (!statusConfirmed) markAgentSubmission();
+    }));
     // Latency rig OUTPUT STOP: term.onRender is xterm's real render-done
     // signal (better than rAF approximation). Always-on (see latency-rig.ts
     // header); near-zero cost — one performance.now() + bounded ring-buffer
@@ -1191,47 +1339,91 @@ function TierTerminalImpl({
     unlisteners.push(() => writeParsedSub.dispose());
 
 
-    // Inspect completed xterm frames, including hidden tabs watched by a phone.
-    // Briefly retain a card across a partial TUI repaint, but never submit from
-    // that retained snapshot: the response path re-reads the live screen.
-    if (supportsTerminalInteraction(tool)) {
-      let clearTimer: ReturnType<typeof setTimeout> | undefined;
-      let previousScreen = "";
-      const scanInteraction = () => {
-        if (!mounted || processExitedRef.current) return;
+    // Each enhanced agent owns its real PTY and TUI. After xterm has applied
+    // ANSI cursor movement and redraws, read the rendered screen once and feed
+    // both the precise interaction card and the Dynamic Island state machine.
+    // No hooks, model calls, or duplicate terminal readers are involved.
+    if (usesAgentStatus || supportsTerminalInteraction(tool)) {
+      let publishedFingerprint: string | null = null;
+      let lastScreenFingerprint = '';
+      let interactionClearTimer: number | undefined;
+      const cancelInteractionClear = () => {
+        if (interactionClearTimer === undefined) return;
+        window.clearTimeout(interactionClearTimer);
+        interactionClearTimer = undefined;
+      };
+      const scanTerminalSemantics = () => {
+        if (!mounted || ptyEnded) return;
         const screen = readTerminalScreen(term);
-        const interaction = parseTerminalInteraction(screen, tool);
-        const fingerprint = screen.slice(-30).map(line => line.text).join('\n');
-        const live = interaction?.fingerprint === interactionSuppressionRef.current ? null : interaction ?? getTerminalInteraction(sessionId);
-        activity.screen(parseTerminalAgentStatus(screen, tool, live), fingerprint !== previousScreen);
-        previousScreen = fingerprint;
-        if (interaction) {
-          clearTimeout(clearTimer);
-          clearTimer = undefined;
-          if (interaction.fingerprint === interactionSuppressionRef.current) return;
+        const rawInteraction = parseTerminalInteraction(screen, tool);
+        const suppressed = interactionSuppressionRef.current;
+        let liveInteraction = rawInteraction;
+
+        if (!rawInteraction) {
           interactionSuppressionRef.current = null;
-          setTerminalInteraction(sessionId, interaction);
-        } else if (clearTimer === undefined) {
-          clearTimer = setTimeout(() => {
-            clearTimer = undefined;
-            if (!mounted || processExitedRef.current) return;
-            if (parseTerminalInteraction(readTerminalScreen(term), tool)) scanInteraction();
-            else {
-              interactionSuppressionRef.current = null;
-              clearTerminalInteraction(sessionId);
-              activity.screen(null, true);
+          if (publishedFingerprint !== null || hasTerminalInteraction(sessionId)) {
+            // TUIs redraw a selector across several terminal writes. A parser
+            // miss can be an intermediate paint, not a dismissed prompt. Keep
+            // the last complete interaction briefly, then verify once more.
+            liveInteraction = getTerminalInteraction(sessionId);
+            if (interactionClearTimer === undefined) {
+              interactionClearTimer = window.setTimeout(() => {
+                interactionClearTimer = undefined;
+                if (!mounted) return;
+                const retry = parseTerminalInteraction(readTerminalScreen(term), tool);
+                if (retry) {
+                  publishedFingerprint = retry.fingerprint;
+                  setTerminalInteraction(sessionId, retry);
+                  return;
+                }
+                publishedFingerprint = null;
+                clearTerminalInteraction(sessionId);
+              }, 100);
             }
-          }, 100);
+          }
+        } else if (suppressed === rawInteraction.fingerprint) {
+          cancelInteractionClear();
+          // The old frame can remain painted after Enter. Suppress the exact
+          // answered prompt until xterm observes it disappear or change; this
+          // prevents the historic infinite re-open loop without blocking a new
+          // question that has a different fingerprint.
+          liveInteraction = null;
+          publishedFingerprint = null;
+          clearTerminalInteraction(sessionId);
+        } else {
+          cancelInteractionClear();
+          if (suppressed) interactionSuppressionRef.current = null;
+          const publishedInteraction = getTerminalInteraction(sessionId);
+          if (
+            publishedFingerprint !== rawInteraction.fingerprint
+            || !publishedInteraction
+            || publishedInteraction.focusedPosition !== rawInteraction.focusedPosition
+          ) {
+            publishedFingerprint = rawInteraction.fingerprint;
+            setTerminalInteraction(sessionId, rawInteraction);
+          }
+        }
+
+        const semanticStatus = parseTerminalAgentStatus(screen, tool, liveInteraction);
+        const nextScreenFingerprint = screen.slice(-30).map(line => line.text).join('\n');
+        const screenChanged = nextScreenFingerprint !== lastScreenFingerprint;
+        lastScreenFingerprint = nextScreenFingerprint;
+
+        if (semanticStatus) {
+          publishScreenStatus(semanticStatus);
+        } else if (screenChanged && (screenStatus !== null || !supportsAdditionalAgentStatus(tool))) {
+          // Only settle a previously observed signal after its chrome has
+          // disappeared. The delayed scan rechecks the live screen; silence
+          // while a working indicator remains is never completion evidence.
+          scheduleScreenIdle();
         }
       };
-      const interactionSub = term.onWriteParsed(scanInteraction);
-      unlisteners.push(() => {
-        interactionSub.dispose();
-        clearTimeout(clearTimer);
-        interactionSuppressionRef.current = null;
-        clearTerminalInteraction(sessionId);
-      });
+      const parsedListener = term.onWriteParsed(scanTerminalSemantics);
+      unlisteners.push(() => parsedListener.dispose());
+      unlisteners.push(cancelInteractionClear);
+      unlisteners.push(() => clearTerminalInteraction(sessionId));
     }
+
     let nativeActionTimer: ReturnType<typeof setTimeout> | undefined;
     unlisteners.push(() => clearTimeout(nativeActionTimer));
 
@@ -1274,28 +1466,34 @@ function TierTerminalImpl({
     const setGrokStatus = (status: AgentStatus) => {
       if (status === grokStatus) return;
       grokStatus = status;
-      activity.native(status);
+      publishNativeStatus(status);
     };
     term.onTitleChange((title) => {
+      if (!mounted || ptyEnded) return;
       let displayTitle = title;
       if (tool === 'claude') {
         const parsed = parseClaudeTerminalTitle(title);
         displayTitle = parsed.displayTitle;
-        activity.native(parsed.status);
+        publishNativeStatus(parsed.status);
       } else if (tool === 'codex') {
         const parsed = parseCodexTerminalTitle(title);
         displayTitle = parsed.displayTitle;
-        activity.native(parsed.status);
-        if (parsed.status === 'wait_input') {
-          requestTerminalForNativeAction('native:codex:action-required');
-        } else {
-          clearTimeout(nativeActionTimer);
-          nativeActionTimer = undefined;
+        publishNativeStatus(parsed.status);
+        if (parsed.status === 'wait_input') requestTerminalForNativeAction('native:codex:action-required');
+      } else if (tool === 'opencode') {
+        const parsed = parseOpenCodeTerminalTitle(title);
+        if (parsed) {
+          displayTitle = parsed.displayTitle;
+          if (parsed.status) publishNativeStatus(parsed.status);
+          else {
+            nativeStatus = null;
+            dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: undefined });
+          }
         }
       } else if (tool === 'omp') {
         const parsed = parseOmpTerminalTitle(title);
         displayTitle = parsed.displayTitle;
-        activity.native(parsed.status);
+        publishNativeStatus(parsed.status);
       } else if (tool === 'grok') {
         const parsed = parseGrokTerminalTitle(title);
         displayTitle = parsed.displayTitle;
@@ -1316,6 +1514,17 @@ function TierTerminalImpl({
           if (parsed.status === 'wait_input') {
             requestTerminalForNativeAction('native:grok:action-required');
           }
+        }
+      } else {
+        const parsed = parseAdditionalAgentTitle(title, tool);
+        if (parsed) {
+          displayTitle = parsed.displayTitle;
+          publishNativeStatus(parsed.status);
+        } else if (supportsAdditionalAgentStatus(tool) && nativeStatus !== null) {
+          // Qwen removes its prefix on idle; unknown/static titles alone do
+          // not establish state. Recheck the screen after a known mark leaves.
+          nativeStatus = null;
+          scheduleScreenIdle();
         }
       }
       if (displayTitle !== lastTabTitle) {
@@ -1375,110 +1584,25 @@ function TierTerminalImpl({
             altScreenRef.current = false;
           }
 
-          // ── Sentinel Protocol scanner ───────────────────────────
-          // Sentinel sits on TOP of MCP. Forward dispatch (pane A → pane B)
-          // is handled by the MCP `send_to_pane` tool (see mcp_server.rs)
-          // which gives the dispatching agent structured discovery +
-          // failure responses. What this scanner handles is the BACKWARD
-          // completion receipt:
-          //
-          //   [COFFEE-DONE:paneN->paneM]
-          //     pane N has finished a task and wants to notify pane M.
-          //     Gated by sentinelEnabled on BOTH panes (opt-in): with
-          //     sentinel on, the frontend lights a green dot on pane N's
-          //     badge AND injects "[From pane N] Task complete." + Enter
-          //     into pane M's PTY input, which wakes pane M's LLM turn
-          //     loop without polling. With sentinel off, the marker sits
-          //     inert in pane N's scrollback and the user has to eyeball
-          //     completion instead.
-          //
-          // We STRIP ANSI escape sequences before scanning. Claude Code's
-          // TUI wraps response text in CSI sequences (color, bold, cursor
-          // positioning, erase-line). Those bytes sit between marker
-          // literals and around the text, breaking any regex that treats
-          // the raw stream as plain text. Stripping CSI/OSC/single-char
-          // escapes normalises the buffer so the regex sees what the
-          // user sees.
-          //
-          // Buffer + offset:
-          //   - PTY onData is chunky (256B–4KB); markers can split across
-          //     chunks, so we accumulate into a buffer before scanning.
-          //   - 8 KB bound keeps the buffer from growing unbounded.
-          //   - `markerScanOffsetRef` advances past processed matches so
-          //     the same DONE never fires twice when a later chunk
-          //     re-triggers the scan.
-
-          // Strip CSI/OSC/single-char ANSI escapes from the chunk before
-          // appending. xterm still gets the raw `data` with escapes
-          // intact for rendering; only the scan buffer is normalised.
-          const cleanData = data
-            .replace(/\x1b\[[0-9;?]*[@-~]/g, '') // eslint-disable-line no-control-regex -- CSI contains ESC.
-            .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // eslint-disable-line no-control-regex -- OSC contains ESC/BEL.
-            .replace(/\x1b[@-Z\\-_]/g, ''); // eslint-disable-line no-control-regex -- Single-character ESC sequence.
-          markerScanBufRef.current += cleanData;
-
-          const MAX_BUF = 8192;
-          if (markerScanBufRef.current.length > MAX_BUF) {
-            const toTrim = markerScanBufRef.current.length - MAX_BUF;
-            markerScanBufRef.current = markerScanBufRef.current.slice(toTrim);
-            markerScanOffsetRef.current = Math.max(
-              0,
-              markerScanOffsetRef.current - toTrim
-            );
-          }
-
-          const unscanned = markerScanBufRef.current.slice(
-            markerScanOffsetRef.current
-          );
-          if (unscanned.includes('[COFFEE-DONE:pane')) {
-            const paneIdMatch = sessionId.match(/^(.+)::pane-(\d+)$/);
-            if (paneIdMatch) {
-              const tabId = paneIdMatch[1];
-              const tab = appStateRef.current.terminals.find(t => t.id === tabId);
-              const panes = tab?.multiAgent?.panes ?? [];
-              let advancedTo = 0;
-
-              // DONE: backward receipt, sentinel-gated on the emitter side.
-              const doneRegex = /\[COFFEE-DONE:pane(\d+)->pane(\d+)\]/g;
-              let doneM: RegExpExecArray | null;
-              while ((doneM = doneRegex.exec(unscanned)) !== null) {
-                const emitter = parseInt(doneM[1], 10);
-                const target = parseInt(doneM[2], 10);
-                const emitterPane = panes.find(p => p.paneIdx === emitter);
-                if (emitterPane?.sentinelEnabled) {
-                  dispatch({ type: 'SET_PANE_COMPLETION', tabId, paneIdx: emitter, ts: Date.now() });
-                  const targetPane = panes.find(p => p.paneIdx === target);
-                  if (targetPane?.sentinelEnabled && targetPane.tool !== null && target !== emitter) {
-                    const targetId = `${tabId}::pane-${target}`;
-                    const notify = `[From pane ${emitter}] Task complete.`;
-                    // `paste()` (see registerTabActions below) handles the
-                    // trailing CR — it schedules `\r` 30ms after the paste
-                    // so the TUI treats it as Enter rather than part of
-                    // the bracketed-paste buffer. Don't re-send the CR.
-                    getTabActions(targetId)?.paste(notify);
-                  }
-                }
-                advancedTo = Math.max(advancedTo, doneM.index + doneM[0].length);
-              }
-
-              if (advancedTo > 0) {
-                markerScanOffsetRef.current += advancedTo;
-              }
-            }
-          }
         },
         onStatus: (running) => {
           if (!mounted || running) return;
+          clearSessionControls(sessionId, controlsGeneration);
+          markSentinelExit(sessionId);
+          ptyEnded = true;
+          setTerminalControlReady(sessionId, false);
           sizeSync.markPtyStopped();
           processExitedRef.current = true;
           clearTerminalInteraction(sessionId);
-          activity.stopped();
+          clearScreenIdleTimer();
+          nativeStatus = null;
           setProcessExited(true);
           if (usesAgentStatus) {
-            dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
+            dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: tool === 'opencode' ? undefined : 'idle' });
           }
         },
         onExit: () => {
+          clearSessionControls(sessionId, controlsGeneration);
           // Authoritative "process is actually dead" signal from the Rust
           // child-watcher thread. Critical for the lockup scenario where an
           // intermediate cmd.exe keeps the PTY slave open so reader never
@@ -1489,18 +1613,25 @@ function TierTerminalImpl({
           // upstream tool's own output). The CLI's own exit text, if any,
           // already speaks for itself.
           if (!mounted) return;
+          markSentinelExit(sessionId);
+          ptyEnded = true;
+          setTerminalControlReady(sessionId, false);
           sizeSync.markPtyStopped();
           processExitedRef.current = true;
           clearTerminalInteraction(sessionId);
-          activity.stopped();
+          clearScreenIdleTimer();
+          nativeStatus = null;
           setProcessExited(true);
           if (usesAgentStatus) {
-            dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: 'idle' });
+            dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: tool === 'opencode' ? undefined : 'idle' });
           }
         },
         onCwd: (cwd) => {
           if (!mounted) return;
           dispatch({ type: 'SET_TERMINAL_CWD', id: sessionId, path: cwd });
+        },
+        onToken: (token) => {
+          if (mounted && !ptyEnded) dispatch({ type: 'SET_SESSION_TOKEN', id: sessionId, token });
         },
       });
       if (mounted) unlisteners.push(unsubEvents); else { unsubEvents(); return; }
@@ -1518,13 +1649,20 @@ function TierTerminalImpl({
       }
 
         try {
-          await commands.tierTerminalStart(sessionId, tool, initialGrid.size.cols, initialGrid.size.rows, theme, lang, toolData, folderPath ?? undefined, resumeToken, appStateRef.current.defaultShell);
+          const controls = readLaunchControls(tool);
+          if (!mounted) return;
+          await commands.tierTerminalStart(sessionId, tool, initialGrid.size.cols, initialGrid.size.rows, theme, lang, toolData, folderPath ?? undefined, resumeToken, appStateRef.current.defaultShell, strictCwd);
+          if (mounted && !ptyEnded) {
+            setTerminalControlReady(sessionId, true);
+            void controls.then(value => { if (mounted && !ptyEnded) setSessionControls(sessionId, controlsGeneration, value); });
+          }
           sizeSync.markPtyStarted();
         } catch (err) {
           // Resume / launch validation failures (missing cwd, bad token
           // format, binary not on PATH) land here. The upstream CLI's own
           // startup errors come through the PTY stream, not this path.
           console.error('[TierTerminal] tierTerminalStart failed', err);
+          setTerminalControlReady(sessionId, false, String(err));
           if (mounted) {
             term.write(`\r\n\x1b[31m${String(err)}\x1b[0m\r\n`);
           }
@@ -1552,7 +1690,7 @@ function TierTerminalImpl({
             // A queued intersecting entry may predate a rapid switch away.
             // Never recreate a renderer for a tab that is already hidden.
             const visible = termRef.current !== null && termRef.current.offsetParent !== null && entries.some((e) => e.isIntersecting);
-            const backendActive = visible || projectionActiveRef.current;
+            const backendActive = visible || foregroundActiveRef.current;
             commands.setSessionActive(sessionId, backendActive).catch(() => {});
             outputScheduler.setActive(sessionId, visible);
             if (visible) {
@@ -1629,6 +1767,7 @@ function TierTerminalImpl({
 
     return () => {
       mounted = false;
+      setTerminalControlReady(sessionId, false);
       unregisterFocus();
       ro.disconnect();
       if (grokPermissionReleaseTimerRef.current !== undefined) {
@@ -1773,31 +1912,10 @@ function TierTerminalImpl({
     const unregister = registerTabActions(sessionId, {
       respondToInteraction: responder.respond,
       paste: (text: string): boolean => {
-        const term = xtermRef.current;
-        // If the xterm isn't mounted yet (tab still loading, PTY spawn in
-        // flight, etc.) report failure so the caller can preserve the
-        // source draft instead of silently losing it.
-        if (!term) return false;
-        // term.paste() goes through onData, which our handler forwards to the
-        // PTY with bracketed-paste framing when the TUI has enabled it.
-        // Newlines and IME composition round-trip correctly. Follow with CR
-        // to submit.
-        //
-        // Defer the CR so it arrives as a separate PTY read. Claude Code's
-        // Ink input handler enters a paste-end digestion state for ~100ms
-        // after the bracketed-paste close (`\x1b[201~`) — any CR that lands
-        // inside that window is absorbed as part of the paste buffer, so the
-        // text stays in the prompt without submitting. The original 30ms
-        // worked on older Claude versions; modern builds need ≥120ms (live
-        // measurement on 2026-04-26 was 152–164ms across two pane types).
-        // 150ms with the natural ~10ms timer slack puts us comfortably past
-        // the window. Windows ConPTY coalesces PTY writes differently but
-        // the delay is harmless there.
-        term.paste(normalizePasteNewlines(text));
-        setTimeout(() => {
-          markNotifySoundPromptSubmitted(sessionId, tool);
-          commands.tierTerminalInput(sessionId, '\r').catch(() => {});
-        }, 150);
+        if (!terminalControlStatus(sessionId).ready) return false;
+        submitTerminalPrompt(sessionId, text).catch(error => {
+          xtermRef.current?.writeln(`\r\n\x1b[31m${String(error)}\x1b[0m`);
+        });
         return true;
       },
       setPaused: async (paused: boolean): Promise<boolean> => {
@@ -1957,7 +2075,7 @@ function TierTerminalImpl({
       setCanvasHidden(true);
       let revealed = false;
       let renderSub: { dispose: () => void } | null = null;
-      let f1 = 0, fallback = 0;
+      let f1 = 0;
       const reveal = () => {
         if (revealed) return;
         revealed = true;
@@ -1973,7 +2091,7 @@ function TierTerminalImpl({
       });
       // Same safety-net rationale as the activation effect: never strand the
       // canvas masked if onRender doesn't fire (idle terminal, no dirty rows).
-      fallback = setTimeout(reveal, 180);
+      const fallback = setTimeout(reveal, 180);
     });
     return unsubscribe;
   }, []);
@@ -2116,14 +2234,12 @@ function TierTerminalImpl({
             if (imeFrozenRef.current) return;
             const term = xtermRef.current;
             const textarea = termRef.current?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
-            const screenEl = termRef.current?.querySelector('.xterm-screen') as HTMLElement | null;
-            if (term && textarea && screenEl) {
-              const cellW = term.cols > 0 ? screenEl.clientWidth / term.cols : 8;
-              const cellH = term.rows > 0 ? screenEl.clientHeight / term.rows : 17;
-              const cx = Math.min(term.buffer.active.cursorX, term.cols - 1);
-              const cy = term.buffer.active.cursorY;
-              textarea.style.left = `${cx * cellW}px`;
-              textarea.style.top = `${cy * cellH}px`;
+            if (term && textarea) {
+              // Re-anchor with xterm's own accurate _syncTextArea (the same
+              // backport as the compositionstart freeze above) instead of the
+              // old clientWidth/cols approximation that drifted right as
+              // cursorX grew.
+              (term as unknown as { _syncTextArea?: () => void })._syncTextArea?.();
             }
           }
         }}
@@ -2318,7 +2434,7 @@ function TierTerminalImpl({
 // attribution. Using no-arg memo (shallow-compares ALL props) instead of the
 // original custom comparator, which was incomplete — it only checked 7 props
 // and missed resumeToken/hasBg/bgUrl/bgType/termColorScheme/termFont/
-// sentinelEnabled, so those prop changes would have wrongly skipped a
+// isVisible, so those prop changes would have wrongly skipped a
 // re-render. If the launch regression recurs in dev (StrictMode double-invoke),
 // revert this; Phase 1-3 do not depend on memo.
 export const TierTerminal = memo(TierTerminalImpl);
