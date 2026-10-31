@@ -1,4 +1,4 @@
-//! One local app-server connection per Coffee conversation tab.
+//! One local app-server connection per Sinos conversation tab.
 use serde_json::{json, Value};
 use std::{collections::HashMap, io::{BufRead, BufReader, Write}, process::{Child, ChildStdin, Command, Stdio}, sync::{Arc, Mutex, mpsc}, time::Duration};
 use tauri::{Emitter, Manager, State};
@@ -179,7 +179,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
         if map.get(&watcher_id).is_some_and(|live| Arc::ptr_eq(live, &s)) { map.remove(&watcher_id); }
     });
     let result = (|| {
-        session.request("initialize", json!({"clientInfo":{"name":"coffee_cli","title":"Coffee CLI","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":false}}))?;
+        session.request("initialize", json!({"clientInfo":{"name":"coffee_cli","title":"Sinos CLI","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":false}}))?;
         session.write(&json!({"method":"initialized","params":{}}))?;
         let models = session.request("model/list", json!({}))?;
         let mut thread = if let Some(token) = resume_token {

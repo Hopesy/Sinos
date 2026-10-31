@@ -326,7 +326,7 @@ pub fn parent_launch(app: &AppHandle, id: &str, native_id: &str, cwd: &Path) -> 
 }
 
 fn coordinator_prompt(agents: &[String]) -> String {
-    format!("Coffee multi-agent orchestration is enabled. Available assistants: {}. You are the coordinator: decide for yourself whether delegation helps the user's task, which assistant to use, and how to divide the work. Handle simple tasks yourself. The user does not need to choose an executor or explicitly request delegation. Use coffee-team worker_start for useful, bounded tasks within the authorized project; each worker opens a visible child tab. Give clear goals and file ownership to avoid overlapping edits. Workers must not delegate further. Desktop worker replies are collected automatically and delivered when you are idle; use worker_wait/worker_list while active to collect replies and questions, and answer using worker_reply. Reuse a stable operationId when retrying worker_start. Idle output is not task completion. Independently check worker results and summarize the overall outcome for the user; a worker report alone is not verification. Do not bypass user permission prompts or expand the user's authorized scope. On uncertain start/send, inspect worker_list rather than retrying automatically. Keep completed tabs available for the user. worker_list also returns the currently allowed assistants.", agents.join(", "))
+    format!("Sinos multi-agent orchestration is enabled. Available assistants: {}. You are the coordinator: decide for yourself whether delegation helps the user's task, which assistant to use, and how to divide the work. Handle simple tasks yourself. The user does not need to choose an executor or explicitly request delegation. Use coffee-team worker_start for useful, bounded tasks within the authorized project; each worker opens a visible child tab. Give clear goals and file ownership to avoid overlapping edits. Workers must not delegate further. Desktop worker replies are collected automatically and delivered when you are idle; use worker_wait/worker_list while active to collect replies and questions, and answer using worker_reply. Reuse a stable operationId when retrying worker_start. Idle output is not task completion. Independently check worker results and summarize the overall outcome for the user; a worker report alone is not verification. Do not bypass user permission prompts or expand the user's authorized scope. On uncertain start/send, inspect worker_list rather than retrying automatically. Keep completed tabs available for the user. worker_list also returns the currently allowed assistants.", agents.join(", "))
 }
 
 fn parent(state: &State, token: &str) -> Result<Parent, String> {
@@ -506,10 +506,10 @@ fn request_gui(token: &str, name: &str, arguments: Value, child_id: Option<&str>
         let worker = if name == "team_worker_start" { Some(text(&arguments, "tool", 32)?) } else { None };
         if worker.as_ref().is_some_and(|tool| !state.snapshot.agents.contains(tool)) { return Err("This worker is disabled in Agent configuration".into()); }
         let parent_id = &owner.id;
-        let app = state.app.clone().ok_or("Coffee window unavailable")?;
+        let app = state.app.clone().ok_or("Sinos window unavailable")?;
         state.pending.insert(id.clone(), Pending { parent: parent_id.into(), token: token.into(), worker, session_id: child_id.map(str::to_owned), deadline: Instant::now() + Duration::from_secs(80), sender });
         if app.emit_to("main", "orchestration-request", json!({"requestId":id,"name":name,"arguments":arguments,"parentId":parent_id,"sessionId":child_id,"background":true})).is_err() {
-            state.pending.remove(&id); return Err("Coffee window unavailable".into());
+            state.pending.remove(&id); return Err("Sinos window unavailable".into());
         }
     }
     let result = receiver.recv_timeout(Duration::from_secs(80));
@@ -529,7 +529,7 @@ pub fn log_args(args: &[String]) -> Vec<String> {
 }
 fn worker_instructions(task: &Task, prompt: &str, command: &str) -> String {
     let shell_hint = if cfg!(windows) { "These examples use PowerShell. From Bash, invoke powershell.exe -NoProfile -Command with the entire command as its argument." } else { "These examples use a POSIX shell." };
-    format!("You are a worker assigned from the parent session inside Coffee CLI. Task ID: {}. Work only on the task below and in the current project. Other workers may be editing it: coordinate file ownership and preserve their changes. Do not launch additional workers or change permissions.\n\n{shell_hint}\nFinish with a concise final response describing changes, verification and remaining work. Desktop-session replies are collected automatically. For terminal sessions, or to explicitly report, use this local command exactly once:\n{command} complete --outcome succeeded --summary \"What changed, verification and remaining work\"\nUse --outcome failed when the task could not be completed. A terminal final message without a structured completion event needs the report command. For a blocking question, run:\n{command} ask --question \"Your question\"\nIf it returns pending, resume the same question with:\n{command} answer --question-id QUESTION_ID\nAfter reporting, stop and leave the tab open. If delivery is uncertain, do not resend automatically.\n\nTASK\n{prompt}", task.id)
+    format!("You are a worker assigned from the parent session inside Sinos CLI. Task ID: {}. Work only on the task below and in the current project. Other workers may be editing it: coordinate file ownership and preserve their changes. Do not launch additional workers or change permissions.\n\n{shell_hint}\nFinish with a concise final response describing changes, verification and remaining work. Desktop-session replies are collected automatically. For terminal sessions, or to explicitly report, use this local command exactly once:\n{command} complete --outcome succeeded --summary \"What changed, verification and remaining work\"\nUse --outcome failed when the task could not be completed. A terminal final message without a structured completion event needs the report command. For a blocking question, run:\n{command} ask --question \"Your question\"\nIf it returns pending, resume the same question with:\n{command} answer --question-id QUESTION_ID\nAfter reporting, stop and leave the tab open. If delivery is uncertain, do not resend automatically.\n\nTASK\n{prompt}", task.id)
 }
 
 fn start_worker(token: &str, args: &Value) -> Result<Value, String> {
@@ -733,7 +733,7 @@ fn definitions(agents: &Value) -> Value {
 fn mcp_response(port: u16, token: &str, request: &Value) -> Value {
     let id = request["id"].clone();
     let result = match request["method"].as_str() {
-        Some("initialize") => json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"Coffee Team","version":env!("CARGO_PKG_VERSION")}}),
+        Some("initialize") => json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"Sinos Team","version":env!("CARGO_PKG_VERSION")}}),
         Some("ping") => json!({}), Some("tools/list") => match client(port, token, "worker_capabilities", json!({}), false) {
             Ok(value) => definitions(&value["agents"]),
             Err(error) => return json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error}}),

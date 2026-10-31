@@ -392,7 +392,7 @@ pub async fn install_browser_control() -> Result<ControlStatus, String> {
     if !verified_runtime(&path) {
         plain_path(&path)?;
         let (name, expected) = browser_asset()?;
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).user_agent("Coffee-CLI").build().map_err(|_| "control_network")?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).user_agent("Sinos-CLI").build().map_err(|_| "control_network")?;
         let mut response = client.get(format!("https://github.com/vercel-labs/agent-browser/releases/download/v{BROWSER_VERSION}/{name}")).send().await.map_err(|_| "control_network")?.error_for_status().map_err(|_| "control_network")?;
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| "control_network")? {

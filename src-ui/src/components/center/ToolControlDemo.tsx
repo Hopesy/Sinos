@@ -56,7 +56,7 @@ export function ToolControlDemo({ kind }: { kind: 'computer' | 'browser' | 'orch
     </div>
     <div className="control-demo-stage" role="img" aria-label={`${prompt} · ${observe} · ${act} · ${done}`}>
       <div className="control-demo-chat" aria-hidden="true">
-        <div className="control-demo-bar"><span className="control-demo-dots"><i /><i /><i /></span><span>{team ? 'Claude Code' : 'Coffee CLI'}</span></div>
+        <div className="control-demo-bar"><span className="control-demo-dots"><i /><i /><i /></span><span>{team ? 'Claude Code' : 'Sinos CLI'}</span></div>
         <div className="control-demo-conversation">
           <div className="control-demo-bubble demo-motion">{prompt}</div>
           <div className="control-demo-steps">

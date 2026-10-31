@@ -73,7 +73,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   });
   const composer = page => page.children.find(child => child?.type === 'gambit');
   let props = composer(render()).props;
-  assert.equal(props.workspaceName, 'Coffee Agent');
+  assert.equal(props.workspaceName, 'Sinos Agent');
   assert.equal(await props.onSend('  inspect terminal 2  '), true);
   assert.deepEqual(sent, ['inspect terminal 2']);
   rejectSend = true;
@@ -492,7 +492,7 @@ assert.equal(manualLaunches[0].type, 'LAUNCH_TERMINAL_TOOL');
 assert.equal(manualLaunches[0].id, 'launchpad');
 assert.equal(manualLaunches[0].tool, 'claude');
 assert.equal(manualLaunches[0].cwd, 'E:\\tmp');
-console.log('OK: actual tool-card folder selection uses the same launch action as Coffee Agent');
+console.log('OK: actual tool-card folder selection uses the same launch action as Sinos Agent');
 
 // Exercise the actual history-card click: a directoryless Coffee conversation
 // must open its Agent page, while native history still resumes a real CLI tab.
@@ -550,7 +550,7 @@ console.log('OK: actual tool-card folder selection uses the same launch action a
   await click({ id: 'claude-history', tool: 'claude', cwd: 'E:\\tmp', session_token: 'native-resume' });
   assert.deepEqual(actions.slice(1).map(action => action.type), ['ADD_TERMINAL']);
   const filtered = evaluate(filter, {
-    useMemo: callback => callback(), availableSessions: [coffee], debouncedQuery: 'Coffee Agent', matchesQuery,
+    useMemo: callback => callback(), availableSessions: [coffee], debouncedQuery: 'Sinos Agent', matchesQuery,
   });
   assert.equal(filtered.length, 1);
   console.log('OK: mixed timestamps show Coffee history on the first page, reopen the Agent, and preserve native CLI resume');

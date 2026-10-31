@@ -108,7 +108,7 @@ test('message settings drag left across terminal tabs without changing the focus
   assert.equal(f.listeners.size, 0); assert.equal(f.dragFrames.at(-1), null);
 });
 
-test('Coffee Agent drags right through terminals and message settings', () => {
+test('Sinos Agent drags right through terminals and message settings', () => {
   const f = fixture(['one', 'agent:agent', 'two', 'agent:config']);
   f.down('agent:agent'); f.move(500);
   assert.deepEqual(native(f.api.getTabDragStyle('two', 2)), { transform: 'translateX(-100px)' });

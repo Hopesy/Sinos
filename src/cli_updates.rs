@@ -227,7 +227,7 @@ fn run(update: &Plan, seconds: u64) -> Result<String, String> {
 }
 
 async fn fetch_latest(source: &Source) -> Option<String> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("Coffee-CLI").build().ok()?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(12)).user_agent("Sinos-CLI").build().ok()?;
     let url = match source {
         Source::Npm(package) => format!("https://registry.npmjs.org/{package}/latest"),
         Source::Brew(token, cask) => format!("https://formulae.brew.sh/api/{}/{token}.json", if *cask { "cask" } else { "formula" }),

@@ -110,7 +110,7 @@ async fn read_pr(base: &GitHubRepo, head: &GitHubRepo, branch: &str, local_head:
     }
     cache.retain(|_, (at, _, _)| at.elapsed() < Duration::from_secs(1200));
     let query = async {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).user_agent("Coffee-CLI").build().ok()?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).user_agent("Sinos-CLI").build().ok()?;
         let get = |url: reqwest::Url| {
             let request = client.get(url).header("Accept", "application/vnd.github+json");
             if let Some(token) = &token { request.bearer_auth(token) } else { request }

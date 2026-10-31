@@ -122,7 +122,7 @@ fn inventory(tool: &str, root: &Path, directories: &[PathBuf]) -> Result<Invento
 }
 
 fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder().timeout(Duration::from_secs(25)).user_agent("Coffee-CLI").redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "skills_network".into())
+    reqwest::Client::builder().timeout(Duration::from_secs(25)).user_agent("Sinos-CLI").redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "skills_network".into())
 }
 async fn get(url: &str, limit: usize) -> Result<Vec<u8>, String> {
     let mut response = client()?.get(url).send().await.map_err(|_| "skills_network")?;

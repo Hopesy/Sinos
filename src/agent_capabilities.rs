@@ -1,4 +1,4 @@
-//! Official-source discovery and reviewed, one-shot installs executed by a visible Coffee terminal.
+//! Official-source discovery and reviewed, one-shot installs executed by a visible Sinos terminal.
 //! A successful independent MCP probe never means the user's existing CLI session has loaded it.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ const REGISTRY: &str = "https://registry.modelcontextprotocol.io/v0.1";
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().timeout(Duration::from_secs(25)).redirect(reqwest::redirect::Policy::none())
-        .user_agent("Coffee-CLI-capabilities").build().map_err(|_| "HTTP client unavailable".into())
+        .user_agent("Sinos-CLI-capabilities").build().map_err(|_| "HTTP client unavailable".into())
 }
 
 async fn response_bytes(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
@@ -286,7 +286,7 @@ fn configuration_text(tool:&str, original:Option<&str>,name:&str,server:&Value)-
 
 pub async fn prepare_plan(root:&Path,identity:&str,tool:&str,cwd:&str,kind:&str,source:&str,name:&str)->Result<Value,String> {
     if !matches!(tool,"claude"|"codex"){return Err("Capability installation currently supports Claude Code and Codex".into());}
-    if !Path::new(cwd).is_absolute(){return Err("Specify an absolute project directory; the Coffee process directory will not be selected implicitly".into());}
+    if !Path::new(cwd).is_absolute(){return Err("Specify an absolute project directory; the Sinos process directory will not be selected implicitly".into());}
     let cwd=dunce::canonicalize(cwd).map_err(|_|"Choose an existing project directory")?;
     if !cwd.is_dir(){return Err("Project path must be a directory".into());}
     let evidence=details(kind,source,name).await?;
@@ -432,7 +432,7 @@ fn probe_result(initialize:Value,list:Value)->Result<Value,String> {
     Ok(json!({"protocolVerified":true,"protocolVersion":version,"serverName":text(&initialize["serverInfo"],"name"),"tools":tools.iter().take(100).map(|tool|text(tool,"name")).collect::<Vec<_>>(),"toolsTruncated":tools.len()>100 || list["nextCursor"].as_str().is_some(),"targetCliLoaded":Value::Null}))
 }
 
-fn initialize_request()->Value{json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"Coffee CLI verification","version":env!("CARGO_PKG_VERSION")}}})}
+fn initialize_request()->Value{json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"Sinos CLI verification","version":env!("CARGO_PKG_VERSION")}}})}
 
 async fn http_rpc(client:&reqwest::Client,spec:&Value,body:&Value,session:&mut Option<String>,notification:bool,version:Option<&str>)->Result<Value,String> {
     let mut request=client.post(spec["url"].as_str().ok_or("MCP endpoint missing")?).header("Accept","application/json, text/event-stream");
@@ -557,7 +557,7 @@ async fn apply_approved_plan(root:&Path,id:&str)->Result<Value,String> {
     fs::create_dir_all(&backup).map_err(|_|"Backup directory unavailable")?;
     for (index,path) in plan.target_paths.iter().enumerate(){if path.exists(){copy_target(path,&backup.join(index.to_string()))?;}}
     plan.state="running".into();save_plan(root,&plan)?;
-    println!("Coffee CLI: installing {} for {} in {} (project scope)",plan.name,plan.tool,plan.cwd.display());
+    println!("Sinos CLI: installing {} for {} in {} (project scope)",plan.name,plan.tool,plan.cwd.display());
     let mut actual_exit=None;
     let mut installed=plan.fingerprints.clone();
     let operation=async {
@@ -575,10 +575,10 @@ async fn apply_approved_plan(root:&Path,id:&str)->Result<Value,String> {
         }
         if !installed_configuration(&plan)?{return Err("Installed capability does not match the selected plan".to_string());}
         if plan.kind=="mcp" {
-            println!("Coffee CLI: verifying MCP initialize and tools/list; no tool is being called.");
+            println!("Sinos CLI: verifying MCP initialize and tools/list; no tool is being called.");
             if plan.server["type"]=="http" {probe_http(&plan.server).await} else {probe_stdio(&plan.server,&plan.cwd)}
         } else if plan.tool=="codex" {
-            println!("Coffee CLI: verifying the native Codex Skills loader without making a model request.");
+            println!("Sinos CLI: verifying the native Codex Skills loader without making a model request.");
             codex_skill_loader(&plan.cwd,&plan.name,&plan.target_paths[0].join("SKILL.md"))
         } else {Ok(json!({"nativeLoaderVerified":false,"protocolVerified":false,"targetCliLoaded":Value::Null,"evidence":"Selected SKILL.md exists with valid matching metadata; Claude /reload-skills may be required. Runtime loading is unknown."}))}
     }.await;
@@ -595,7 +595,7 @@ async fn apply_approved_plan(root:&Path,id:&str)->Result<Value,String> {
     receipt["observedAtUnixMs"]=json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
     receipt["verificationScope"]=json!("last-visible-terminal-run; existing user CLI sessions and current connectivity are not verified");
     plan.receipt=Some(receipt.clone());save_plan(root,&plan)?;
-    println!("Coffee CLI: {}. Existing CLI tabs may need reload/reconnect and project trust.",plan.state);
+    println!("Sinos CLI: {}. Existing CLI tabs may need reload/reconnect and project trust.",plan.state);
     Ok(receipt)
 }
 

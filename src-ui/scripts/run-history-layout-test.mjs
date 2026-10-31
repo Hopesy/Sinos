@@ -44,7 +44,7 @@ assert.deepEqual(Array.from(coffee.sessions, session => session.id), ['recent', 
 assert.equal(context.projects.some(group => group.name === '/one/shared'), true);
 assert.equal(context.projects.some(group => group.name === '/two/shared'), true);
 assert.equal(context.projects.filter(group => ['App', 'app'].includes(group.name)).length, 2, 'case-sensitive Unix directories stay distinct');
-assert.equal(context.projects.find(group => group.sessions[0].id === 'agent').name, 'Coffee Agent');
+assert.equal(context.projects.find(group => group.sessions[0].id === 'agent').name, 'Sinos Agent');
 assert.equal(context.projects.find(group => group.sessions[0].id === 'claw').name, 'OpenClaw');
 context.collapsedProjects = new Set([coffee.key]);
 context.layout = 'projects';
@@ -60,7 +60,7 @@ assert.equal(matches(original.at(-1), '  CUSTOM session  '), true);
 assert.equal(matches(original.at(-1), 'renamed'), false, 'search follows custom titles');
 assert.equal(matches(original[4], '/one/shared'), true, 'search includes full project paths');
 assert.equal(matches(original[3], 'codex cli'), true);
-assert.equal(matches(original[8], 'coffee agent'), true);
+assert.equal(matches(original[8], 'sinos agent'), true);
 assert.equal(matches(original[9], 'internal/workspace'), false, 'directoryless tools do not expose internal workspaces');
 assert.equal(matches(original[0], 'no such conversation'), false);
 console.log('OK: hidden/pinned sessions, stable cache, directory grouping, duplicate names, case-sensitive paths, directoryless tools, collapse/toggle, renamed title and project/tool search');
@@ -171,7 +171,7 @@ assert.equal(context.state.terminals.length, 2, 'splitting a live row reuses its
 reset();
 await openHistory({ ...saved, tool: 'coffee-agent', session_token: null });
 assert.equal(context.agentOpened, saved.id);
-assert.equal(context.state.terminals.length, 0, 'Coffee Agent keeps its existing page-based open flow');
+assert.equal(context.state.terminals.length, 0, 'Sinos Agent keeps its existing page-based open flow');
 console.log('OK: repeat/rapid history opens, hidden/closed tabs, cross-tool identity, live native IDs, live row activation/split reuse, draft/process preservation, lookup failure and Agent flow');
 
 context.setPreview = () => {};

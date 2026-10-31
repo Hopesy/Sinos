@@ -278,7 +278,7 @@ export function HistoryBoard() {
       const key = cwd ? 'cwd:' + normCwd(cwd) : 'tool:' + session.tool;
       let group = groups.get(key);
       if (!group) {
-        group = { key, name: session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(cwd, session.tool), cwd, sessions: [] };
+        group = { key, name: session.tool === 'coffee-agent' ? 'Sinos Agent' : projectName(cwd, session.tool), cwd, sessions: [] };
         groups.set(key, group);
       }
       group.sessions.push(session);
@@ -305,7 +305,7 @@ export function HistoryBoard() {
   const matchesQuery = useCallback((session: SavedSession, query: string) => {
     const q = query.trim().replace(/\s+/g, ' ').toLowerCase();
     const name = renamed[`${session.tool ?? ''}:${session.id}`] ?? session.name ?? '';
-    const tool = session.tool === 'coffee-agent' ? 'Coffee Agent' : getToolName(session.tool);
+    const tool = session.tool === 'coffee-agent' ? 'Sinos Agent' : getToolName(session.tool);
     return [name, session.tool === 'openclaw' ? '' : session.cwd ?? '', projectName(session.cwd ?? '', session.tool), tool].some(value => value.toLowerCase().includes(q));
   }, [renamed]);
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -604,7 +604,7 @@ export function HistoryBoard() {
             </div>
             {preview?.key === sessionKey && !isRenaming && createPortal(<div id={previewId} className="history-card-preview" role="tooltip" style={{ left: preview.left, top: preview.top }}>
               <div className="history-card-preview-title">{displayName}</div>
-              <div className="history-card-meta"><span className="history-card-tool-wrap">{session.tool !== 'coffee-agent' && getToolIcon(session.tool)}<span className="history-card-meta-text">{(needsAttention || isUnread) && <span className="history-card-preview-status">{t(needsAttention ? 'history.needs_attention' : 'history.unread_reply')} &middot; </span>}{session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(session.cwd, session.tool)} &middot; {dateStr} {session.turn_count ? ` · ${(t('task.messages') || '{count} messages').replace('{count}', session.turn_count.toString())}` : ''}</span></span></div>
+              <div className="history-card-meta"><span className="history-card-tool-wrap">{session.tool !== 'coffee-agent' && getToolIcon(session.tool)}<span className="history-card-meta-text">{(needsAttention || isUnread) && <span className="history-card-preview-status">{t(needsAttention ? 'history.needs_attention' : 'history.unread_reply')} &middot; </span>}{session.tool === 'coffee-agent' ? 'Sinos Agent' : projectName(session.cwd, session.tool)} &middot; {dateStr} {session.turn_count ? ` · ${(t('task.messages') || '{count} messages').replace('{count}', session.turn_count.toString())}` : ''}</span></span></div>
             </div>, document.body)}
           </div>
             {workers.length > 0 && <div className="history-workers" onPointerDown={event => event.stopPropagation()}>
@@ -703,7 +703,7 @@ export function HistoryBoard() {
       <div className="history-search-results" id={searchId + '-results'} ref={searchResultsRef} role="listbox" aria-label={t('explorer.tab.history')}>
         {searchResults.map((session, index) => <button type="button" tabIndex={-1} key={session.tool + ':' + session.id} id={searchId + '-result-' + index} className="history-search-result" role="option" aria-selected={selectedSearchIndex === index} onMouseEnter={() => setSearchSelection(index)} onClick={() => openSearchResult(session)}>
           {session.tool !== 'coffee-agent' && getToolIcon(session.tool)}
-          <span><strong>{renamed[session.tool + ':' + session.id] ?? session.name}</strong><small>{session.tool === 'coffee-agent' ? 'Coffee Agent' : projectName(session.cwd ?? '', session.tool)}</small></span>
+          <span><strong>{renamed[session.tool + ':' + session.id] ?? session.name}</strong><small>{session.tool === 'coffee-agent' ? 'Sinos Agent' : projectName(session.cwd ?? '', session.tool)}</small></span>
         </button>)}
         {searchHasMore && <div ref={searchSentinelRef} className="history-search-sentinel" />}
         {!searchResults.length && <div className="history-search-empty"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 5 5" /></svg><span>{t(isLoading ? 'diff.loading' : 'menu.no_recent')}</span></div>}

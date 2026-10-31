@@ -64,7 +64,7 @@ const context = {
 runInNewContext(compiled.outputFiles[0].text, context);
 const api = module.exports;
 const keys = Object.keys(api.dictionaries.en).filter(key => key.startsWith('agent.')).sort();
-assert.ok(keys.length > 0, 'Coffee Agent must have its own translations');
+assert.ok(keys.length > 0, 'Sinos Agent must have its own translations');
 const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
 const escaped = text => renderToStaticMarkup(React.createElement('span', null, text)).slice(6, -7);
 
@@ -94,7 +94,7 @@ for (const [language, dictionary] of Object.entries(api.dictionaries)) {
   for (const key of ['agent.help.title', 'agent.help.workflow_intro', 'agent.help.delegation_description', 'agent.help.delegation_tip', 'agent.help.sentinel_description', 'agent.help.project_manager_description', 'agent.help.expert_config_description', 'agent.help.examples_hint']) {
     assert.ok(help.includes(escaped(dictionary[key])), `${language}: help did not render ${key}`);
   }
-  assert.ok(help.includes('href="https://github.com/edison7009/Coffee-CLI/issues"'), `${language}: feedback link was lost`);
+  assert.ok(help.includes('href="https://github.com/Hopesy/Sinos/issues"'), `${language}: feedback link was lost`);
   assert.ok(help.includes('/new') && help.includes('/cancel'), `${language}: channel commands were translated`);
   context.__agentTestState.agentPageActive = 'agent';
   const chat = renderToStaticMarkup(React.createElement(api.AgentPages, { page: 'agent' }));
@@ -127,4 +127,4 @@ for (const language of ['en', 'zh-CN', 'ja']) {
   assert.equal(api.formatAgentMessage('Agent 请求未完成：请先在 Agent 配置中填写 API 密钥', translate), translate('agent.chat.incomplete', { error: translate('agent.error.api_key_required') }));
   assert.equal(api.formatAgentMessage('Read E:\\MyProject and report in Chinese.', translate), 'Read E:\\MyProject and report in Chinese.');
 }
-console.log(`OK: Coffee Agent rendering, ${keys.length} translation keys in 11 languages, placeholders, help links, and live activity language changes`);
+console.log(`OK: Sinos Agent rendering, ${keys.length} translation keys in 11 languages, placeholders, help links, and live activity language changes`);

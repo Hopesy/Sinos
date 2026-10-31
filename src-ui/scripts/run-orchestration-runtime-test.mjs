@@ -32,7 +32,7 @@ try {
   const send=request=>child.stdin.write(JSON.stringify({jsonrpc:'2.0',...request})+'\n');
   send({id:1,method:'initialize',params:{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'test',version:'1'}}});
   send({method:'notifications/initialized'});send({id:2,method:'tools/list'});await wait(()=>responses.length===2);
-  assert.equal(responses[0].result.serverInfo.name,'Coffee Team');assert.equal(responses[1].result.tools.length,7);assert.deepEqual(responses[1].result.tools[0].inputSchema.properties.tool.enum,['codex','opencode']);
+  assert.equal(responses[0].result.serverInfo.name,'Sinos Team');assert.equal(responses[1].result.tools.length,7);assert.deepEqual(responses[1].result.tools[0].inputSchema.properties.tool.enum,['codex','opencode']);
   send({id:3,method:'tools/call',params:{name:'worker_wait',arguments:{revision:0}}});
   send({id:4,method:'tools/call',params:{name:'worker_list',arguments:{}}});send({id:5,method:'ping'});
   await wait(()=>responses.some(response=>response.id===4));assert.equal(responses.some(response=>response.id===3),false,'a long wait cannot block other tools');

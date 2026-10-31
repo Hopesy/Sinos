@@ -60,7 +60,7 @@ mod windows_path;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    // These helpers run inside a visible Coffee Terminal, before single-instance GUI routing.
+    // These helpers run inside a visible Sinos Terminal, before single-instance GUI routing.
     let helper_args: Vec<String> = std::env::args().collect();
     if matches!(helper_args.get(1).map(String::as_str), Some("__team_mcp" | "__team_worker")) {
         #[cfg(windows)]
@@ -103,12 +103,12 @@ fn main() -> Result<()> {
         };
         match result {
             Ok(value) => {
-                println!("Coffee action result: {value}");
+                println!("Sinos action result: {value}");
                 let failed = value["exitCode"].as_i64().is_some_and(|code| code != 0)
                     || !matches!(value["state"].as_str(), Some("ready" | "verified" | "installed"));
                 std::process::exit(if failed { 1 } else { 0 });
             }
-            Err(error) => { eprintln!("Coffee action failed: {error}"); std::process::exit(1); }
+            Err(error) => { eprintln!("Sinos action failed: {error}"); std::process::exit(1); }
         }
     }
     // ── Legacy hook compatibility (fast path) ────────────────────────────
@@ -194,7 +194,7 @@ fn main() -> Result<()> {
     //   2. Every OTHER variable exported in ~/.zshrc / ~/.bashrc is missing
     //      too — API keys (OPENAI_API_KEY / ANTHROPIC_API_KEY / KIMI_API_KEY),
     //      tool feature flags, proxy overrides. AI CLIs then behave
-    //      differently inside Coffee CLI than in Terminal.app: Kimi Code's
+    //      differently inside Sinos CLI than in Terminal.app: Kimi Code's
     //      secondary-model experiment stayed disabled in PTY tabs even
     //      though the user had exported
     //      KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1 in ~/.zshrc — the

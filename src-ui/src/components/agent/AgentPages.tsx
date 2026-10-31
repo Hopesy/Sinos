@@ -75,7 +75,7 @@ function AgentSelect<Value extends string>({ value, options, onChange, label, cl
 
 function PageFrame({ page, children }: { page: AgentPage; children: ReactNode }) {
   const t = useT();
-  return <section className={`agent-page agent-page-${page}`} aria-label={page === 'agent' ? 'Coffee Agent' : t('agent.page.settings')}>
+  return <section className={`agent-page agent-page-${page}`} aria-label={page === 'agent' ? 'Sinos Agent' : t('agent.page.settings')}>
     {children}
   </section>;
 }
@@ -194,12 +194,12 @@ function AgentChatPage() {
     }}>
       {hasOlder && <button type="button" className="agent-button quiet" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? t('agent.chat.loading') : t('agent.chat.older')}</button>}
       {messages.length === 0 ? <div className="agent-welcome">
-        <h2>Coffee Agent</h2>
+        <h2>Sinos Agent</h2>
         <p>{t('agent.chat.welcome')}</p>
         <div className="agent-suggestions">{[t('agent.chat.suggestion.terminals'), t('agent.chat.suggestion.progress'), t('agent.chat.suggestion.history')].map(text =>
           <button type="button" key={text} onClick={() => { setDraft(text); document.querySelector<HTMLTextAreaElement>('.gambit-textarea')?.focus(); }}>{text}<span aria-hidden="true">↗</span></button>)}</div>
       </div> : <div className="agent-message-list" ref={messageListRef}>{messages.map((message, index) =>
-        <article className={`conversation-message conversation-message--${message.role}`} data-conversation-navigation-id={String(message.id)} aria-label={message.role === 'user' ? t('agent.chat.user') : 'Coffee Agent'} key={message.id}>
+        <article className={`conversation-message conversation-message--${message.role}`} data-conversation-navigation-id={String(message.id)} aria-label={message.role === 'user' ? t('agent.chat.user') : 'Sinos Agent'} key={message.id}>
           <div className="conversation-bubble"><MarkdownContent content={message.role === 'assistant' ? formatAgentMessage(message.text, t) : message.text} /></div>
           {(message.role === 'user' || !running || index < messages.length - 1) && <MessageCopyButton copied={copiedMessageId === `${conversationId}:${message.id}`} onCopy={() => copyMessage(message.id, message.role === 'assistant' ? formatAgentMessage(message.text, t) : message.text)} />}
         </article>)}
@@ -213,7 +213,7 @@ function AgentChatPage() {
       onClose={() => {}} onSend={send} running={running}
       onCancel={cancelling ? undefined : () => void cancel()}
       sendFailedHint={t('agent.chat.send_failed')}
-      workspaceName="Coffee Agent"
+      workspaceName="Sinos Agent"
       leftPanelHidden={state.leftPanelHidden} rightPanelHidden={state.rightPanelHidden}
     />}
   </PageFrame>;
@@ -529,7 +529,7 @@ function AgentHelpModal({ onClose }: { onClose: () => void }) {
     <h3>{t('agent.help.workflow_heading')}</h3>
     <p>{t('agent.help.workflow_intro')}</p>
     <p>{t('agent.help.workflow_usage')}</p>
-    <p>{feedbackBefore}<a className="agent-help-link" href="https://github.com/edison7009/Coffee-CLI/issues" onClick={event => { event.preventDefault(); void commands.openUrl(event.currentTarget.href).catch(() => {}); }}>GitHub Issues</a>{feedbackAfter}</p>
+    <p>{feedbackBefore}<a className="agent-help-link" href="https://github.com/Hopesy/Sinos/issues" onClick={event => { event.preventDefault(); void commands.openUrl(event.currentTarget.href).catch(() => {}); }}>GitHub Issues</a>{feedbackAfter}</p>
     <h3>{t('agent.help.delegation_heading')}</h3>
     <p>{t('agent.help.delegation_description')}</p>
     <p>{t('agent.help.delegation_tip')}</p>

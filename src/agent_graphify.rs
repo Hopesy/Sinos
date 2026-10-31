@@ -1,4 +1,4 @@
-//! Actual Graphify CLI plans run in a visible Coffee terminal; graph reads stay local.
+//! Actual Graphify CLI plans run in a visible Sinos terminal; graph reads stay local.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::{BTreeMap, HashSet}, fs, io::Read, path::{Component, Path, PathBuf}, process::Command, sync::Mutex};
@@ -154,7 +154,7 @@ pub(crate) fn approve_install(root: &Path, identity: &str, id: &str) -> Result<(
     plan.approved = true; write(&plan_path(root,id)?, &plan)
 }
 
-/// Called only from the Coffee CLI helper launched in a real terminal, never the Agent worker.
+/// Called only from the Sinos CLI helper launched in a real terminal, never the Agent worker.
 pub(crate) fn apply_build(root: &Path, id: &str) -> Result<Value, String> {
     let plan = load_plan(root,id)?; if !plan.approved { return Err("Graphify installation requires user confirmation".into()); }
     let cwd = crate::agent::canonical_directory(&plan.cwd)?; let out = output(root,&plan,&cwd)?;
@@ -166,12 +166,12 @@ pub(crate) fn apply_build(root: &Path, id: &str) -> Result<Value, String> {
         let expected = executable(if plan.kind == "install" {"uv"} else {"graphify"}).ok_or("Graphify executable unavailable")?;
         if expected != PathBuf::from(&plan.executable) { return Err("Graphify executable changed after planning; prepare again".into()); }
         if plan.kind == "build" && source_fingerprint(&cwd)? != plan.fingerprint { return Err("Project changed after Graphify planning; prepare again".into()); }
-        println!("Coffee CLI: {} {}",plan.executable,argv(&plan,&out).join(" "));
+        println!("Sinos CLI: {} {}",plan.executable,argv(&plan,&out).join(" "));
         let status = Command::new(&plan.executable).args(argv(&plan,&out)).env("GRAPHIFY_NO_AUTO_REFRESH","1").current_dir(dunce::simplified(&cwd)).status().map_err(|error| format!("Graphify process failed: {error}"))?;
         if !status.success() { return Err(format!("Graphify {} failed with exit {:?}; inspect the visible terminal output",plan.kind,status.code())); }
         if plan.kind == "install" {
             let installed=executable("graphify").ok_or("Installation exited successfully but graphify executable is unavailable")?;
-            println!("Coffee CLI: verifying {} --version",installed.display());
+            println!("Sinos CLI: verifying {} --version",installed.display());
             let version=Command::new(&installed).arg("--version").env("GRAPHIFY_NO_AUTO_REFRESH","1").current_dir(dunce::simplified(&cwd)).output().map_err(|error|format!("Graphify version verification failed: {error}"))?;
             let text=String::from_utf8_lossy(&version.stdout); print!("{text}"); eprint!("{}",String::from_utf8_lossy(&version.stderr));
             if !version.status.success() || !text.split_whitespace().any(|part|part==ENGINE_VERSION) { return Err(format!("Installed Graphify version was not verified as {ENGINE_VERSION}; check the visible terminal and PATH")); }

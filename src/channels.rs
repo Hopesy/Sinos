@@ -604,7 +604,7 @@ fn weixin_headers(token: Option<&str>) -> Result<reqwest::header::HeaderMap, Str
 }
 
 fn base_info() -> Value {
-    json!({"channel_version": env!("CARGO_PKG_VERSION"), "bot_agent": concat!("CoffeeCLI/", env!("CARGO_PKG_VERSION"))})
+    json!({"channel_version": env!("CARGO_PKG_VERSION"), "bot_agent": concat!("SinosCLI/", env!("CARGO_PKG_VERSION"))})
 }
 
 fn service_url(raw: &str) -> Result<String, String> {
@@ -1338,7 +1338,7 @@ async fn receive_loop(
                     token,
                     chat,
                     String::new(),
-                    "Coffee CLI 已连接。现在可以查询会话或向 Agent 发送任务。使用 /cancel 可取消当前 Agent 请求。".into(),
+                    "Sinos CLI 已连接。现在可以查询会话或向 Agent 发送任务。使用 /cancel 可取消当前 Agent 请求。".into(),
                     generation,
                     cancel,
                 )
