@@ -10,6 +10,7 @@ SOURCE = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else ROOT / "brandi
 BRANDING = ROOT / "branding" / "sinos"
 ICONS = ROOT / "icons"
 PUBLIC = ROOT / "src-ui" / "public"
+UI_ASSETS = ROOT / "src-ui" / "src" / "assets"
 
 
 def copy_branding_assets() -> None:
@@ -58,6 +59,8 @@ def generate_app_icons() -> None:
 def copy_web_assets() -> None:
     shutil.copy2(SOURCE / "sinos-icon.svg", PUBLIC / "favicon.svg")
     shutil.copy2(SOURCE / "sinos-icon.svg", PUBLIC / "sinos-icon.svg")
+    UI_ASSETS.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SOURCE / "sinos-icon.svg", UI_ASSETS / "sinos-icon.svg")
     shutil.copy2(SOURCE / "sinos-icon-dark.png", PUBLIC / "sinos-icon-dark.png")
     shutil.copy2(SOURCE / "sinos-wordmark.svg", PUBLIC / "sinos-wordmark.svg")
     shutil.copy2(SOURCE / "sinos-wordmark-dark.png", PUBLIC / "sinos-wordmark-dark.png")

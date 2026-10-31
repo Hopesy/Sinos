@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { commands, isTauri } from '../../tauri';
 import { IS_MACOS } from '../../lib/platform';
 import { RevealMainWindow } from './RevealMainWindow';
-import mark from '../../../public/sinos-icon.svg?raw';
+import mark from '../../assets/sinos-icon.svg?raw';
 import './DesktopStartup.css';
 
 const copy = {
