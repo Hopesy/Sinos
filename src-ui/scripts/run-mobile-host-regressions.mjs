@@ -56,6 +56,7 @@ const chatActive = propExpression('ConversationView', 'isActive');
 const chatFocused = propExpression('ConversationView', 'isFocused');
 const projectionActive = propExpression('TierTerminal', 'conversationActive');
 const context = {
+  state: { settingsOpen: false },
   t: { id: 'phone-session', viewMode: 'terminal' }, activeTerminalId: 'other',
   diffTabActive: false, editorTabActive: true, contentActive: false, splitVisible: false, splitIds: [], mobileWatching: new Set(['phone-session']),
 };

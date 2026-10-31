@@ -95,6 +95,42 @@ The process cleanup regression launches an isolated real Windows process tree,
 holds the input lock during closure, and verifies a separate session survives.
 Version remains `4.0.2`.
 
+### Second review fixes — 2026-10-31
+
+- Give modal dialogs ownership of keyboard input. Settings consumes Escape,
+  preserves IME composition and suspends native/PTY pane shortcuts while keeping
+  the panes visible. Session handlers also check dialog targets and consumed
+  events, including permission cards that listen during event capture.
+- Extend the per-session Windows Job Object to Codex and DeepSeek Harness.
+  Suspended launchers join their job before resuming; closure and launcher exit
+  release descendants even when stdin is busy or a reader retains the session.
+- Cancel native startup by tab ID and generation before blocking-pool dispatch.
+  Check cancellation before spawning and under the session registration lock;
+  shutdown also cancels pending launches. Closing a session releases pending
+  protocol replies and sends frontend cleanup immediately after its retain grace
+  period, with a second cleanup for late successful startup responses.
+- Track DeepSeek model switches and stop/restart operations as the current
+  startup lifecycle. Validate client identity and generation after async work so
+  a closed or replaced tab cannot register a late orphan runtime or retry.
+- Merge DeepSeek history into the latest live state, preserving exit errors,
+  approvals and newer messages. Publish readiness only after current-generation
+  restoration finishes and the process remains alive.
+- Mark DeepSeek unread replies only for a live matching turn that completes
+  successfully. Failed, interrupted, duplicate and historical completions leave
+  reply markers unchanged.
+
+Validation: **473 Rust tests passed / 16 ignored**, `cargo check --locked`,
+correctness/suspicious Clippy checks, **349 Vitest tests in 58 files passed**,
+**53/53 unified regression scripts passed**, desktop production build, ESLint
+and `git diff --check`. New unified regressions cover **21 lifecycle cases** and
+**6 keyboard/focus groups**. Focused browser suites for Codex conversations,
+DeepSeek welcome, session splits, question Enter handling and Claude effort
+controls all passed (**5/5**). Real isolated Windows process tests passed for
+all three native tools, including busy stdin and independent session survival.
+The frontend/browser tests use controlled native transport; vendor accounts and
+non-Windows native execution were outside this local validation. Version remains
+`4.0.2`.
+
 ## Historical integration — 2026-09-25
 
 The record below describes the earlier selective integration. Current decisions

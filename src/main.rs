@@ -9,6 +9,7 @@ mod claude_session;
 mod codex_session;
 mod dsh_session;
 mod session_directory;
+mod session_start;
 mod opencode_island;
 mod agent;
 mod agent_modes;

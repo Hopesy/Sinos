@@ -9,6 +9,7 @@ import { arr, obj, str, emptyCodexState, reduceCodexEvent, restoreCodexTurns, ty
 interface Client { state: CodexState; generation: string; listeners: Set<() => void>; owners: number; starting?: Promise<void>; closeTimer?: ReturnType<typeof setTimeout>; publishTimer?: ReturnType<typeof setTimeout>; sending: boolean; exited?: boolean; connecting?: boolean; startupExit?: string; interruptSent?: string; permissionOverride?: Json; skills?: Json[] }
 const clients = new Map<string, Client>();
 const EMPTY = emptyCodexState();
+const current = (id: string, c: Client, generation = c.generation) => clients.get(id) === c && c.generation === generation;
 let listening: Promise<unknown> | undefined;
 function client(id: string): Client {
   let c = clients.get(id);
@@ -49,11 +50,14 @@ export function retainCodexSession(id: string, cwd: string | null, resumeToken?:
   c.starting ??= (async () => {
     c.connecting = true;
     for (let attempt = 0; attempt < 3; attempt++) {
+      const generation = c.generation;
       try {
         await listen();
+        if (!current(id, c, generation)) return;
         clearSessionControls(id, c.generation);
-        const controls = readLaunchControls('codex'), generation = c.generation;
-        const result = await invoke<Json>('codex_session_start', { id, generation: c.generation, cwd, resumeToken: resumeToken ?? null });
+        const controls = readLaunchControls('codex');
+        const result = await invoke<Json>('codex_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null });
+        if (!current(id, c, generation)) { await invoke('codex_session_close', { id, generation }).catch(() => {}); return; }
         if (c.exited) throw new Error(c.startupExit || 'Codex process exited');
         const thread = obj(result.thread), history = restoreCodexTurns(arr(thread.turns));
         const liveIds = new Set(c.state.messages.map(m => m.id));
@@ -66,13 +70,16 @@ export function retainCodexSession(id: string, cwd: string | null, resumeToken?:
         publish(c, true);
         return;
       } catch (error) {
-        if (directoryFailure(error) || attempt === 2) { c.state = { ...c.state, ready: false, error: String(error) }; publish(c, true); return; }
-        const generation = c.generation;
+        if (!current(id, c, generation)) return;
+        if (directoryFailure(error) || attempt === 2) {
+          if (!directoryFailure(error)) void invoke('codex_session_close', { id, generation }).catch(() => {});
+          c.state = { ...c.state, ready: false, error: String(error) }; publish(c, true); return;
+        }
         clearSessionControls(id, generation);
         c.generation = crypto.randomUUID();
         await invoke('codex_session_close', { id, generation }).catch(() => {});
         await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-        if (!c.owners) return;
+        if (!c.owners || !current(id, c)) return;
         c.exited = false; c.startupExit = undefined;
         c.state = { ...c.state, ready: false, error: undefined };
       }
@@ -81,9 +88,10 @@ export function retainCodexSession(id: string, cwd: string | null, resumeToken?:
   return () => {
     if (--c.owners) return;
     c.closeTimer = setTimeout(() => {
-      if (c.owners) return;
-      void (c.starting ?? Promise.resolve()).finally(() => invoke('codex_session_close', { id, generation: c.generation })).catch(() => {});
-      clearTimeout(c.publishTimer); clearSessionControls(id, c.generation); clients.delete(id);
+      if (c.owners || !current(id, c)) return;
+      clients.delete(id);
+      void invoke('codex_session_close', { id, generation: c.generation }).catch(() => {});
+      clearTimeout(c.publishTimer); clearSessionControls(id, c.generation);
     }, 300);
   };
 }

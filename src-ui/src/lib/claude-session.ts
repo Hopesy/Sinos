@@ -22,6 +22,10 @@ interface Client {
 const clients = new Map<string, Client>();
 let listening: Promise<unknown> | undefined;
 const EMPTY = emptyClaudeState();
+const current = (id: string, c: Client, generation = c.generation) => clients.get(id) === c && c.generation === generation;
+function requireCurrent(id: string, c: Client, generation = c.generation) {
+  if (!current(id, c, generation)) throw new Error('Claude session closed');
+}
 
 function client(id: string): Client {
   let c = clients.get(id);
@@ -57,17 +61,26 @@ export function getClaudeConnection(id: string) {
 }
 
 async function readSettings(id: string, c: Client) {
-  const settings = await invoke<Json>('claude_session_control', { id, generation: c.generation, request: { subtype: 'get_settings' } });
+  const generation = c.generation;
+  requireCurrent(id, c, generation);
+  const settings = await invoke<Json>('claude_session_control', { id, generation, request: { subtype: 'get_settings' } });
+  requireCurrent(id, c, generation);
   const applied = object(settings.applied), effective = object(settings.effective);
   const selected = text(applied.model) || text(effective.model) || c.state.models[0]?.resolvedModel || 'default';
   c.state = { ...c.state, model: selected, effort: text(applied.effort) || text(applied.effortLevel) || text(effective.effortLevel), ultracode: typeof applied.ultracode === 'boolean' ? applied.ultracode : effective.ultracode === true, thinking: effective.alwaysThinkingEnabled !== false };
 }
 
 async function initializeClaude(id: string, c: Client, cwd: string | null, resumeToken?: string, ready = true) {
+  const generation = c.generation;
   await listen();
+  requireCurrent(id, c, generation);
   clearSessionControls(id, c.generation);
-  const controls = readLaunchControls('claude'), generation = c.generation;
-  const result = await invoke<{ sessionId: string; initialization: Json; history: { data: string; cursor: number }; bypassAvailable?: boolean }>('claude_session_start', { id, generation: c.generation, cwd, resumeToken: resumeToken ?? null });
+  const controls = readLaunchControls('claude');
+  const result = await invoke<{ sessionId: string; initialization: Json; history: { data: string; cursor: number }; bypassAvailable?: boolean }>('claude_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null });
+  if (!current(id, c, generation)) {
+    await invoke('claude_session_close', { id, generation }).catch(() => {});
+    requireCurrent(id, c, generation);
+  }
   const restoreHistory = !c.state.messages.length;
   if (restoreHistory) for (const line of result.history.data.split(/\r?\n/)) {
     try { const row = object(JSON.parse(line)); c.state = reduceClaudeEvent(c.state, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ }
@@ -75,6 +88,7 @@ async function initializeClaude(id: string, c: Client, cwd: string | null, resum
   const init = result.initialization;
   c.state = { ...c.state, nativeId: result.sessionId, historyCursor: restoreHistory ? result.history.cursor : c.state.historyCursor, models: list(init.models) as ClaudeModel[], commands: list(init.commands) as ClaudeCommand[], permissionMode: text(init.current_permission_mode) || 'default', bypassAvailable: result.bypassAvailable === true };
   await readSettings(id, c);
+  requireCurrent(id, c, generation);
   if (c.startupExit) throw new Error(c.startupExit);
   c.state = { ...c.state, ready, status: ready ? 'idle' : 'starting', error: undefined, errorKey: undefined };
   void controls.then(value => {
@@ -91,15 +105,20 @@ export function retainClaudeSession(id: string, cwd: string | null, resumeToken?
     c.connecting = true;
     c.starting = (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
+        if (!current(id, c)) return;
         try { await initializeClaude(id, c, cwd, resumeToken); return; }
         catch (error) {
-          if (directoryFailure(error) || attempt === 2) { c.state = { ...c.state, status: 'error', error: String(error), errorKey: undefined, ready: false }; publish(c, true); return; }
+          if (!current(id, c)) return;
+          if (directoryFailure(error) || attempt === 2) {
+            if (!directoryFailure(error)) void invoke('claude_session_close', { id, generation: c.generation }).catch(() => {});
+            c.state = { ...c.state, status: 'error', error: String(error), errorKey: undefined, ready: false }; publish(c, true); return;
+          }
           const generation = c.generation;
           clearSessionControls(id, generation);
           c.generation = crypto.randomUUID();
           await invoke('claude_session_close', { id, generation }).catch(() => {});
           await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-          if (!c.owners) return;
+          if (!c.owners || !current(id, c)) return;
           c.startupExit = undefined;
           c.state = { ...c.state, ready: false, status: 'starting', error: undefined, errorKey: undefined };
         }
@@ -109,11 +128,11 @@ export function retainClaudeSession(id: string, cwd: string | null, resumeToken?
   return () => {
     c.owners--;
     if (!c.owners) c.closeTimer = setTimeout(() => {
-      if (c.owners) return;
-      void (c.starting ?? Promise.resolve()).finally(() => invoke('claude_session_close', { id, generation: c.generation })).catch(() => {});
+      if (c.owners || !current(id, c)) return;
+      clients.delete(id);
+      void invoke('claude_session_close', { id, generation: c.generation }).catch(() => {});
       clearTimeout(c.publishTimer);
       clearSessionControls(id, c.generation);
-      clients.delete(id);
     }, 300);
   };
 }
@@ -203,15 +222,17 @@ function forceStop(id: string, c: Client, generation: string) {
       await invoke('claude_session_close', { id, generation });
       await initializeClaude(id, c, c.cwd ?? null, previous.messages.length ? previous.nativeId : undefined, false);
       await restoreControls(id, c, previous, previous.permissionMode);
+      requireCurrent(id, c);
       c.state = { ...c.state, ready: true, status: 'idle', requests: [] };
-    } catch (error) { c.state = { ...c.state, ready: false, error: String(error), errorKey: 'claude.error.restart' }; }
+    } catch (error) { if (current(id, c)) c.state = { ...c.state, ready: false, error: String(error), errorKey: 'claude.error.restart' }; }
     finally { c.restarting = false; publish(c, true); }
   })();
 }
 
 /** Re-applies the controls a replaced process would otherwise lose. */
 async function restoreControls(id: string, c: Client, previous: ClaudeState, mode: string): Promise<Json> {
-  const request = (request: Json) => invoke<Json>('claude_session_control', { id, generation: c.generation, request });
+  const generation = c.generation;
+  const request = (request: Json) => { requireCurrent(id, c, generation); return invoke<Json>('claude_session_control', { id, generation, request }); };
   if (previous.model) await request({ subtype: 'set_model', model: previous.model });
   await request({ subtype: 'apply_flag_settings', settings: { ...(previous.effort ? { effortLevel: previous.effort } : {}), ultracode: previous.ultracode, alwaysThinkingEnabled: previous.thinking } });
   const result = await request({ subtype: 'set_permission_mode', mode });
@@ -238,9 +259,11 @@ function restartWithBypass(id: string, c: Client): Promise<Json> {
     const previousGeneration = c.generation;
     try {
       const config = await invoke<ToolConfigEntry>('get_tool_config', { tool: 'claude' });
+      requireCurrent(id, c, previousGeneration);
       const flag = '--allow-dangerously-skip-permissions';
       if (!config.extra_args.includes(flag) && !config.command.includes(flag)) await invoke('set_tool_config', { tool: 'claude', entry: { ...config, extra_args: [...config.extra_args, flag] } });
       if (c.state.busy) { await controlClaude(id, { subtype: 'interrupt' }); await waitUntilIdle(c); }
+      requireCurrent(id, c, previousGeneration);
       const previous = c.state;
       c.state = { ...c.state, ready: false, status: 'starting', error: undefined, errorKey: undefined };
       publish(c, true);
@@ -251,10 +274,12 @@ function restartWithBypass(id: string, c: Client): Promise<Json> {
       // Empty sessions have no native transcript to resume yet.
       await initializeClaude(id, c, c.cwd ?? null, previous.messages.length ? previous.nativeId : undefined, false);
       const result = await restoreControls(id, c, previous, 'bypassPermissions');
+      requireCurrent(id, c);
       c.state = { ...c.state, ready: true, status: 'idle', bypassAvailable: true, requests: [] };
       publish(c, true);
       return result;
     } catch (error) {
+      if (!current(id, c)) throw error;
       if (!closed) c.generation = previousGeneration;
       c.state = { ...c.state, ready: closed ? false : c.state.ready, error: String(error), errorKey: 'claude.error.restart' };
       publish(c, true);

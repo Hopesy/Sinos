@@ -36,11 +36,13 @@ struct Session {
     control: PathBuf,
     child: Mutex<Child>,
     input: Mutex<Option<ChildStdin>>,
+    #[cfg(windows)]
+    job: Mutex<Option<crate::terminal::windows_job::SessionJob>>,
     protocol: Protocol,
     stderr: Mutex<String>,
 }
 #[derive(Default)]
-pub struct DshSessions(Mutex<HashMap<String, Arc<Session>>>);
+pub struct DshSessions(Mutex<HashMap<String, Arc<Session>>>, crate::session_start::SessionStarts);
 
 impl Session {
     fn write(&self, value: &Value) -> Result<(), String> {
@@ -57,11 +59,14 @@ impl Session {
         }
     }
     fn stop(&self) {
+        #[cfg(windows)]
+        drop(self.job.lock().unwrap().take());
         self.remove_control_files();
         // A blocked stdin writer must not prevent process termination.
         let _ = self.child.lock().unwrap().kill();
         // .cmd launchers own a child runtime; closing the pipe ends it too.
         if let Ok(mut input) = self.input.try_lock() { input.take(); }
+        for (_, reply) in self.protocol.pending.lock().unwrap().drain() { let _ = reply.send(Err("Native session closed".into())); }
     }
     fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
         let id = Value::String(uuid::Uuid::new_v4().to_string());
@@ -313,7 +318,8 @@ fn permission_patch(dir: &Path) -> Result<PathBuf, String> {
     Ok(patch)
 }
 
-fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>, route: Option<Value>, preset: Option<String>) -> Result<Value, String> {
+fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>, route: Option<Value>, preset: Option<String>, pending: crate::session_start::PendingStart) -> Result<Value, String> {
+    pending.check()?;
     let config = crate::tool_config::get("dsh");
     let cwd = cwd.filter(|p| !p.trim().is_empty()).or_else(|| (!config.default_cwd.is_empty()).then(|| config.default_cwd.clone()))
         .map(|p| crate::tool_config::expand_path(&p)).unwrap_or_else(|| dirs::home_dir().unwrap_or_default());
@@ -342,16 +348,21 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
     if let Some(preset) = &preset { write_preset(&control, preset)?; }
     command.arg("--patch").arg(patch).env("COFFEE_DSH_CONTROL", &control).env("COFFEE_DSH_SESSION", &native_id);
     command.args(&config.extra_args).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start DeepSeek Harness: {e}")))?;
+    pending.check()?;
     #[cfg(windows)]
-    crate::terminal::windows_job::assign_pid(child.id());
+    let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start DeepSeek Harness: {e}")))?;
+    #[cfg(not(windows))]
+    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start DeepSeek Harness: {e}")))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let input = child.stdin.take().unwrap();
-    let session = Arc::new(Session { generation, native_id, control, child: Mutex::new(child), input: Mutex::new(Some(input)), protocol: Protocol::default(), stderr: Mutex::new(String::new()) });
+    let session = Arc::new(Session { generation, native_id, control, child: Mutex::new(child), input: Mutex::new(Some(input)),
+        #[cfg(windows)] job: Mutex::new(Some(job)),
+        protocol: Protocol::default(), stderr: Mutex::new(String::new()) });
     {
         let sessions = app.state::<DshSessions>();
         let mut map = sessions.0.lock().unwrap();
+        if let Err(error) = pending.check() { session.stop(); return Err(error); }
         if map.contains_key(&id) { session.stop(); return Err("This tab already owns a DeepSeek Harness session".into()); }
         map.insert(id.clone(), session.clone());
     }
@@ -380,6 +391,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
                 _ => std::thread::sleep(Duration::from_millis(150)),
             }
         };
+        s.stop();
         for (_, tx) in s.protocol.pending.lock().unwrap().drain() { let _ = tx.send(Err("DeepSeek Harness process exited".into())); }
         s.remove_control_files();
         crate::orchestration::native_stop(&watcher_id, "dsh", &s.generation);
@@ -422,7 +434,8 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
 
 #[tauri::command]
 pub async fn dsh_session_start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>, route: Option<Value>, preset: Option<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token, route, preset)).await.map_err(|e| e.to_string())?
+    let pending = app.state::<DshSessions>().1.begin(&id, &generation)?;
+    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token, route, preset, pending)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn dsh_session_set_preset(sessions: State<'_, DshSessions>, id: String, generation: String, preset: String) -> Result<(), String> {
@@ -460,6 +473,7 @@ pub async fn dsh_session_respond(sessions: State<'_, DshSessions>, id: String, g
 }
 #[tauri::command]
 pub async fn dsh_session_close(sessions: State<'_, DshSessions>, id: String, generation: String) -> Result<(), String> {
+    sessions.1.cancel(&id, &generation);
     let session = {
         let mut map = sessions.0.lock().unwrap();
         if map.get(&id).is_some_and(|s| s.generation == generation) { map.remove(&id) } else { None }
@@ -471,6 +485,7 @@ pub async fn dsh_session_close(sessions: State<'_, DshSessions>, id: String, gen
     Ok(())
 }
 pub fn shutdown(sessions: &DshSessions) {
+    sessions.1.shutdown();
     let sessions: Vec<_> = sessions.0.lock().unwrap().drain().map(|(_, session)| session).collect();
     for s in sessions { s.stop(); }
 }
@@ -568,6 +583,67 @@ pub async fn dsh_session_history(session_id: String) -> Result<Vec<Value>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn stop_closes_launcher_descendants_with_busy_stdin() {
+        use std::os::windows::process::CommandExt;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+        struct OwnedFixture(HANDLE);
+        impl Drop for OwnedFixture {
+            fn drop(&mut self) { unsafe { let _ = TerminateProcess(self.0, 0); let _ = CloseHandle(self.0); } }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("child.ps1");
+        std::fs::write(&script, "[Console]::WriteLine($PID); [Console]::ReadLine() | Out-Null").unwrap();
+        let launcher = directory.path().join("launcher.cmd");
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        std::fs::write(&launcher, format!("@echo off\r\n\"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"\r\n", powershell.display(), script.display())).unwrap();
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c"]).arg(&launcher).creation_flags(0x08000000)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let input = child.stdin.take().unwrap();
+        let session = Arc::new(Session {
+            generation: "fixture".into(), native_id: "fixture".into(), control: directory.path().join("fixture.preset"), child: Mutex::new(child), input: Mutex::new(Some(input)),
+            job: Mutex::new(Some(job)),
+            protocol: Protocol::default(), stderr: Mutex::new(String::new()),
+        });
+        let reading = session.clone();
+        let (pid_tx, pid_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut lines = BufReader::new(stdout).lines();
+            let _ = pid_tx.send(lines.next().unwrap().unwrap().trim().parse::<u32>().unwrap());
+            for _line in lines {}
+            drop(reading);
+        });
+        let pid = pid_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let descendant = OwnedFixture(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid).unwrap() });
+        let mut unrelated_command = Command::new("cmd.exe");
+        unrelated_command.args(["/d", "/c", "pause"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        let (mut unrelated, unrelated_job) = crate::terminal::windows_job::spawn_session(&mut unrelated_command).unwrap();
+        let writing = session.input.lock().unwrap();
+        let stopping = session.clone();
+        let (tx, rx) = mpsc::channel();
+        let stopper = std::thread::spawn(move || { stopping.stop(); let _ = tx.send(()); });
+        let prompt = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let exited = unsafe { WaitForSingleObject(descendant.0, 3000) } == WAIT_OBJECT_0;
+        let unrelated_running = unrelated.try_wait().unwrap().is_none();
+        drop(unrelated_job);
+        unrelated.wait().unwrap();
+        drop(writing);
+        session.stop();
+        drop(descendant); // Always clean up the isolated child, including on regression failure.
+        stopper.join().unwrap();
+        reader.join().unwrap();
+        session.child.lock().unwrap().wait().unwrap();
+        assert!(prompt, "close must not wait for a thread holding stdin");
+        assert!(exited, "closing a dsh tab must terminate the .cmd launcher's descendant");
+        assert!(unrelated_running, "closing one session preserves the other session's process");
+        assert!(session.input.lock().unwrap().is_none(), "close releases the available stdin pipe");
+    }
+
     #[test]
     fn quota_sources_read_account_grants_and_provider_keys() {
         let home = std::env::temp_dir().join(format!("coffee-dsh-quota-{}", uuid::Uuid::new_v4()));

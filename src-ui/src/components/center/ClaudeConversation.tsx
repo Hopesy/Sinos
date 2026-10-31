@@ -1,3 +1,4 @@
+import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { diffLines } from 'diff';
 import { useAppLanguage, useAppState } from '../../store/app-state';
@@ -316,7 +317,7 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
   }, [syncScroll]);
   useEffect(() => {
     if (!isActive) return;
-    const onKey = (e: KeyboardEvent) => { if (e.ctrlKey && e.key.toLowerCase() === 'o' && !e.isComposing) { e.preventDefault(); setExpandedThinking(v => !v); setThinkingExpansion({}); } if (e.key === 'Escape' && s.busy && !s.requests.length) void controlClaude(sessionId, { subtype: 'interrupt' }).catch(() => {}); };
+    const onKey = (e: KeyboardEvent) => { if (!sessionKeyboardAllowed(e)) return; if (e.ctrlKey && e.key.toLowerCase() === 'o' && !e.isComposing) { e.preventDefault(); setExpandedThinking(v => !v); setThinkingExpansion({}); } if (e.key === 'Escape' && s.busy && !s.requests.length) void controlClaude(sessionId, { subtype: 'interrupt' }).catch(() => {}); };
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
   }, [isActive, s.busy, s.requests.length, sessionId]);
   const pauseFollow = useCallback(() => { prependAnchor.current = null; pinned.current = false; setScrolled(true); }, []);

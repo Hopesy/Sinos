@@ -23,7 +23,7 @@ struct Session {
 }
 
 #[derive(Default)]
-pub struct ClaudeSessions(Mutex<HashMap<String, Arc<Session>>>);
+pub struct ClaudeSessions(Mutex<HashMap<String, Arc<Session>>>, crate::session_start::SessionStarts);
 
 pub(crate) fn launch_context(app: &tauri::AppHandle, id: &str) -> Option<(crate::tool_config::ToolConfigEntry, String)> {
     let sessions = app.try_state::<ClaudeSessions>()?;
@@ -40,6 +40,7 @@ impl Session {
         drop(self.job.lock().unwrap().take());
         let _ = self.child.lock().unwrap().kill();
         if let Ok(mut input) = self.input.try_lock() { input.take(); }
+        for (_, reply) in self.pending.lock().unwrap().drain() { let _ = reply.send(Err("Native session closed".into())); }
     }
     fn write(&self, value: &Value) -> Result<(), String> {
         self.write_with_delivery(value, None)
@@ -101,7 +102,8 @@ fn executable(config: &crate::tool_config::ToolConfigEntry) -> (String, Vec<Stri
     ("claude".into(), args)
 }
 
-fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>) -> Result<Value, String> {
+fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>, pending: crate::session_start::PendingStart) -> Result<Value, String> {
+    pending.check()?;
     let config = crate::tool_config::get("claude");
     let cwd = cwd.filter(|p| !p.trim().is_empty()).or_else(|| (!config.default_cwd.is_empty()).then(|| config.default_cwd.clone()))
         .map(|p| crate::tool_config::expand_path(&p)).unwrap_or_else(|| dirs::home_dir().unwrap_or_default());
@@ -133,6 +135,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
     if let Some((mcp, prompt)) = crate::orchestration::parent_launch(&app, &id, &native_id, &cwd)? {
         command.args(["--mcp-config", &mcp, "--append-system-prompt", &prompt]);
     }
+    pending.check()?;
     #[cfg(windows)]
     let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command)
         .map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("无法启动 Claude：{e}")))?;
@@ -147,6 +150,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
     let sessions = app.state::<ClaudeSessions>();
     {
         let mut map = sessions.0.lock().unwrap();
+        if let Err(error) = pending.check() { session.stop(); return Err(error); }
         if map.contains_key(&id) { session.stop(); return Err("该标签已拥有 Claude 会话".into()); }
         map.insert(id.clone(), session.clone());
     }
@@ -236,7 +240,8 @@ pub async fn claude_session_history(sessions: State<'_, ClaudeSessions>, id: Str
 
 #[tauri::command]
 pub async fn claude_session_start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token)).await.map_err(|e| e.to_string())?
+    let pending = app.state::<ClaudeSessions>().1.begin(&id, &generation)?;
+    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token, pending)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -287,6 +292,7 @@ pub async fn claude_session_respond(sessions: State<'_, ClaudeSessions>, id: Str
 
 #[tauri::command]
 pub async fn claude_session_close(sessions: State<'_, ClaudeSessions>, id: String, generation: String) -> Result<(), String> {
+    sessions.1.cancel(&id, &generation);
     let session = {
         let mut map = sessions.0.lock().unwrap();
         if map.get(&id).is_some_and(|s| s.generation == generation) { map.remove(&id) } else { None }
@@ -298,6 +304,7 @@ pub async fn claude_session_close(sessions: State<'_, ClaudeSessions>, id: Strin
 }
 
 pub fn shutdown(sessions: &ClaudeSessions) {
+    sessions.1.shutdown();
     let sessions: Vec<_> = sessions.0.lock().unwrap().drain().map(|(_, session)| session).collect();
     for session in sessions { session.stop(); }
 }

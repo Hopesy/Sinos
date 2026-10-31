@@ -37,13 +37,15 @@ struct Session {
     native_id: Mutex<String>,
     child: Mutex<Child>,
     input: Mutex<Option<ChildStdin>>,
+    #[cfg(windows)]
+    job: Mutex<Option<crate::terminal::windows_job::SessionJob>>,
     protocol: Protocol,
     stderr: Mutex<String>,
     launch_config: crate::tool_config::ToolConfigEntry,
     launch_cwd: std::path::PathBuf,
 }
 #[derive(Default)]
-pub struct CodexSessions(Mutex<HashMap<String, Arc<Session>>>);
+pub struct CodexSessions(Mutex<HashMap<String, Arc<Session>>>, crate::session_start::SessionStarts);
 
 pub(crate) fn launch_context(app: &tauri::AppHandle, id: &str) -> Option<(crate::tool_config::ToolConfigEntry, String)> {
     let sessions = app.try_state::<CodexSessions>()?;
@@ -66,10 +68,13 @@ impl Session {
         input.write_all(b"\n").and_then(|_| input.flush()).map_err(|e| e.to_string())
     }
     fn stop(&self) {
+        #[cfg(windows)]
+        drop(self.job.lock().unwrap().take());
         // A blocked stdin writer must not prevent process termination.
         let _ = self.child.lock().unwrap().kill();
         // Close an available protocol pipe too: .cmd launchers can own a child server.
         if let Ok(mut input) = self.input.try_lock() { input.take(); }
+        for (_, reply) in self.protocol.pending.lock().unwrap().drain() { let _ = reply.send(Err("Native session closed".into())); }
     }
     fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         let id = Value::String(uuid::Uuid::new_v4().to_string());
@@ -93,7 +98,8 @@ fn emit(app: &tauri::AppHandle, id: &str, session: &Session, event: Value) {
     }
     let _ = app.emit("codex-session-event", json!({"id":id,"generation":session.generation,"event":event}));
 }
-fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>) -> Result<Value, String> {
+fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>, pending: crate::session_start::PendingStart) -> Result<Value, String> {
+    pending.check()?;
     let config = crate::tool_config::get("codex");
     let cwd = cwd.filter(|p| !p.trim().is_empty()).or_else(|| (!config.default_cwd.is_empty()).then(|| config.default_cwd.clone()))
         .map(|p| crate::tool_config::expand_path(&p)).unwrap_or_else(|| dirs::home_dir().unwrap_or_default());
@@ -123,16 +129,21 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
     { command = Command::new(&bin); }
     command.args(prefix).args(&config.extra_args).args(["app-server", "--listen", "stdio://"])
         .current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start Codex: {e}")))?;
+    pending.check()?;
     #[cfg(windows)]
-    crate::terminal::windows_job::assign_pid(child.id());
+    let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start Codex: {e}")))?;
+    #[cfg(not(windows))]
+    let mut child = command.spawn().map_err(|e| crate::session_directory::validate(&cwd).err().unwrap_or_else(|| format!("Could not start Codex: {e}")))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let input = child.stdin.take().unwrap();
-    let session = Arc::new(Session { id: id.clone(), generation, native_id: Mutex::new(String::new()), child: Mutex::new(child), input: Mutex::new(Some(input)), protocol: Protocol::default(), stderr: Mutex::new(String::new()), launch_config: config.clone(), launch_cwd: cwd.clone() });
+    let session = Arc::new(Session { id: id.clone(), generation, native_id: Mutex::new(String::new()), child: Mutex::new(child), input: Mutex::new(Some(input)),
+        #[cfg(windows)] job: Mutex::new(Some(job)),
+        protocol: Protocol::default(), stderr: Mutex::new(String::new()), launch_config: config.clone(), launch_cwd: cwd.clone() });
     {
         let sessions = app.state::<CodexSessions>();
         let mut map = sessions.0.lock().unwrap();
+        if let Err(error) = pending.check() { session.stop(); return Err(error); }
         if map.contains_key(&id) { session.stop(); return Err("This tab already owns a Codex session".into()); }
         map.insert(id.clone(), session.clone());
     }
@@ -161,6 +172,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
                 _ => std::thread::sleep(Duration::from_millis(150)),
             }
         };
+        s.stop();
         for (_, tx) in s.protocol.pending.lock().unwrap().drain() { let _ = tx.send(Err("Codex process exited".into())); }
         emit(&watcher_app, &watcher_id, &s, json!({"method":"coffee/exit","params":{"code":code,"detail":s.stderr.lock().unwrap().as_str()}}));
         let sessions = watcher_app.state::<CodexSessions>(); let mut map = sessions.0.lock().unwrap();
@@ -183,7 +195,8 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
 
 #[tauri::command]
 pub async fn codex_session_start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<String>, resume_token: Option<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token)).await.map_err(|e| e.to_string())?
+    let pending = app.state::<CodexSessions>().1.begin(&id, &generation)?;
+    tauri::async_runtime::spawn_blocking(move || start(app, id, generation, cwd, resume_token, pending)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn codex_session_request(sessions: State<'_, CodexSessions>, id: String, generation: String, method: String, params: Value) -> Result<Value, String> {
@@ -207,6 +220,7 @@ pub async fn codex_session_respond(sessions: State<'_, CodexSessions>, id: Strin
 }
 #[tauri::command]
 pub async fn codex_session_close(sessions: State<'_, CodexSessions>, id: String, generation: String) -> Result<(), String> {
+    sessions.1.cancel(&id, &generation);
     let session = {
         let mut map = sessions.0.lock().unwrap();
         if map.get(&id).is_some_and(|s| s.generation == generation) { map.remove(&id) } else { None }
@@ -217,6 +231,7 @@ pub async fn codex_session_close(sessions: State<'_, CodexSessions>, id: String,
     Ok(())
 }
 pub fn shutdown(sessions: &CodexSessions) {
+    sessions.1.shutdown();
     let sessions: Vec<_> = sessions.0.lock().unwrap().drain().map(|(_, session)| session).collect();
     for s in sessions { s.stop(); }
 }
@@ -224,6 +239,67 @@ pub fn shutdown(sessions: &CodexSessions) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn stop_closes_launcher_descendants_with_busy_stdin() {
+        use std::os::windows::process::CommandExt;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+        struct OwnedFixture(HANDLE);
+        impl Drop for OwnedFixture {
+            fn drop(&mut self) { unsafe { let _ = TerminateProcess(self.0, 0); let _ = CloseHandle(self.0); } }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("child.ps1");
+        std::fs::write(&script, "[Console]::WriteLine($PID); [Console]::ReadLine() | Out-Null").unwrap();
+        let launcher = directory.path().join("launcher.cmd");
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        std::fs::write(&launcher, format!("@echo off\r\n\"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"\r\n", powershell.display(), script.display())).unwrap();
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c"]).arg(&launcher).creation_flags(0x08000000)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let input = child.stdin.take().unwrap();
+        let session = Arc::new(Session {
+            id: "fixture".into(), generation: "fixture".into(), native_id: Mutex::new("fixture".into()), child: Mutex::new(child), input: Mutex::new(Some(input)),
+            job: Mutex::new(Some(job)),
+            protocol: Protocol::default(), stderr: Mutex::new(String::new()), launch_config: Default::default(), launch_cwd: directory.path().into(),
+        });
+        let reading = session.clone();
+        let (pid_tx, pid_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut lines = BufReader::new(stdout).lines();
+            let _ = pid_tx.send(lines.next().unwrap().unwrap().trim().parse::<u32>().unwrap());
+            for _line in lines {}
+            drop(reading);
+        });
+        let pid = pid_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let descendant = OwnedFixture(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid).unwrap() });
+        let mut unrelated_command = Command::new("cmd.exe");
+        unrelated_command.args(["/d", "/c", "pause"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        let (mut unrelated, unrelated_job) = crate::terminal::windows_job::spawn_session(&mut unrelated_command).unwrap();
+        let writing = session.input.lock().unwrap();
+        let stopping = session.clone();
+        let (tx, rx) = mpsc::channel();
+        let stopper = std::thread::spawn(move || { stopping.stop(); let _ = tx.send(()); });
+        let prompt = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let exited = unsafe { WaitForSingleObject(descendant.0, 3000) } == WAIT_OBJECT_0;
+        let unrelated_running = unrelated.try_wait().unwrap().is_none();
+        drop(unrelated_job);
+        unrelated.wait().unwrap();
+        drop(writing);
+        session.stop();
+        drop(descendant); // Always clean up the isolated child, including on regression failure.
+        stopper.join().unwrap();
+        reader.join().unwrap();
+        session.child.lock().unwrap().wait().unwrap();
+        assert!(prompt, "close must not wait for a thread holding stdin");
+        assert!(exited, "closing a codex tab must terminate the .cmd launcher's descendant");
+        assert!(unrelated_running, "closing one session preserves the other session's process");
+        assert!(session.input.lock().unwrap().is_none(), "close releases the available stdin pipe");
+    }
+
     #[test]
     fn stop_does_not_wait_for_a_busy_input_pipe() {
         #[cfg(windows)]
@@ -243,7 +319,9 @@ mod tests {
         let input = child.stdin.take().unwrap();
         let session = Arc::new(Session {
             id: "test".into(), generation: String::new(), native_id: Mutex::new(String::new()), child: Mutex::new(child),
-            input: Mutex::new(Some(input)), protocol: Protocol::default(), stderr: Mutex::new(String::new()),
+            input: Mutex::new(Some(input)),
+            #[cfg(windows)] job: Mutex::new(None),
+            protocol: Protocol::default(), stderr: Mutex::new(String::new()),
             launch_config: Default::default(), launch_cwd: Default::default(),
         });
         let writing = session.input.lock().unwrap();

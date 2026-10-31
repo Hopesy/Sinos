@@ -1405,16 +1405,16 @@ export function CenterPanel() {
             }}
           >
             {isDshConversation(t) ? (
-              <DshConversation key={`dsh-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
+              <DshConversation key={`dsh-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
             ) : isCodexConversation(t) ? (
-              <CodexConversation key={`codex-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
+              <CodexConversation key={`codex-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
             ) : isClaudeConversation(t) ? (
               <ClaudeConversation
                 key={`claude-${t.id}-${t.restartKey ?? 0}`}
                 sessionId={t.id}
                 cwd={t.folderPath}
                 resumeToken={t.resumeToken}
-                isActive={t.id === activeTerminalId && contentActive}
+                isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen}
                 isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)}
                 hasBg={hasBg}
                 bgUrl={bgUrl}
@@ -1431,7 +1431,7 @@ export function CenterPanel() {
                       toolName={AGENT_CATALOG.find(a => a.key === t.tool)?.label}
                       theme={state.currentTheme}
                       lang={state.currentLang}
-                      isActive={t.id === activeTerminalId && contentActive && t.viewMode !== 'chat'}
+                      isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen && t.viewMode !== 'chat'}
                       conversationActive={mobileWatching.has(t.id) || (contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId) && t.viewMode === 'chat')}
                       isVisible={t.viewMode !== 'chat' && contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)}
                       toolData={t.toolData}
@@ -1463,7 +1463,7 @@ export function CenterPanel() {
                         agentStatus={t.agentStatus}
                         isActive={mobileWatching.has(t.id) || (contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId) && (t.viewMode === 'chat' || Boolean(t.chatPending)))}
                         isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId) && t.viewMode === 'chat'}
-                        isFocused={contentActive && t.id === activeTerminalId}
+                        isFocused={contentActive && !state.settingsOpen && t.id === activeTerminalId}
                         onPendingResolved={() => dispatch({ type: 'SET_CHAT_PENDING', id: t.id })}
                         onPasteToDraft={(text) => dispatch({ type: 'APPEND_GAMBIT_DRAFT', id: t.id, text })}
                         hasBg={hasBg && t.viewMode === 'chat'}

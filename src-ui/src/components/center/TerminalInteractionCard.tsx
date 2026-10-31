@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { type TerminalInteraction } from '../../lib/terminal-interaction';
 import { getTabActions } from '../../lib/tab-actions';
+import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
 import { useT } from '../../i18n/useT';
 import './TerminalInteractionCard.css';
 
@@ -67,7 +68,7 @@ export function TerminalInteractionCard({
   useEffect(() => {
     if (!keyboardEnabled || submitting) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (!sessionKeyboardAllowed(event) || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input, textarea, [contenteditable="true"]')) return;
 

@@ -1,3 +1,4 @@
+import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAppState } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
@@ -118,7 +119,7 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
   useEffect(() => { const node = scroll.current; if (!node) return; const observer = new ResizeObserver(sync); observer.observe(node); if (node.firstElementChild) observer.observe(node.firstElementChild); return () => observer.disconnect(); }, [sync]);
   useEffect(() => {
     if (!isActive) return;
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented && s.busy && !(e.target as HTMLElement)?.closest('[role="dialog"]')) { e.preventDefault(); void interruptCodex(sessionId); } };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && sessionKeyboardAllowed(e) && s.busy && !(e.target as HTMLElement)?.closest('[role="dialog"]')) { e.preventDefault(); void interruptCodex(sessionId); } };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, [isActive, s.busy, sessionId]);
   const pause = () => { anchor.current = null; pinned.current = false; setScrolled(true); };
