@@ -5,7 +5,7 @@ import ReactDOM from 'react-dom/client';
 import { AppProvider } from './store/app-state';
 import { App } from './App';
 import { commands } from './tauri';
-import { RevealMainWindow } from './components/common/RevealMainWindow';
+import { DesktopStartup } from './components/common/DesktopStartup';
 import { loadToolInfo } from './lib/tool-info';
 import { onWindowBackground, onWindowForeground } from './lib/window-focus-filter';
 import { IS_MACOS, IS_WINDOWS } from './lib/platform';
@@ -22,21 +22,19 @@ if (IS_MACOS) document.documentElement.classList.add('is-macos');
 // gated to this class so Linux keeps its transparent + CSS-clip rounded look).
 if (IS_WINDOWS) document.documentElement.classList.add('is-windows');
 
-// Block React mount on the registry IPC so every component reads
-// canonical display names on first render (no 'claude' → 'Claude
-// Code' label flash). The window is `visible: false` until
-// show_main_window fires below, so the ~10ms wait is invisible.
-const uiScaleReady = initializeUiScale();
-void Promise.all([loadToolInfo(), uiScaleReady]).finally(() => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
+// Paint the startup surface immediately. Restore zoom before revealing the
+// window, and load canonical tool names before mounting the workspace beneath it.
+const uiScaleReady = initializeUiScale().catch(() => {});
+const workspaceReady = Promise.allSettled([loadToolInfo(), uiScaleReady]);
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <DesktopStartup ready={workspaceReady} scaleReady={uiScaleReady}>
       <AppProvider>
         <App />
-        <RevealMainWindow />
       </AppProvider>
-    </React.StrictMode>
-  );
-});
+    </DesktopStartup>
+  </React.StrictMode>
+);
 
 // Warm document.fonts so Inter is fully decoded BEFORE any UI element first
 // needs glyphs that the body had not yet rendered. <link rel="preload"> in
