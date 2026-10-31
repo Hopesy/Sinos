@@ -55,6 +55,15 @@ it('keeps slow startup truthful and exposes reload and native window controls', 
   fireEvent.click(screen.getByRole('button', { name: '关闭' })); fireEvent.click(screen.getByRole('button', { name: '最小化' }));
   expect(native.close).toHaveBeenCalledTimes(1); expect(native.minimize).toHaveBeenCalledTimes(1);
 });
+it('keeps the startup surface usable when the workspace module fails to load', async () => {
+  let reject!: (error: Error) => void;
+  const ready = new Promise<void>((_, fail) => { reject = fail; });
+  render(<StrictMode><DesktopStartup ready={ready} scaleReady={Promise.resolve()}><button>Workspace content</button></DesktopStartup></StrictMode>);
+  reject(new Error('workspace chunk unavailable')); await flush(); await tick(); await tick();
+  expect(screen.getByRole('button', { name: '重新加载' })).toBeTruthy();
+  expect(screen.queryByText('Workspace content')).toBeNull();
+  expect(native.invoke).toHaveBeenCalledExactlyOnceWith('show_main_window');
+});
 it('removes the ceremonial hold and fade when reduced motion is requested', async () => {
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   const f = mount(); f.ready.resolve(); f.scale.resolve(); await flush();

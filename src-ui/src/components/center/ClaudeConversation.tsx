@@ -13,6 +13,8 @@ import { useDataAttr } from '../../lib/use-data-attr';
 import { controlClaude, loadClaudeHistory, respondClaude, retainClaudeSession, useClaudeSession } from '../../lib/claude-session';
 import { object, list, text, number, resultText, type ClaudeMessage, type ClaudeRequest } from '../../lib/claude-protocol';
 import { useConversationVirtualizer } from './conversation-virtualizer';
+import { ConversationVisible } from './conversation-visibility';
+import { DeferredConversationContent } from './DeferredConversationContent';
 import { MarkdownContent } from './MarkdownContent';
 import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
 import { ConversationDirectory } from '../../lib/conversation-links';
@@ -150,19 +152,19 @@ function ToolContent({ content, path, plain = false, previewHeight = 95 }: { con
   return <div className="claude-tool-content">
     <ToolActions content={content} expanded={expanded} onToggle={overflow ? () => setExpanded(value => !value) : undefined} />
     <div className="claude-tool-content-scroll" ref={ref} style={{ maxHeight: expanded ? 600 : previewHeight }}>
-      {plain ? <pre className="claude-code">{content}</pre> : <Code content={content} path={path} />}
+      <DeferredConversationContent>{plain ? <pre className="claude-code">{content}</pre> : <Code content={content} path={path} />}</DeferredConversationContent>
     </div>
   </div>;
 }
 
+type DiffRow = { old?: string; next?: string; oldLine?: number; nextLine?: number; changed: boolean };
+
 function EditDiff({ before, after, path }: { before: string; after: string; path: string }) {
   const [expanded, setExpanded] = useState(false);
-  const mode = useDataAttr('data-mode');
-  const [tokens, setTokens] = useState<[LineTokens[] | null, LineTokens[] | null]>([null, null]);
   const rows = useMemo(() => {
     const changes = diffLines(before, after, { timeout: 200 });
     if (!changes) return [];
-    const out: Array<{ old?: string; next?: string; oldLine?: number; nextLine?: number; changed: boolean }> = [];
+    const out: DiffRow[] = [];
     let oldLine = 1, nextLine = 1;
     const lines = (s: string) => s.replace(/\n$/, '').split('\n');
     for (let i = 0; i < changes.length; i++) {
@@ -174,19 +176,25 @@ function EditDiff({ before, after, path }: { before: string; after: string; path
     }
     return out;
   }, [before, after]);
+  return <div className={`claude-diff ${expanded ? 'is-expanded' : ''}`}>
+    <ToolActions content={after} expanded={expanded} onToggle={rows.length > 6 || before.length + after.length > 800 ? () => setExpanded(value => !value) : undefined} />
+    <div className="claude-diff-scroll"><DeferredConversationContent><EditDiffRows rows={rows} before={before} after={after} path={path} /></DeferredConversationContent></div>
+  </div>;
+}
+
+function EditDiffRows({ rows, before, after, path }: { rows: DiffRow[]; before: string; after: string; path: string }) {
+  const mode = useDataAttr('data-mode');
+  const [tokens, setTokens] = useState<[LineTokens[] | null, LineTokens[] | null]>([null, null]);
   useEffect(() => {
     let active = true;
     if (before.length + after.length <= 120000) void Promise.all([tokenizeFile(before, path, getShikiTheme(mode)), tokenizeFile(after, path, getShikiTheme(mode))]).then(t => { if (active) setTokens(t); });
     return () => { active = false; };
   }, [before, after, path, mode]);
   const render = (value: string | undefined, index: number | undefined, side: 0 | 1) => index && tokens[side]?.[index - 1] ? tokens[side]![index - 1].map((t, i) => <span key={i} style={{ color: t.color }}>{t.content}</span>) : value;
-  return <div className={`claude-diff ${expanded ? 'is-expanded' : ''}`}>
-    <ToolActions content={after} expanded={expanded} onToggle={rows.length > 6 || before.length + after.length > 800 ? () => setExpanded(value => !value) : undefined} />
-    <div className="claude-diff-scroll">{rows.length ? rows.map((r, i) => <div className="claude-diff-row" key={i}>
+  return <>{rows.length ? rows.map((r, i) => <div className="claude-diff-row" key={i}>
       <div className={`${r.changed ? r.old !== undefined ? 'is-removed' : 'is-gap' : ''}`}><span className="claude-line-number">{r.oldLine}</span><code>{render(r.old, r.oldLine, 0)}</code></div>
       <div className={`${r.changed ? r.next !== undefined ? 'is-added' : 'is-gap' : ''}`}><span className="claude-line-number">{r.nextLine}</span><code>{render(r.next, r.nextLine, 1)}</code></div>
-    </div>) : <Code content={after} path={path} />}</div>
-  </div>;
+    </div>) : <Code content={after} path={path} />}</>;
 }
 
 export const ClaudeTool = memo(function ClaudeTool({ message }: { message: ClaudeMessage }) {
@@ -358,7 +366,7 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
   const empty = !directoryIssue && !s.messages.length && !s.busy && !s.requests.length && (!s.ready || !s.error);
   const model = s.models.find(m => m.value === s.model) ?? s.models.find(m => m.resolvedModel === s.model);
   const summary = !empty && !s.busy && s.endedAt && <div className="claude-turn-summary">{t('claude.worked_for', { duration: elapsed(s.endedAt - (s.startedAt ?? s.endedAt), t) })}{used > 0 && <> · {t('claude.tokens', { count: count(used) })}</>}{s.totalCost !== undefined && s.totalCost > 0 && <> · ~${s.totalCost.toFixed(4)}</>}</div>;
-  return <ConversationDirectory.Provider value={cwd}><div className={`claude-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
+  return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
     <div className="claude-scroll" ref={scrollRef} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onScroll={onScroll} onWheelCapture={event => { if (event.deltaY < 0 && !event.ctrlKey) pauseFollow(); }} onTouchMoveCapture={pauseFollow} onKeyDownCapture={event => { if ((['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) && !(event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]')) pauseFollow(); }}>
       <div className={`claude-thread${empty ? ' is-empty' : ''}`}>
@@ -392,5 +400,5 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" title={directoryError || s.error} onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('claude.reconnect')}</button>}
     {conversationMenu.menu}
-  </div></ConversationDirectory.Provider>;
+  </div></ConversationVisible.Provider></ConversationDirectory.Provider>;
 }

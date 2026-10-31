@@ -4,6 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppState } from './store/app-state';
 import { retryInvoke } from './tauri';
 import { initNotifySound } from './lib/notify-sound';
+import { useDesktopNotifications } from './lib/desktop-notifications';
+import { isConversationSession } from './lib/chat-tools';
+import { recordSessionQuestion, recordSessionReply } from './lib/session-replies';
 import { useOrchestration } from './lib/orchestration';
 import { useSessionReplyVisibility } from './lib/use-session-reply-visibility';
 import { routeFileDrop } from './lib/file-drop';
@@ -193,6 +196,7 @@ export function App() {
   const { state } = useAppState();
   const orchestration = useOrchestration();
   useSessionReplyVisibility(state);
+  useDesktopNotifications();
   const activeTabId = state.agentPageActive ? `agent:${state.agentPageActive}`
     : state.diffTabActive ? 'diff' : state.activeTerminalId;
   // Resolved half of the palette (index.html sets it pre-paint, the effect
@@ -283,7 +287,13 @@ export function App() {
   // array (the same source the dynamic island reads via agentStatus) so chimes
   // match the visual status exactly. This fires on every terminals change.
   useEffect(() => {
-    return initNotifySound(state.terminals, orchestration.tasks);
+    const terminals = state.terminals;
+    return initNotifySound(terminals, orchestration.tasks, (id, kind) => {
+      const tab = terminals.find(terminal => terminal.id === id);
+      if (!tab?.tool) return;
+      if (kind === 'wait') recordSessionQuestion(id, tab.tool);
+      else recordSessionReply(id, tab.tool, tab.resumeToken || `@${id}`);
+    }, new Set(terminals.filter(isConversationSession).map(tab => tab.id)));
   }, [state.terminals, orchestration.tasks]);
 
   // Apply theme + shape on mount and change — must sync with the inline script in index.html

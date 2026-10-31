@@ -6,6 +6,7 @@ import { tokenizeByLang, getShikiTheme, type LineTokens } from '../../lib/shiki'
 import { useDataAttr } from '../../lib/use-data-attr';
 import { commands } from '../../tauri';
 import { ConversationDirectory, conversationLink } from '../../lib/conversation-links';
+import { DeferredConversationContent } from './DeferredConversationContent';
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
   const dataMode = useDataAttr('data-mode');
@@ -76,7 +77,7 @@ const MARKDOWN_COMPONENTS: Components = {
 function MarkdownContentImpl({ content }: { content: string }) {
   const cwd = useContext(ConversationDirectory);
   return (
-    <div className="md-body">
+    <DeferredConversationContent className="md-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={MARKDOWN_COMPONENTS}
@@ -84,7 +85,7 @@ function MarkdownContentImpl({ content }: { content: string }) {
       >
         {content}
       </ReactMarkdown>
-    </div>
+    </DeferredConversationContent>
   );
 }
 

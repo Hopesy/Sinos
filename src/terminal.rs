@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
+pub(crate) mod output_buffer;
+use output_buffer::OutputBuffer;
+
 /// Set by the frontend on `document.visibilitychange`. When true, every
 /// per-session worker thread (ticker, emitter) widens its sleep / coalesce
 /// window so a Coffee CLI window left in the background drops to near-zero
@@ -546,17 +549,13 @@ pub struct TerminalSession {
     pub paused: Arc<AtomicBool>,
     /// Monotonic number of output batches written to `output_buffer`. Remote
     /// WebSocket clients use it to detect ring-buffer rollover without
-    /// dropping or replaying chunks when the 2000-entry cap is reached.
+    /// dropping or replaying chunks when the byte or entry cap is reached.
     pub output_sequence: Arc<AtomicU64>,
     /// Each projected mobile choice can be applied once per output snapshot.
     pub answered_output_sequence: Arc<AtomicU64>,
-    /// Ring buffer of recent base64-encoded output chunks. Originally
-    /// populated for DetachedTerminal's history replay (retired 2026-04)
-    /// and the MCP `read_pane` tool (also archived). Currently referenced
-    /// only by the dormant `mcp_server` module; kept alive here so that
-    /// module still compiles and can be revived without re-plumbing.
-    #[allow(dead_code)] // intentionally unread in the active build (see above)
-    pub output_buffer: Arc<Mutex<Vec<String>>>,
+    /// Byte-bounded raw UTF-8 history for remote mobile replay. Independent
+    /// of xterm scrollback and the persisted conversation transcript.
+    pub output_buffer: Arc<Mutex<OutputBuffer>>,
 }
 
 pub type SharedSession = Arc<Mutex<std::collections::HashMap<String, TerminalSession>>>;
@@ -1192,7 +1191,7 @@ pub fn spawn(
     let is_tab_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // Store session with shared writer reference and master kept alive.
-    let output_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let output_buffer = Arc::new(Mutex::new(OutputBuffer::default()));
     let output_sequence: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     {
         let writer_clone = writer.clone();
@@ -1447,13 +1446,9 @@ pub fn spawn(
                     },
                 );
 
-                // One entry per batch in the detached-window history ring.
+                // Publish one sequence entry per batch under the replay lock.
                 if let Ok(mut ring) = output_buffer_for_emitter.lock() {
                     ring.push(data);
-                    if ring.len() > 2000 {
-                        let drain = ring.len() - 2000;
-                        ring.drain(..drain);
-                    }
                     output_sequence_for_emitter.fetch_add(1, Ordering::Relaxed);
                 }
 

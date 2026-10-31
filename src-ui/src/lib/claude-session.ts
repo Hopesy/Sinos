@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { directoryFailure } from './session-directory';
-import { recordSessionReply } from './session-replies';
+import { recordSessionReply, recordSessionQuestion } from './session-replies';
 import { readLaunchControls, setSessionControls, clearSessionControls } from './session-controls';
 import { invoke, type ToolConfigEntry } from '../tauri';
 import { emptyClaudeState, reduceClaudeEvent, object, list, text, type ClaudeState, type ClaudeModel, type ClaudeCommand, type Json } from './claude-protocol';
@@ -43,11 +43,13 @@ function listen() {
     if (payload.event.type === 'coffee_exit') clearSessionControls(payload.id, c.generation);
     if (c.connecting && !c.state.ready && payload.event.type === 'coffee_exit') { c.startupExit = text(payload.event.detail) || 'Claude process exited'; return; }
     const wasBusy = c.state.busy;
+    const previousRequests = new Set(c.state.requests.map(request => request.id));
     c.state = reduceClaudeEvent(c.state, payload.event);
+    if (c.owners > 0 && c.state.requests.some(request => !previousRequests.has(request.id))) recordSessionQuestion(payload.id, 'claude');
     if (wasBusy && !c.state.busy && payload.event.type === 'result' && payload.event.subtype === 'success'
       && payload.event.is_error !== true && !c.state.interrupted) recordSessionReply(payload.id, 'claude', c.state.nativeId);
     publish(c, ['control_request', 'result', 'coffee_exit'].includes(text(payload.event.type)));
-  }));
+  })).catch(error => { listening = undefined; throw error; });
 }
 export function useClaudeSession(id: string): ClaudeState;
 export function useClaudeSession<T>(id: string, select: (state: ClaudeState) => T): T;

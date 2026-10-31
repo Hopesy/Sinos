@@ -8,6 +8,7 @@ import { clipboardWrite } from '../../lib/clipboard';
 import { directoryFailure, directoryFailureMessage } from '../../lib/session-directory';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { useConversationVirtualizer } from './conversation-virtualizer';
+import { ConversationVisible } from './conversation-visibility';
 import type { ChatMessage } from '../../lib/chat-transcript';
 import { MarkdownContent } from './MarkdownContent';
 import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
@@ -144,7 +145,7 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
     <div className="codex-tool-heading"><button type="button" className="claude-tool-heading" aria-expanded={!!expanded[message.id]} onClick={() => toggle(message.id)}><span className="codex-chevron" aria-hidden="true">{expanded[message.id] ? '⌄' : '›'}</span><strong>{message.role === 'reasoning' ? t('conversation.reasoning') : message.toolName}</strong><span>{message.role === 'reasoning' ? title(message) : title(message).replace(`${message.toolName} · `, '')}</span></button><MessageCopyButton copied={copied === message.id} onCopy={() => copy(message.id, [message.toolInput, message.content].filter(Boolean).join('\n'))} /></div>
     {expanded[message.id] && (message.role === 'reasoning' ? <MarkdownContent content={message.content} /> : <pre className="codex-tool-body">{[message.toolInput, message.content].filter(Boolean).join('\n\n')}</pre>)}
   </div>;
-  return <ConversationDirectory.Provider value={cwd}><div className={`claude-conversation codex-conversation dsh-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
+  return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation codex-conversation dsh-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
     <div className="claude-scroll" ref={scroll} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
       const node = scroll.current; if (!node?.clientHeight) return;
@@ -185,5 +186,5 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('dsh.reconnect')}</button>}
     {conversationMenu.menu}
-  </div></ConversationDirectory.Provider>;
+  </div></ConversationVisible.Provider></ConversationDirectory.Provider>;
 }

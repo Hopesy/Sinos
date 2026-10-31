@@ -1,15 +1,14 @@
 // main.tsx — Entry point
 
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
-import { AppProvider } from './store/app-state';
-import { App } from './App';
 import { commands } from './tauri';
 import { DesktopStartup } from './components/common/DesktopStartup';
 import { loadToolInfo } from './lib/tool-info';
 import { onWindowBackground, onWindowForeground } from './lib/window-focus-filter';
 import { IS_MACOS, IS_WINDOWS } from './lib/platform';
 import { initializeUiScale } from './lib/ui-scale';
+import './styles/global.css';
 
 // macOS uses native window decorations + traffic lights (titleBarStyle:
 // "Overlay" in tauri.macos.conf.json). Tag <html> before first paint so the
@@ -25,13 +24,17 @@ if (IS_WINDOWS) document.documentElement.classList.add('is-windows');
 // Paint the startup surface immediately. Restore zoom before revealing the
 // window, and load canonical tool names before mounting the workspace beneath it.
 const uiScaleReady = initializeUiScale().catch(() => {});
-const workspaceReady = Promise.allSettled([loadToolInfo(), uiScaleReady]);
+// Fetch the workspace in parallel without making its module graph a condition
+// for painting the lightweight startup surface.
+const workspaceModule = import('./DesktopWorkspace');
+// Entry modules recreate the root and use full reloads during development.
+// eslint-disable-next-line react-refresh/only-export-components
+const Workspace = lazy(() => workspaceModule);
+const workspaceReady = Promise.all([loadToolInfo(), uiScaleReady, workspaceModule]);
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <DesktopStartup ready={workspaceReady} scaleReady={uiScaleReady}>
-      <AppProvider>
-        <App />
-      </AppProvider>
+      <Suspense fallback={null}><Workspace /></Suspense>
     </DesktopStartup>
   </React.StrictMode>
 );

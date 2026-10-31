@@ -806,6 +806,9 @@ fn take_pending_launch(state: State<'_, AppState>) -> Option<crate::launch::Laun
 #[tauri::command]
 async fn check_tools_installed() -> Result<std::collections::HashMap<String, bool>, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        // The startup surface can paint while maintenance runs. Detection
+        // waits here on a worker so it observes repaired CLI entry points.
+        crate::hook_installer::maintain_all();
         let mut result = std::collections::HashMap::new();
         for tool in crate::tools::TOOLS {
             result.insert(tool.id.to_string(), binary_on_path(tool.binary_name));
@@ -6182,6 +6185,8 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             pick_folder,
             window_minimize,
             play_notify_sound,
+            crate::desktop_notifications::set_task_badge,
+            crate::desktop_notifications::show_desktop_notification,
             window_maximize,
             window_close,
             show_main_window,
@@ -6271,8 +6276,9 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
         ])
         .setup(|app| {
             crate::desktop_lifecycle::initialize(app.handle());
+            crate::desktop_notifications::initialize(app.handle());
             // Presentation and npm-bin maintenance never modifies status hooks.
-            crate::hook_installer::maintain_all();
+            std::thread::spawn(crate::hook_installer::maintain_all);
 
             // Paired phones share desktop sessions through the outbound relay.
             // Initialize its state and message queue without a local listener.

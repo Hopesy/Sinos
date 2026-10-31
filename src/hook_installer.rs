@@ -8,6 +8,10 @@ use std::fs;
 use std::path::Path;
 
 pub fn maintain_all() {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(maintain_all_inner);
+}
+fn maintain_all_inner() {
     if let Some(home) = dirs::home_dir() {
         for tool in crate::tools::TOOLS {
             maintain_tool(tool, &home);
@@ -318,6 +322,7 @@ fn run_with_timeout(
     // doesn't stall boot. Returns Ok(true) if it exited, Ok(false) if killed.
     use std::time::Instant;
     let mut child = cmd.spawn()?;
+    crate::terminal::windows_job::assign_pid(child.id());
     let deadline = Instant::now() + dur;
     loop {
         if let Some(_status) = child.try_wait()? {

@@ -3,11 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 
-const bundle = await build({ stdin: { resolveDir: process.cwd(), contents: `export * from './src/lib/session-replies';export * from './src/lib/use-session-reply-visibility'; export * as claude from './src/lib/claude-session'; export * as codex from './src/lib/codex-session';` }, bundle: true, platform: 'node', format: 'cjs', write: false,
+const bundle = await build({ stdin: { resolveDir: process.cwd(), contents: `export * from './src/lib/session-replies';export * from './src/lib/use-session-reply-visibility'; export * as agent from './src/lib/agent-client'; export * as claude from './src/lib/claude-session'; export * as codex from './src/lib/codex-session';` }, bundle: true, platform: 'node', format: 'cjs', write: false,
   plugins: [{ name: 'native-boundary', setup(b) {
     b.onResolve({ filter: /(?:^react$|\/tauri$|^@tauri-apps\/api\/event$)/ }, args => ({ path: args.path, namespace: 'fixture' }));
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ loader: 'js', contents: args.path === 'react'
-      ? 'export const useEffect=globalThis.mountEffect;export function useSyncExternalStore(){}'
+      ? 'export const useEffect=globalThis.mountEffect;export const useSyncExternalStore=(_,snapshot)=>snapshot();'
       : args.path.includes('/event') ? 'export async function listen(name,fn){globalThis.nativeListeners.set(name,fn);return()=>{}}'
         : 'export const invoke=globalThis.nativeInvoke;' }));
   } }],
@@ -18,6 +18,8 @@ function fixture(storage = new Map(), blocked = false) {
   const document = { hidden: false, hasFocus: () => focused, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name) };
   const module = { exports: {} };
   const nativeInvoke = async (command, args) => {
+    if (command === 'agent_list_conversations') return [];
+    if (command === 'agent_get_conversation') return { id: args.conversationId, route: 'desktop', messages: [], hasOlder: false };
     if (command.endsWith('_session_start')) {
       generations.set(args.id, args.generation);
       if (command.startsWith('claude')) return { sessionId: 'shared-token', initialization: {}, history: { data: '{"type":"result","subtype":"success"}', cursor: 0 } };
@@ -64,10 +66,15 @@ try {
   assert.deepEqual(unread(), ['claude:shared-token'], 'interruptions and failures do not invent successful replies');
   startCodex(); finishCodex('completed');
   assert.deepEqual(unread(), ['claude:shared-token', 'codex:shared-token'], 'cross-tool tokens stay independent');
+  assert.equal(h.api.getUnreadTaskCount(), 2, 'the taskbar counts completed turns');
+  startClaude(); finishClaude(); finishClaude();
+  assert.equal(h.api.getUnreadTaskCount(), 3, 'another completed turn adds one; replay adds none');
   const restarted = fixture(h.storage);
   assert.deepEqual([...restarted.api.getUnreadSessionReplies()].sort(), unread(), 'unread markers survive restart');
+  assert.equal(restarted.api.getUnreadTaskCount(), 3, 'completion counts survive restart');
   h.view({ activeTerminalId: 'a' });
   assert.deepEqual(unread(), ['codex:shared-token']);
+  assert.equal(h.api.getUnreadTaskCount(), 1, 'reading one conversation clears all of its completed turns');
   finishClaude(); startClaude(); finishClaude();
   assert.deepEqual(unread(), ['codex:shared-token'], 'duplicates and a visible foreground reply do not restore unread');
   h.focus(false); startClaude(); finishClaude();
@@ -99,6 +106,36 @@ try {
   const unavailable = fixture(new Map([['coffee:unread-session-replies', '{broken']]), true);
   unavailable.api.recordSessionReply('one', 'codex', 'new');
   assert.deepEqual([...unavailable.api.getUnreadSessionReplies()], ['codex:new']);
+  assert.equal(unavailable.api.getUnreadTaskCount(), 1);
+  unavailable.api.clearUnreadTasks(); assert.equal(unavailable.api.getUnreadTaskCount(), 0);
+
+  const transient = fixture();
+  transient.api.recordSessionReply('temp', 'codex', '@temp');
+  transient.api.recordSessionReply('temp', 'codex', '@temp');
+  assert.equal(fixture(transient.storage).api.getUnreadTaskCount(), 0, 'ephemeral terminal IDs never survive restart');
+  transient.api.updateSessionReplyReaders([{ id: 'temp', tool: 'codex', resumeToken: 'real-token' }], []);
+  assert.equal(transient.api.getUnreadTaskCount(), 2, 'receiving the real conversation ID preserves its count');
+  assert.deepEqual([...transient.api.getUnreadSessionReplies()], ['codex:real-token']);
+  transient.api.recordSessionReply('closed', 'claude', '@closed');
+  transient.api.updateSessionReplyReaders([], []);
+  assert.equal(transient.api.getUnreadTaskCount(), 2, 'closing an ephemeral terminal removes its inaccessible count');
+  transient.api.updateSessionReplyReaders([{ id: 'reopened', tool: 'codex', resumeToken: 'real-token' }], ['reopened']);
+  assert.equal(transient.api.getUnreadTaskCount(), 0, 'reopening the saved conversation acknowledges its completed turns');
+
+  const agent = fixture(), event = (kind, runId = 'one') => agent.api.agent.receiveAgentEvent({ conversationId: 'agent-test', runId, kind });
+  event('done'); assert.equal(agent.api.getUnreadTaskCount(), 0, 'unsolicited agent results do not count');
+  event('started'); event('done'); event('done');
+  assert.equal(agent.api.getUnreadTaskCount(), 1, 'one successful agent run counts once');
+  for (const kind of ['error', 'cancelled']) { event('started', kind); event(kind, kind); event('done', kind); }
+  assert.equal(agent.api.getUnreadTaskCount(), 1, 'failed and cancelled agent runs stay out of completion counts');
+  event('started', 'new'); event('done', 'old'); event('done', 'new');
+  assert.equal(agent.api.getUnreadTaskCount(), 2, 'stale agent results do not consume the active run');
+  await agent.api.agent.openAgentConversation('agent-test');
+  agent.view({ agentPageActive: 'agent', settingsOpen: true });
+  assert.equal(agent.api.getUnreadTaskCount(), 2, 'settings covering Agent keep its count');
+  agent.view({ settingsOpen: false }); assert.equal(agent.api.getUnreadTaskCount(), 0);
+  event('started', 'foreground'); event('done', 'foreground'); assert.equal(agent.api.getUnreadTaskCount(), 0);
+  agent.dispose(); transient.dispose();
   unavailable.dispose(); restarted.dispose();
   console.log('OK: real desktop completion events, history/replay/stop/error isolation, per-tool identity, visible panes, focus, overlays, persistent unread and unavailable storage; no tool-file writes');
 } finally { h.dispose(); release(); }

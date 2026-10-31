@@ -168,6 +168,80 @@
 }
 .settings-section-label:first-child { margin-top: 0; }
 
+/* Compact desktop preferences share the modal's palette and shape tokens. */
+.settings-preference-section + .settings-preference-section { margin-top: 24px; }
+.settings-preference-list { border-top: 1px solid var(--border); }
+.settings-preference-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 48px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.settings-preference-label { color: var(--text-1); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-switch {
+  appearance: none;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 21px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--text-3);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.settings-switch::before {
+  content: '';
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform 0.15s ease;
+}
+.settings-switch:checked { background: var(--accent); border-color: var(--accent); }
+.settings-switch:checked::before { transform: translateX(15px); background: var(--bg-app); }
+.settings-switch:focus-visible, .settings-segmented button:focus-visible, .settings-preference-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.settings-preference-hint { margin: 10px 0 0; color: var(--text-2); font-size: 11px; line-height: 1.65; }
+.settings-preference-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 12px; }
+.settings-preference-actions button:disabled { opacity: 0.45; cursor: default; }
+.settings-preference-status { margin: 10px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.settings-segmented {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-app);
+}
+.settings-segmented button {
+  min-width: 0;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: max(0px, calc(var(--radius-sm, 8px) - 4px));
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.settings-segmented button:hover:not(:disabled) { background: var(--bg-hover); }
+.settings-segmented button[aria-pressed="true"] { border-color: var(--border); background: var(--bg-panel); color: var(--text-1); }
+.settings-segmented button:disabled { opacity: 0.45; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch, .settings-switch::before { transition: none; }
+}
+
 /* Section header with a control on the right (theme mode tabs). The label
    keeps its own margins for the plain sections above/below it. */
 .settings-section-head {

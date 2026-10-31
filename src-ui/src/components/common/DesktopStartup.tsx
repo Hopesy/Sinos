@@ -31,7 +31,7 @@ export function DesktopStartup({ ready, scaleReady, children }: { ready: Promise
 
   useEffect(() => {
     let active = true;
-    void ready.then(() => { if (active) setLoaded(true); });
+    void ready.then(() => { if (active) setLoaded(true); }).catch(() => { if (active) setSlow(true); });
     void scaleReady.then(() => { if (active) setScaled(true); });
     const timer = setTimeout(() => { if (active) setSlow(true); }, 8000);
     return () => { active = false; clearTimeout(timer); };

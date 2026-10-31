@@ -19,6 +19,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
 import { useTerminalContextMenu } from './useTerminalContextMenu';
 import { useConversationVirtualizer } from './conversation-virtualizer';
+import { ConversationVisible } from './conversation-visibility';
 import { useT } from '../../i18n/useT';
 import './ConversationView.css';
 
@@ -1287,7 +1288,7 @@ function ConversationContent({
   }, [messages, virtual, loadOlder]);
 
   return (
-    <div
+    <ConversationVisible.Provider value={isVisible}><div
       className={`conversation-view${hasBg && bgUrl ? ' conversation-view--has-bg' : ''}${navigationMessages.length > 1 ? ' conversation-view--has-navigation' : ''}`}
       {...contextMenuHandlers}
     >
@@ -1418,7 +1419,7 @@ function ConversationContent({
           }}
         />
       )}
-    </div>
+    </div></ConversationVisible.Provider>
   );
 }
 

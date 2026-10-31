@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { directoryFailure } from './session-directory';
-import { recordSessionReply } from './session-replies';
+import { recordSessionReply, recordSessionQuestion } from './session-replies';
 import { invoke } from '../tauri';
 import { arr, obj, str, emptyDshState, reduceDshNotification, restoreDshLog, type DshModel, type DshRoute, type DshState, type Json } from './dsh-protocol';
 
@@ -30,7 +30,9 @@ function publish(c: Client, immediate = false) {
 function listen() {
   return listening ??= import('@tauri-apps/api/event').then(({ listen }) => listen<{ id: string; generation: string; event: Json }>('dsh-session-event', ({ payload }) => {
     const c = clients.get(payload.id); if (!c || c.generation !== payload.generation) return;
+    const previousRequests = new Set(c.state.requests.map(request => JSON.stringify(request.id)));
     c.state = reduceDshNotification(c.state, payload.event);
+    if (c.owners > 0 && c.state.requests.some(request => !previousRequests.has(JSON.stringify(request.id)))) recordSessionQuestion(payload.id, 'dsh');
     if (payload.event.method === 'coffee/exit') { c.exited = true; c.replyTurn = undefined; }
     const params = obj(payload.event.params), event = obj(params.event), data = obj(event.data);
     if (c.state.ready && !c.connecting && !c.state.restarting && payload.event.method === 'session.event' && params.sessionId === c.state.sessionId) {
@@ -41,7 +43,7 @@ function listen() {
       }
     }
     publish(c, payload.event.id !== undefined || ['session.status', 'coffee/exit', 'user-question.cancelled'].includes(str(payload.event.method)));
-  }));
+  })).catch(error => { listening = undefined; throw error; });
 }
 export function useDshSession(id: string): DshState;
 export function useDshSession<T>(id: string, select: (state: DshState) => T): T;

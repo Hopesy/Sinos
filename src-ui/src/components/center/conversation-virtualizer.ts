@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type RefObject,
 } from 'react';
 import type { ChatMessage } from '../../lib/chat-transcript';
@@ -66,6 +66,13 @@ function indexAtOffset(offsets: number[], target: number): number {
   return low;
 }
 
+function pruneMeasurements(heights: Map<string, number>, keys: Set<string>) {
+  for (const key of heights.keys()) {
+    if (!keys.has(key)) return new Map([...heights].filter(([key]) => keys.has(key)));
+  }
+  return heights;
+}
+
 /** Variable-height window for the conversation transcript. Message Markdown
  * exists only around the viewport; cached measurements keep navigation and
  * scroll offsets stable after rows leave the DOM. */
@@ -78,6 +85,8 @@ export function useConversationVirtualizer(
   const measureFrameRef = useRef<number | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const [range, setRange] = useState<VirtualRange>({ start: 0, end: 0 });
+  const currentKeys = useMemo(() => new Set(messages.map(message => messageMeasurement(message).key)), [messages]);
+  const currentKeysRef = useRef(currentKeys);
 
   const metrics = useMemo<VirtualMetrics>(() => {
     const offsets = new Array<number>(messages.length + 1);
@@ -143,27 +152,40 @@ export function useConversationVirtualizer(
 
   useEffect(scheduleRange, [messages, scheduleRange]);
 
-  const measureRow = useCallback((messageId: string, height: number) => {
-    if (!Number.isFinite(height) || height <= 0) return;
-    pendingHeightsRef.current.set(messageId, height);
+  const scheduleMeasurements = useCallback(() => {
     if (measureFrameRef.current === null) {
       measureFrameRef.current = window.requestAnimationFrame(() => {
         measureFrameRef.current = null;
         const pending = pendingHeightsRef.current;
         pendingHeightsRef.current = new Map();
         setHeights(current => {
+          // Streaming replaces the measurement key on every content revision.
+          // Prune and measure in one frame, keeping only the current transcript.
+          const retained = pruneMeasurements(current, currentKeysRef.current);
           let next: Map<string, number> | null = null;
           for (const [id, measured] of pending) {
-            const previous = current.get(id);
+            if (!currentKeysRef.current.has(id)) continue;
+            const previous = retained.get(id);
             if (previous !== undefined && Math.abs(previous - measured) < 0.5) continue;
-            if (!next) next = new Map(current);
+            if (!next) next = new Map(retained);
             next.set(id, measured);
           }
-          return next ?? current;
+          return next ?? retained;
         });
       });
     }
   }, []);
+
+  const measureRow = useCallback((messageId: string, height: number) => {
+    if (!Number.isFinite(height) || height <= 0) return;
+    pendingHeightsRef.current.set(messageId, height);
+    scheduleMeasurements();
+  }, [scheduleMeasurements]);
+
+  useLayoutEffect(() => {
+    currentKeysRef.current = currentKeys;
+    scheduleMeasurements();
+  }, [currentKeys, scheduleMeasurements]);
 
   useEffect(() => () => {
     if (measureFrameRef.current !== null) window.cancelAnimationFrame(measureFrameRef.current);

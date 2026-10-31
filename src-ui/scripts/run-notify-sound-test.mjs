@@ -93,6 +93,18 @@ teamStatus('idle', 'working'); teamStatus('idle', 'idle'); team.settle();
 assert.deepEqual(team.calls.map(call => call.kind), ['done', 'done'], 'independent sessions regain their normal completion sound');
 
 const lateTeam = fixture();
+const mixedTeam = fixture(), mixedEvents = [];
+const mixedStatus = (parent, child) => mixedTeam.api.initNotifySound([
+  { id: 'parent', tool: 'claude', agentStatus: parent },
+  { id: 'native-child', tool: 'codex', parentId: 'parent', agentStatus: child },
+], [], (id, kind) => mixedEvents.push({ id, kind }), new Set(['native-child']));
+mixedStatus('working', 'working'); mixedStatus('idle', 'working'); mixedTeam.settle();
+assert.equal(mixedEvents.length, 0, 'native children still suppress a premature coordinator completion');
+mixedStatus('working', 'wait_input'); mixedStatus('working', 'idle'); mixedTeam.settle();
+assert.equal(mixedTeam.calls.length, 0, 'native child status never duplicates its protocol notification');
+mixedStatus('idle', 'idle'); mixedTeam.settle();
+assert.deepEqual(mixedEvents, [{ id: 'parent', kind: 'done' }]);
+
 lateTeam.status('claude', 'working'); lateTeam.status('claude', 'idle');
 lateTeam.api.initNotifySound([{ id: 'session', tool: 'claude', agentStatus: 'idle' }], [{ parentId: 'session', sessionId: 'new-child', phase: 'starting' }]);
 lateTeam.settle();

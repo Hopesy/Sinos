@@ -6,16 +6,16 @@ import { build } from 'esbuild';
 const bundles = new Map();
 const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
-async function fixture(tool, native) {
+async function fixture(tool, native, listenFailures = 0) {
   if (!bundles.has(tool)) {
     const out = await build({ entryPoints: [`src/lib/${tool}-session.ts`], bundle: true, write: false, platform: 'node', format: 'cjs', plugins: [{ name: 'native-boundaries', setup(b) {
       b.onResolve({ filter: /(?:^react$|\/tauri$|^@tauri-apps\/api\/event$|^\.\/session-replies$)/ }, args => ({ path: args.path, namespace: 'fixture' }));
-      b.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'react' ? 'export const useSyncExternalStore=(_s,get)=>get();' : path.includes('/event') ? 'export async function listen(name,fn){globalThis.bridge.listeners.set(name,fn);return()=>{};}' : path.endsWith('session-replies') ? 'export const recordSessionReply=(...args)=>globalThis.bridge.replies.push(args);' : 'export const invoke=globalThis.bridge.invoke;' }));
+      b.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'react' ? 'export const useSyncExternalStore=(_s,get)=>get();' : path.includes('/event') ? 'export async function listen(name,fn){if(globalThis.bridge.listenFailures-->0)throw Error("listener temporarily unavailable");globalThis.bridge.listeners.set(name,fn);return()=>{};}' : path.endsWith('session-replies') ? 'export const recordSessionReply=(...args)=>globalThis.bridge.replies.push(args);export const recordSessionQuestion=(...args)=>globalThis.bridge.questions.push(args);' : 'export const invoke=globalThis.bridge.invoke;' }));
     } }] });
     bundles.set(tool, out.outputFiles[0].text);
   }
   const timers = new Map(); let timer = 0;
-  const bridge = { calls: [], listeners: new Map(), replies: [], invoke: async (command, args) => {
+  const bridge = { calls: [], listeners: new Map(), replies: [], questions: [], listenFailures, invoke: async (command, args) => {
     bridge.calls.push({ command, ...args });
     if (command === 'get_tool_control') return { ready: false, agents: [] };
     if (command === 'claude_session_control') return { applied: {}, effective: {} };
@@ -36,6 +36,26 @@ let failed = 0, passed = 0;
 async function test(name, run) { try { await run(); passed++; console.log('OK:', name); } catch (error) { failed++; console.error('FAIL:', name, error); } }
 
 for (const tool of ['claude', 'codex', 'dsh']) {
+  await test(`${tool}: live questions notify once and reject stale generations`, async () => {
+    let generation;
+    const f = await fixture(tool, async (command, args) => { if (command.endsWith('_start')) { generation = args.generation; return resultFor(tool); } return {}; });
+    const release = f.retain(); await flush();
+    const event = tool === 'claude' ? { type: 'control_request', request_id: 'ask', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: {} } }
+      : { id: 'ask', method: tool === 'codex' ? 'item/tool/requestUserInput' : 'user-question/ask', params: { threadId: 'native', sessionId: 'native', questions: [] } };
+    f.emit('obsolete', event); assert.equal(f.questions.length, 0);
+    f.emit(generation, event); f.emit(generation, event);
+    assert.equal(f.questions.length, 1, 'repeated events for an outstanding question do not repeat alerts');
+    release(); f.fire(300); await flush();
+  });
+  await test(`${tool}: event subscription recovers after its first failure`, async () => {
+    const f = await fixture(tool, async command => command.endsWith('_start') ? resultFor(tool) : {}, 1);
+    let release = f.retain(); await flush();
+    if (tool === 'dsh') { release(); f.fire(300); await flush(); release = f.retain(); }
+    else f.fire(1000);
+    await flush();
+    assert.equal(f.connection()?.ready, true, 'a failed listener must not poison future connections');
+    release(); f.fire(300); await flush();
+  });
   await test(`${tool}: close cancels pending startup and cleans late registration`, async () => {
     const start = deferred(), live = new Set();
     const f = await fixture(tool, async (command, args) => {

@@ -11,6 +11,7 @@ mod dsh_session;
 mod session_directory;
 mod session_start;
 mod desktop_lifecycle;
+mod desktop_notifications;
 mod opencode_island;
 mod agent;
 mod agent_modes;

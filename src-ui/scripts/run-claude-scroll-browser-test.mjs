@@ -121,6 +121,13 @@ try {
   assert.ok(Math.abs((await metrics()).top - beforeResize.top) < 2, 'resizing while reading never resumes follow');
   await page.evaluate(() => window.setActive(false)); await page.waitForTimeout(100); await page.evaluate(() => window.setActive(true)); await page.waitForTimeout(250);
   assert.ok(Math.abs((await metrics()).top - beforeResize.top) < 2, 'tab hide/reveal preserves reading position');
+  await page.evaluate(() => window.setActive(false));
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('.md-body *').count(), 0, 'hidden conversations release parsed Markdown trees');
+  await page.evaluate(() => { window.appendReply(); window.setActive(true); });
+  await page.waitForTimeout(250);
+  assert.ok(await page.locator('.md-body *').count() > 0, 'revealed conversations rebuild their rendered content');
+  assert.ok(Math.abs((await metrics()).top - beforeResize.top) < 2, 'hidden updates preserve the reading position');
   console.log('ok viewport resizing and tab hide/reveal');
 
   await page.evaluate(() => window.reset('write')); await page.waitForTimeout(450); await returnBottom();
@@ -249,6 +256,10 @@ try {
   assert.ok((await outputScroll.boundingBox()).height > preview.height + 100);
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, output: window.toolMessage.output + '\nLast streamed line' }] }));
   assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'true', 'stream updates preserve expanded output');
+  await page.evaluate(() => window.setActive(false)); await page.waitForTimeout(100);
+  assert.equal(await page.locator('.claude-code').count(), 0, 'hidden tool output releases code rendering');
+  await page.evaluate(() => window.setActive(true)); await page.waitForTimeout(100);
+  assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'true', 'tab switching preserves expanded tool output');
   await outputRow.getByRole('button', { name: 'Collapse', exact: true }).click();
   assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'false');
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, toolName: 'Write', toolStatus: 'running', input: {}, output: undefined }] }));
@@ -264,6 +275,11 @@ try {
   assert.equal(await page.evaluate(() => window.copiedText), 'after\n'.repeat(20));
   await page.locator('.claude-tool-resize').click();
   assert.equal(await page.locator('.claude-diff.is-expanded').count(), 1);
+  await page.evaluate(() => window.setActive(false)); await page.waitForTimeout(100);
+  assert.equal(await page.locator('.claude-diff-row').count(), 0, 'hidden diffs release rendered rows');
+  await page.evaluate(() => window.setActive(true)); await page.waitForTimeout(100);
+  assert.equal(await page.locator('.claude-diff.is-expanded').count(), 1, 'tab switching preserves expanded diffs');
+  assert.ok(await page.locator('.claude-diff-row').count() > 0);
   await page.setViewportSize({ width: 390, height: 800 }); await page.waitForTimeout(150);
   assert.ok(await scroll.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
   console.log('ok tool input/output copy, expansion, streaming updates, Write pending state and diff controls');

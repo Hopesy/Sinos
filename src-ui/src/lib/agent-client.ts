@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { invoke } from '../tauri';
+import { recordSessionReply } from './session-replies';
 import type { I18nKey } from '../i18n/en';
 
 type AgentTranslator = (key: I18nKey, vars?: Record<string, string | number>) => string;
@@ -73,6 +74,9 @@ function update(patch: Partial<Snapshot>) {
 export function useAgentClient() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => snapshot);
 }
+export function useAgentConversationId() {
+  return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => snapshot.conversationId);
+}
 export async function refreshAgentConversation() {
   const revision = conversationRevision;
   const target = snapshot.conversationId || 'desktop';
@@ -129,7 +133,10 @@ let replyIndex = -1;
 export function receiveAgentEvent(event: AgentEvent) {
   if (event.kind === 'started') runs.set(event.conversationId, event.runId);
   if (['done', 'error', 'cancelled'].includes(event.kind)) {
-    if (runs.get(event.conversationId) === event.runId) runs.delete(event.conversationId);
+    if (runs.get(event.conversationId) === event.runId) {
+      runs.delete(event.conversationId);
+      if (event.kind === 'done') recordSessionReply(`agent:${event.conversationId}`, 'coffee-agent', event.conversationId);
+    }
     refreshAgentConversations().catch(() => {});
   }
   if (event.conversationId !== snapshot.conversationId) return;

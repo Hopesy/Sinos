@@ -101,7 +101,7 @@ fn blocked_resize_does_not_hold_the_session_map_or_stop_other_tabs() {
         paused: Arc::new(AtomicBool::new(false)),
         output_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         answered_output_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        output_buffer: Arc::new(Mutex::new(Vec::new())),
+        output_buffer: Arc::new(Mutex::new(Default::default())),
     });
     let owned = sessions.clone();
     let resize = tauri::async_runtime::spawn(async move { resize_terminal_session(owned, "slow".into(), 100, 30).await });

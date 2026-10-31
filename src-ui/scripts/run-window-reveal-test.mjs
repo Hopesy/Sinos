@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 
-const bundle = await build({ entryPoints: ['src/desktop.tsx'], bundle: true, platform: 'node', format: 'cjs', write: false, jsx: 'automatic', define: { 'import.meta.env.DEV': 'true' }, plugins: [{ name: 'startup-boundaries', setup(b) {
+const bundle = await build({ entryPoints: ['src/desktop.tsx'], bundle: true, platform: 'node', format: 'cjs', write: false, jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.DEV': 'true' }, plugins: [{ name: 'startup-boundaries', setup(b) {
   b.onResolve({ filter: /^(react|react\/jsx-runtime|react-dom\/client|\.\/store\/app-state|\.\/App|\.\/components\/common\/DesktopStartup|\.\/tauri|\.\/lib\/.*)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents:
-    path === 'react' ? 'export const StrictMode=({children})=>children; export default {StrictMode};' :
+    path === 'react' ? 'export const StrictMode=({children})=>children,Suspense=StrictMode;export function lazy(load){let Component;load().then(m=>Component=m.default);return props=>Component?.(props)}; export default {StrictMode};' :
     path === 'react/jsx-runtime' ? 'export const jsx=(type,props)=>({type,props}); export const jsxs=jsx;' :
     path === 'react-dom/client' ? 'export default {createRoot:()=>({render:globalThis.bridge.render})};' :
     path.includes('DesktopStartup') ? 'export function DesktopStartup(props){globalThis.bridge.startup=props;return null;}' :

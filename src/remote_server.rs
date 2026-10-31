@@ -541,7 +541,7 @@ fn prepare_answer(request: &mut AnswerRequest) -> bool {
 /// before paste processing, while retaining exclusive ownership of the writer.
 fn write_answer(
     writer: &Mutex<Box<dyn std::io::Write + Send>>,
-    buffer: &Mutex<Vec<String>>,
+    buffer: &Mutex<crate::terminal::output_buffer::OutputBuffer>,
     sequence: &std::sync::atomic::AtomicU64,
     paused: &std::sync::atomic::AtomicBool,
     answered: &std::sync::atomic::AtomicU64,
@@ -686,10 +686,7 @@ fn read_output(
     if sequence == *offset {
         return (Vec::new(), true, paused);
     }
-    let delta = sequence.saturating_sub(*offset) as usize;
-    let start = buffer.len().saturating_sub(delta);
-    let chunks = buffer[start..].to_vec();
-    *offset = sequence;
+    let chunks = buffer.since(sequence, offset);
     (chunks, true, paused)
 }
 
@@ -783,15 +780,15 @@ mod conversation_tests {
         let paused = AtomicBool::new(false);
         let answered = AtomicU64::new(u64::MAX);
         let mut request = AnswerRequest { data: "\x1b[B\r".into(), expected_output: 41, kind: None };
-        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert!(bytes.lock().unwrap().is_empty());
         request.expected_output = 42;
-        assert!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request).is_ok());
-        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request).is_ok());
+        assert_eq!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert_eq!(*bytes.lock().unwrap(), b"\x1b[B\r");
         sequence.store(43, Ordering::Relaxed); request.expected_output = 43;
         paused.store(true, Ordering::Relaxed);
-        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         assert_eq!(*bytes.lock().unwrap(), b"\x1b[B\r");
     }
     #[test]
@@ -806,9 +803,9 @@ mod conversation_tests {
         let sequence = AtomicU64::new(8); let paused = AtomicBool::new(false); let answered = AtomicU64::new(u64::MAX);
         let mut request = AnswerRequest { data: "使用浅色\n增加留白".into(), expected_output: 8, kind: Some("text".into()) };
         assert!(prepare_answer(&mut request));
-        assert!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request).is_ok());
+        assert!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request).is_ok());
         assert_eq!(*bytes.lock().unwrap(), "\x1b[200~使用浅色\n增加留白\x1b[201~\r".as_bytes());
-        assert_eq!(write_answer(&writer, &Mutex::new(Vec::new()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
+        assert_eq!(write_answer(&writer, &Mutex::new(Default::default()), &sequence, &paused, &answered, &request), Err("STALE_INTERACTION"));
         for value in [" ", "text\x03", "\x1b[201~escape", &"x".repeat(16_385)] {
             assert!(!prepare_answer(&mut AnswerRequest { data: value.into(), expected_output: 8, kind: Some("text".into()) }));
         }

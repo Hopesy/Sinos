@@ -31,17 +31,17 @@ export function CloseBehaviorSettings() {
     try { setPreference(await request); } catch { setFailed(true); }
     finally { if (saving === request) saving = undefined; busy.current = false; setPending(false); }
   };
-  return <div className="settings-close-behavior" aria-busy={pending || !preference && !failed}>
+  return <div className="settings-close-behavior settings-preference-section" aria-busy={pending || !preference && !failed}>
     <div className="settings-section-label">{t('settings.closeBehavior')}</div>
-    <div className="settings-key-row" role="group" aria-label={t('settings.closeBehavior')}>
-      <button type="button" className={`settings-key-card${preference && !preference.closeToTray ? ' active' : ''}`} aria-pressed={!!preference && !preference.closeToTray} disabled={pending || !preference} onClick={() => void change(false)}>
-        <span className="settings-key-combo">{t(IS_MACOS ? 'settings.closeDock' : 'settings.closeExit')}</span>
+    <div className="settings-segmented" role="group" aria-label={t('settings.closeBehavior')}>
+      <button type="button" aria-pressed={!!preference && !preference.closeToTray} disabled={pending || !preference} onClick={() => void change(false)}>
+        {t(IS_MACOS ? 'settings.closeDock' : 'settings.closeExit')}
       </button>
-      <button type="button" className={`settings-key-card${preference?.closeToTray ? ' active' : ''}`} aria-pressed={!!preference?.closeToTray} disabled={pending || !preference?.trayAvailable} onClick={() => void change(true)}>
-        <span className="settings-key-combo">{t('settings.closeTray')}</span>
+      <button type="button" aria-pressed={!!preference?.closeToTray} disabled={pending || !preference?.trayAvailable} onClick={() => void change(true)}>
+        {t('settings.closeTray')}
       </button>
     </div>
-    <p className="settings-key-sub">{t('settings.closeTray.hint')}</p>
+    <p className="settings-preference-hint">{t('settings.closeTray.hint')}</p>
     {preference && !preference.trayAvailable && <p role="status" className="settings-scale-error">{t('settings.closeTray.unavailable')}</p>}
     {failed && <div className="settings-scale-error" role="alert">{t('settings.closeTray.error')}{!preference && <button type="button" className="settings-scale-reset" onClick={() => setAttempt(n => n + 1)}>{t('settings.closeTray.retry')}</button>}</div>}
   </div>;

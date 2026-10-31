@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { readLaunchControls, setSessionControls, clearSessionControls } from './session-controls';
 import { directoryFailure } from './session-directory';
-import { recordSessionReply } from './session-replies';
+import { recordSessionReply, recordSessionQuestion } from './session-replies';
 import { invoke } from '../tauri';
 import { gambitAttachments } from './gambit-attachments';
 import { arr, obj, str, emptyCodexState, reduceCodexEvent, restoreCodexTurns, type CodexState, type CodexModel, type Json } from './codex-protocol';
@@ -26,12 +26,14 @@ function listen() {
     if (payload.event.method === 'coffee/exit') { c.exited = true; clearSessionControls(payload.id, c.generation); }
     if (c.connecting && !c.state.ready && payload.event.method === 'coffee/exit') { c.startupExit = str(obj(payload.event.params).detail) || 'Codex process exited'; return; }
     const wasBusy = c.state.busy;
+    const previousRequests = new Set(c.state.requests.map(request => JSON.stringify(request.id)));
     c.state = reduceCodexEvent(c.state, payload.event);
+    if (c.owners > 0 && c.state.requests.some(request => !previousRequests.has(JSON.stringify(request.id)))) recordSessionQuestion(payload.id, 'codex');
     if (wasBusy && !c.state.busy && payload.event.method === 'turn/completed'
       && obj(obj(payload.event.params).turn).status === 'completed') recordSessionReply(payload.id, 'codex', c.state.nativeId);
     if (payload.event.method === 'turn/started' && c.state.interrupting) void performInterrupt(c, payload.id);
     publish(c, payload.event.id !== undefined || ['turn/completed', 'serverRequest/resolved', 'coffee/exit'].includes(str(payload.event.method)));
-  }));
+  })).catch(error => { listening = undefined; throw error; });
 }
 export function useCodexSession(id: string): CodexState;
 export function useCodexSession<T>(id: string, select: (state: CodexState) => T): T;

@@ -60,7 +60,7 @@ pub(crate) fn action(app: &tauri::AppHandle, label: &str) -> CloseAction {
     let enabled = app.try_state::<PreferenceStore>().is_some_and(|s| s.enabled());
     close_action(label == "main", enabled, app.tray_by_id(TRAY_ID).is_some(), cfg!(target_os = "macos"))
 }
-fn restore(app: &tauri::AppHandle) {
+pub(crate) fn restore(app: &tauri::AppHandle) {
     mark_window_handled(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show(); let _ = window.unminimize(); let _ = window.set_focus();

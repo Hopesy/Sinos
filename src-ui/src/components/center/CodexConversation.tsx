@@ -9,6 +9,7 @@ import { clipboardWrite } from '../../lib/clipboard';
 import { directoryFailure, directoryFailureMessage } from '../../lib/session-directory';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { useConversationVirtualizer } from './conversation-virtualizer';
+import { ConversationVisible } from './conversation-visibility';
 import { MarkdownContent } from './MarkdownContent';
 import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
 import { CodexWelcomeIcon } from './CodexWelcomeIcon';
@@ -152,7 +153,7 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
     {expanded[message.id] && (message.role === 'reasoning' ? <MarkdownContent content={message.content} /> : <pre className="codex-tool-body">{message.content || pretty(message.item)}</pre>)}
   </div>;
   };
-  return <ConversationDirectory.Provider value={cwd}><div className={`claude-conversation codex-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
+  return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation codex-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
     <div className="claude-scroll" ref={scroll} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
       const node = scroll.current; if (!node?.clientHeight) return;
@@ -193,5 +194,5 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" title={directoryError || s.error} onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('codex.reconnect')}</button>}
     {conversationMenu.menu}
-  </div></ConversationDirectory.Provider>;
+  </div></ConversationVisible.Provider></ConversationDirectory.Provider>;
 }

@@ -156,8 +156,12 @@ function enabled(key: string): boolean {
 export function initNotifySound(
   terminals: Array<{ id: string; tool: ToolType; agentStatus?: AgentStatus; parentId?: string; resumeToken?: string }>,
   tasks: OrchestrationTask[] = [],
+  onNotify?: (id: string, kind: NotifyKind) => void,
+  eventSessionIds: ReadonlySet<string> = new Set(),
 ): () => void {
-  const statusTerminals = terminals.filter(terminal => supportsAgentStatus(terminal.tool));
+  // Keep event-driven children in the group check below, while their own
+  // notifications come from verified protocol events.
+  const statusTerminals = terminals.filter(terminal => supportsAgentStatus(terminal.tool) && !eventSessionIds.has(terminal.id));
   const currentStatusIds = new Set(statusTerminals.map(terminal => terminal.id));
   const currentGuardedIds = new Set(
     statusTerminals
@@ -215,11 +219,12 @@ export function initNotifySound(
 
     if (becameWaiting) {
       cancelPendingDone(terminal.id);
+      onNotify?.(terminal.id, 'wait');
       if (enabled('cc-sound-wait')) playNotifySound('wait');
       continue;
     }
 
-    if (suppressDone || !enabled('cc-sound-done')) continue;
+    if (suppressDone) continue;
     cancelPendingDone(terminal.id);
     const sessionId = terminal.id;
     const timer = window.setTimeout(() => {
@@ -227,7 +232,8 @@ export function initNotifySound(
       // A permission frame or resumed work observed during the settle window
       // wins; only a terminal that remained idle is genuinely complete.
       if (prevStatus.get(sessionId) !== 'idle') return;
-      playNotifySound('done');
+      onNotify?.(sessionId, 'done');
+      if (enabled('cc-sound-done')) playNotifySound('done');
     }, DONE_SETTLE_MS);
     pendingDoneTimers.set(sessionId, timer);
   }

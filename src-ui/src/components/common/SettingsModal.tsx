@@ -25,6 +25,7 @@ import { setUiScale, useUiScale } from '../../lib/ui-scale';
 import { THEME_COLORS, THEME_MODES, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
 import { RelaySettings } from './RelaySettings';
 import { CloseBehaviorSettings } from './CloseBehaviorSettings';
+import { DesktopNotificationSettings } from './DesktopNotificationSettings';
 import './SettingsModal.css';
 
 type Section = 'general' | 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'language' | 'feedback';
@@ -684,6 +685,7 @@ export function SettingsModal() {
             {section === 'general' && (
               <>
                 <CloseBehaviorSettings />
+                <DesktopNotificationSettings />
                 <div className="settings-section-head">
                   <label className="settings-section-label" htmlFor="settings-ui-scale">{t('settings.uiScale')}</label>
                   <div className="settings-scale-actions">
