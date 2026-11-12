@@ -2,24 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <link rel="icon" type="image/x-icon" href="../icons/icon.ico">
+  <link rel="icon" type="image/svg+xml" href="/icons/sinos-icon.svg">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Claude 教你创业 — Anthropic《The Founder's Playbook: Building an AI-Native Startup》中文导读课程。覆盖 Idea / MVP / Launch / Scale 四阶段方法 + 6 家 AI 原生公司案例。Powered by Sinos 101.">
-  <title>Claude 教你创业 | Sinos 101</title>
+  <meta name="description" content="Claude 教你创业 — Anthropic《The Founder's Playbook: Building an AI-Native Startup》中文导读课程。覆盖 Idea / MVP / Launch / Scale 四阶段方法 + 6 家 AI 原生公司案例。Powered by Sinos CLI 101.">
+  <title>Claude 教你创业 | Sinos CLI 101</title>
 
-  <link rel="stylesheet" href="../css/style.css">
-  <link rel="stylesheet" href="../css/courses.css">
+  <link rel="stylesheet" href="../css/style.css?v=0.8.2">
+  <link rel="stylesheet" href="../css/courses.css?v=1.0.0">
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="preload" href="../fonts/outfit-latin.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
 
   <header class="navbar">
-    <a href="../index.html" class="logo" style="text-decoration:none;">
-      <img class="dynamic-brand-logo" src="../icons/sinos-icon.svg" width="24" height="24" alt="Sinos CLI">
-      <span>Sinos 101</span>
+    <a href="/" class="logo" style="text-decoration:none;">
+      <img src="/icons/sinos-icon.svg" width="32" height="32" alt="">
+      <span>Sinos CLI 101</span>
     </a>
     <!-- Course Tabs (inline in navbar) -->
     <!-- Course Tabs (rendered by ../js/course-tabs.js — edit that file to add/rename courses) -->
@@ -73,7 +71,7 @@
       <footer style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--glass-border); font-size: 0.8rem; color: var(--text-secondary); opacity: 0.6;">
         <span>原文版权 &copy; Anthropic &middot; </span>
         <a href="https://claude.com/blog/the-founders-playbook" target="_blank" rel="noopener" style="color: var(--text-secondary);">The Founder's Playbook</a>
-        <span> &middot; 中文导读由 Sinos 101 整理</span>
+        <span> &middot; <a href="https://github.com/Hopesy/Sinos/blob/main/NOTICE">来源与第三方声明</a></span>
       </footer>
 
     </div>
@@ -420,7 +418,7 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
       // Update title
-      document.title = `${displayTitle} | Claude 教你创业 - Sinos 101`;
+      document.title = `${displayTitle} | Claude 教你创业 - Sinos CLI 101`;
     }
 
     // ===== Hash Router =====
@@ -484,6 +482,6 @@
   })();
   </script>
 
-  <script src="../js/course-tabs.js"></script>
+  <script src="../js/course-tabs.js?v=1.0.1"></script>
 </body>
 </html>

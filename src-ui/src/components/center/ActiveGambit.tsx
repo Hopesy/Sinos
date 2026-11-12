@@ -21,14 +21,17 @@ import { supportsConversationTool } from '../../lib/chat-tools';
 import { useCallback, useEffect } from 'react';
 import { useAppState, useAppStateRef, matchHotkeyScheme } from '../../store/app-state';
 import { sendSessionPrompt } from '../../lib/send-session-prompt';
-import { isClaudeConversation, isCodexConversation, isDshConversation } from '../../lib/chat-tools';
+import { isClaudeConversation, isCodexConversation, isDshConversation, isOpenCodeConversation, isPiConversation } from '../../lib/chat-tools';
 import { getToolIcon } from './CenterPanel';
 import { Gambit } from './Gambit';
 import { controlClaude, useClaudeSession } from '../../lib/claude-session';
 import { interruptCodex, useCodexSession } from '../../lib/codex-session';
+import { interruptOpenCode, useOpenCodeSession } from '../../lib/opencode-session';
+import { abortPi, usePiSession } from '../../lib/pi-session';
 import { stopDsh, useDshSession } from '../../lib/dsh-session';
 import { useOrchestration } from '../../lib/orchestration';
 import { useSessionControls } from '../../lib/session-controls';
+import { WorktreeControl } from './WorktreeControl';
 
 // Last path segment of a folder, Windows ("\") and POSIX ("/") safe. Local copy
 // (CenterPanel has the same helper) — tiny, not worth a shared util yet.
@@ -68,11 +71,21 @@ export function ActiveGambit() {
   const isClaude = isClaudeConversation(activeSession);
   const isCodex = isCodexConversation(activeSession);
   const isDsh = isDshConversation(activeSession);
-  const gambitOpen = isClaude || isCodex || isDsh || state.gambitOpen;
+  const isOpenCode = isOpenCodeConversation(activeSession);
+  const isPi = isPiConversation(activeSession);
+  const isNative = isClaude || isCodex || isDsh || isOpenCode || isPi;
+  const gambitOpen = isNative || state.gambitOpen;
   const claude = useClaudeSession(isClaude ? activeId ?? '' : '');
   const codex = useCodexSession(isCodex ? activeId ?? '' : '');
   const dshBusy = useDshSession(isDsh ? activeId ?? '' : '', s => s.busy);
+  const openCodeBusy = useOpenCodeSession(isOpenCode ? activeId ?? '' : '', s => s.busy);
+  const dshStarted = useDshSession(isDsh ? activeId ?? '' : '', s => s.messages.length > 0);
+  const openCodeStarted = useOpenCodeSession(isOpenCode ? activeId ?? '' : '', s => s.native.length > 0);
+  const piBusy = usePiSession(isPi ? activeId ?? '' : '', s => s.busy);
+  const piStarted = usePiSession(isPi ? activeId ?? '' : '', s => s.messages.length > 0);
   const controlsReady = isClaude ? claude.ready : isCodex ? codex.ready : true;
+  const running = isClaude ? claude.busy : isCodex ? codex.busy : isOpenCode ? openCodeBusy : isPi ? piBusy : isDsh && dshBusy;
+  const started = isClaude ? claude.messages.length > 0 : isCodex ? codex.messages.length > 0 : isDsh ? dshStarted : isPi ? piStarted : openCodeStarted;
   // Footer label telling the user where Send will land. Local sessions show
   // their working-folder name; SSH/WebSocket sessions show their connection
   // host, since folderPath may still contain the launchpad's previous folder.
@@ -80,7 +93,7 @@ export function ActiveGambit() {
   const workspaceName = activeSession?.tool === 'remote'
     ? remoteHost(activeSession.toolData)
     : activeSession?.folderPath && activeSession.tool
-      ? basename(activeSession.folderPath)
+      ? basename(activeSession.worktreeOrigin ?? activeSession.folderPath)
       : '';
   // The active tab's tool glyph — the same icon its chrome-tab shows, so the
   // Gambit target chip reads as "tool + target" (mirrors the tab's
@@ -101,7 +114,7 @@ export function ActiveGambit() {
   const handleSend = useCallback(async (text: string) => {
     const session = stateRef.current.terminals.find(tab => tab.id === activeId);
     const sent = await sendSessionPrompt(session, text);
-    if (sent && session && supportsConversationTool(session.tool) && !isClaudeConversation(session) && !isCodexConversation(session)) {
+    if (sent && session && supportsConversationTool(session.tool) && !isClaudeConversation(session) && !isCodexConversation(session) && !isDshConversation(session) && !isOpenCodeConversation(session) && !isPiConversation(session)) {
       dispatch({ type: 'SET_CHAT_PENDING', id: session.id, pending: { text, sentAt: Date.now() } });
     }
     return sent;
@@ -149,7 +162,7 @@ export function ActiveGambit() {
     try { localStorage.setItem('cc-gambit-open', state.gambitOpen ? '1' : '0'); } catch { /* optional preference */ }
   }, [state.gambitOpen]);
 
-  if (!gambitOpen || !activeId || state.editorTabActive || state.agentPageActive || state.diffTabActive || state.usageOpen || state.toolSettingsOpen) return null;
+  if (!gambitOpen || !activeId || state.editorTabActive || state.agentPageActive || state.diffTabActive || state.usageOpen || state.toolSettingsOpen || state.automationsOpen || state.settingsOpen) return null;
 
   return (
     <Gambit
@@ -162,20 +175,26 @@ export function ActiveGambit() {
       onDraftChange={handleDraftChange}
       onClose={handleClose}
       onSend={handleSend}
-      canUseChat={!isClaude && !isCodex && !isDsh && supportsConversationTool(activeSession?.tool)}
+      canUseChat={!isNative && supportsConversationTool(activeSession?.tool)}
       viewMode={activeSession?.viewMode ?? 'terminal'}
       onViewModeChange={viewMode => dispatch({ type: 'SET_SESSION_VIEW', id: activeId, viewMode })}
       agentStatus={activeSession?.agentStatus}
-      onTogglePause={isClaude || isCodex || isDsh ? undefined : (paused => getTabActions(activeId)?.setPaused(paused) ?? Promise.resolve(false))}
+      onTogglePause={isNative ? undefined : (paused => getTabActions(activeId)?.setPaused(paused) ?? Promise.resolve(false))}
       orchestration={coordinator}
       computer={controlsReady && controls.includes('computer')}
       browser={controlsReady && controls.includes('browser')}
+      worktreeControl={activeSession && !activeSession.parentId && (isClaude || isCodex || isDsh || isOpenCode || isPi)
+        // Sits beside the tool's composer controls, keyed by session: a shared key would strand a stale switch in the footer.
+        ? <WorktreeControl key={`worktree:${activeSession.id}`} tab={activeSession} started={started} running={running} /> : undefined}
       claude={isClaude}
+      suggestion={isClaude ? claude.suggestion : undefined}
       codex={isCodex}
       dsh={isDsh}
+      opencode={isOpenCode}
+      pi={isPi}
       attachable={activeSession?.tool !== 'remote'}
-      running={isClaude ? claude.busy : isCodex ? codex.busy : isDsh && dshBusy}
-      onCancel={isDsh ? () => { void stopDsh(activeId); } : isCodex ? () => { void interruptCodex(activeId); } : isClaude ? () => { void controlClaude(activeId, { subtype: 'interrupt' }).catch(() => {}); } : undefined}
+      running={running}
+      onCancel={isDsh ? () => { void stopDsh(activeId); } : isPi ? () => { void abortPi(activeId); } : isOpenCode ? () => { void interruptOpenCode(activeId); } : isCodex ? () => { void interruptCodex(activeId); } : isClaude ? () => { void controlClaude(activeId, { subtype: 'interrupt' }).catch(() => {}); } : undefined}
       leftPanelHidden={state.leftPanelHidden}
       rightPanelHidden={state.rightPanelHidden}
     />

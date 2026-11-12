@@ -32,6 +32,7 @@ const virtualizer = runInNewContext(ts.transpileModule(`${code}; useConversation
   },
   useEffect: effect => effect(),
   useLayoutEffect: effect => effect(),
+  useInsertionEffect: effect => effect(),
   ResizeObserver: class {
     constructor(callback) { resize = callback; }
     observe() {}

@@ -111,3 +111,30 @@ list of major upstream projects:
 Each component remains under its own license. The AGPL-3.0 license that
 governs Coffee CLI as a whole does not override the terms of these bundled
 or linked components.
+
+================================================================================
+ADDITIONAL SOURCE AND ASSET ATTRIBUTION
+================================================================================
+
+  - The Founder's Playbook course
+      Original article: Anthropic, https://claude.com/blog/the-founders-playbook
+      Chinese reading guide: Coffee 101, imported from Coffee CLI:
+      https://github.com/edison7009/Coffee-CLI/blob/23b290bf5e01849bea2d6a99657491da88aacafd/Web-Home/courses/founders-playbook.html
+      Original article copyright and source notices are retained in the course.
+
+  - JetBrains Mono
+      Copyright 2020 The JetBrains Mono Project Authors
+      Source: https://github.com/JetBrains/JetBrainsMono
+      License: SIL Open Font License 1.1
+      Full text: src-ui/public/fonts/OFL-JetBrainsMono.txt
+
+  - Outfit
+      Copyright 2021 The Outfit Project Authors
+      Source: https://github.com/Outfitio/Outfit-Fonts
+      License: SIL Open Font License 1.1
+      Full text: Web-Home/fonts/OFL-Outfit.txt
+
+  - Speech transport adapters
+      Imported through Coffee CLI from the EchoBird project. Source provenance
+      is preserved in src/voice_input/echo/; service names identify their
+      respective providers and do not imply endorsement.

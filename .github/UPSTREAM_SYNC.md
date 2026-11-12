@@ -1,6 +1,120 @@
 # Upstream integration record
 
-## Current integration — 2026-10-31
+## Source integration — 2026-11-12
+
+Integration target: Coffee-CLI `main` at
+`23b290bf5e01849bea2d6a99657491da88aacafd`, 364 commits after the previous
+integration point `3176d7473cceee22d05b34779a37033ad8fa2cb8`.
+Sinos starts from `c1d07566a8163cd6d72a36bd1350192b8bad7432` (`v4.0.5`).
+Upstream ancestry is retained through a merge commit. Version `4.0.5` was
+kept during source integration; formal release preparation targets `4.0.6`.
+
+### Imported behavior
+
+- Native OpenCode and Pi conversations, including models, permissions/questions,
+  streaming tools and orchestration support.
+- Conversation/worker worktrees, branch merge controls, coordinator roles,
+  worker steering/recovery and per-conversation assistant selection.
+- Scheduled automations, voice input and microphone/source settings, pre-input
+  notes, turn usage/cost summaries and refreshable bundled model prices.
+- Claude cold-context continuation, titles and prompt suggestions; Codex plan and
+  continuation controls; richer DeepSeek tool/subagent interaction.
+- Verified Agent task experiences, memory recovery, new conversations, terminal
+  and conversation path links, custom notification sounds, full-window settings,
+  expanded themes, bundled JetBrains Mono and window geometry persistence.
+- Multilingual website documentation and routes; platform-specific installer
+  download/open behavior.
+
+### Sinos compatibility decisions
+
+- Retain Sinos CLI / Sinos Agent identity and `Hopesy/Sinos` feedback. Preserve
+  upstream and third-party attribution in NOTICE, licenses and source notices.
+- Keep model keys, messaging tokens and saved SSH passwords in the OS keyring.
+  Model settings expose `hasApiKey`, never the stored secret. Optional keys for
+  local model services remain supported.
+- Update metadata, release notes and installers use only `Hopesy/Sinos` GitHub
+  Releases. Installer downloads require published stable metadata, matching
+  platform/tag URLs, nonzero size and SHA-256. Mirror-release and static-version
+  workflows remain excluded; Linux keeps AppImage fallback.
+- Preserve Cloudflare/mobile transport, shared PTY identity and replay behavior,
+  editor/image tabs, startup reveal, tray close behavior and task notifications.
+  Existing Terminal defaults and saved launch-mode preferences remain intact.
+- Extend generation-aware startup cancellation, late-start cleanup, Windows
+  per-session Job Objects and hidden conversation rendering to OpenCode/Pi.
+- Preserve legacy Antigravity JSONL alongside the new SQLite index, retaining
+  readable transcripts and avoiding duplicate history/count entries.
+- Preserve the final upstream decision to leave automatic tab restoration off.
+- Keep release quality gates, platform artifacts and synchronized installer
+  script copies; no release, tag, commit or push is part of this source task.
+
+### Integration regression fixes
+
+- Restore complete German/Spanish translation strings and unique native/frontend
+  Antigravity resume presets; assert preset uniqueness in the unified runner.
+- Release keyboard focus for DeepSeek, OpenCode and Pi while Settings is open,
+  retaining visible/background content. Expanded keyboard regressions exercise
+  all five native conversation types, modal ownership and IME composition.
+- Keep Sinos's scoped xterm link-hover pointer alongside the new global arrow
+  policy, with an explicit selector-scoped regression.
+- Give continuation prompt files private unique ownership and automatic cleanup
+  on cancelled/failed startup; validate OpenCode's announced loopback URL by its
+  parsed authority before using its session credential.
+- Adapt speech mock routing to Sinos's retained axum 0.7 without changing provider
+  request paths or weakening the HTTP/status/redaction assertions.
+- Update browser fixtures for pre-input, Basalt resources and the actual Sinos
+  Agent icon; keep both existing and incoming interaction assertions.
+
+### Initial local validation — Windows (before release review)
+
+- Desktop build, ESLint, application/tooling TypeScript checks: passed.
+- `npm test`: **379 Vitest tests in 64 files** and **71/71 script regressions** passed.
+- `npm run test:browser`: **39/39 browser scripts** passed on the complete rerun.
+- Production dependency audit: **0 vulnerabilities**. The full dependency install
+  reported 12 moderate vulnerabilities including development dependencies.
+- `cargo check --locked`, correctness/suspicious Clippy checks and `cargo build
+  --locked`: passed. Ordinary Clippy style warnings remain outside this change's
+  cleanup scope.
+- `cargo test --locked --no-fail-fast`: **746 passed, 0 failed, 29 ignored**.
+- Current compiled executable with `COFFEE_TEST_EXE`: **1/1 native orchestration
+  protocol script** passed against local mock services.
+- Phone and Android frontend builds plus Capacitor sync: passed.
+- Relay typecheck and **3 local unit tests** passed. Local Workers/Durable Objects
+  integration passed: encrypted pairing, concurrent claims, reconnect, cancellation
+  and stale credential rejection. No production relay deployment was performed.
+- Website language-generation check, installed-version five-language release notes,
+  synchronized installer scripts, clipboard-wrapper checks and Git whitespace/
+  conflict checks: passed.
+- Real vendor accounts, live speech services/microphones, system clipboard/native
+  notification interactions, physical mobile devices, non-Windows native builds
+  and remote five-platform Review/Release CI remain unverified. The 29 ignored
+  Rust tests retain their explicit live-tool/account/device/benchmark opt-ins.
+- That source-validation phase did not package or publish a release.
+
+### Release review and fixes — 2026-11-12
+
+- Protect ignored files during Worktree cleanup. Resolve the actual Git branch
+  when restoring history, and coordinate creation/reopen/cleanup/sweeping with
+  leases and deletion tickets so stale cleanup cannot remove a reopened workspace.
+  The same protection covers orchestration workers and shared tabs.
+- Keep the voice stop control visible during availability refresh; manual edits,
+  deletion and sending cancel recording and discard late transcription events.
+- Preserve exact Claude/Codex continuation prompts through startup exhaustion or
+  first-send failure, with explicit retry/cancel and stale-generation isolation.
+- Give simultaneous DeepSeek steer messages unique atomic staging files rather
+  than collapsing different message IDs onto a shared temporary file.
+- Expire timed Pi dialogs without waiting for another stream event, reject stale
+  backend responses, and clear dialogs on abort, settlement and close. Pi emits
+  no event for an extension's independent AbortSignal cancellation and no original
+  timeout start timestamp; those unobservable protocol cases remain constrained
+  by subsequent session events and locally received deadlines.
+- Include Worktree routing in history-cache validation and refresh identity.
+  Reject malformed cached/remote price rows and tiers before cost rendering.
+- Correct obsolete mirror-entry wording while retaining the GitHub-only update
+  path and third-party source notices. Regressions enter the unified runners.
+- Targeted regressions were reproduced before fixes and rerun after them. The
+  complete `v4.0.6` release validation and remote CI checks follow separately.
+
+## Historical integration — 2026-10-31
 
 Merged Coffee-CLI `main` through
 `3176d7473cceee22d05b34779a37033ad8fa2cb8` (202 commits since the previous

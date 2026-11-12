@@ -40,6 +40,16 @@
 }
 
 /* ─── Monospace Terminal Font (embedded — no system font dependency) ── */
+/* JetBrains Mono, bundled under SIL OFL 1.1; see /fonts/OFL-JetBrainsMono.txt.
+   Variable font, so bold output keeps the same face. */
+@font-face {
+    font-family: 'JetBrainsMono';
+    src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: swap;
+}
+
 @font-face {
     font-family: 'CascadiaMono';
     src: url('/fonts/CascadiaMono-Regular.woff2') format('woff2');
@@ -60,6 +70,7 @@
 
 /* Conversation CJK text keeps using OS fonts: PingFang on macOS,
    Microsoft YaHei on Windows, and distro fonts on Linux. */
+.claude-conversation, .conversation-view, .gambit-textarea { --font: var(--font-content); }
 
 /* ─── Brand Serif (splash-label "art font") ──
    Lora italic 500, Latin + Latin-Ext only (~36 KB total). Splash text is
@@ -201,11 +212,14 @@ textarea,
        handled by Inter; zh-CN/zh-TW/ja/ko by OS faces below). Mac faces
        come before Windows faces because Mac users hit them first; Windows
        installs don't have the Mac names so the cascade keeps walking. */
-    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    /* Conversation text and the composer keep OS CJK faces (see below). */
+    --font-content: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Hiragino Sans GB', 'Apple SD Gothic Neo',
         'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
         Helvetica, Arial, sans-serif,
         'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    /* Every other surface uses the sidebar's face. */
+    --font: var(--font-nav);
     --font-nav: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Hiragino Sans GB', 'Apple SD Gothic Neo',
         'Coffee Navigation CJK', 'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
@@ -215,6 +229,12 @@ textarea,
         'PingFang SC', 'PingFang TC', 'Hiragino Mincho ProN', 'Apple SD Gothic Neo',
         'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Mincho', 'Malgun Gothic',
         sans-serif;
+    /* UI type scale (the roomy set, chosen for long sessions): body = session
+       names and setting items, 13px is the floor. */
+    --type-title: 17px;
+    --type-body: 15px;
+    --type-label: 14px;
+    --type-caption: 13px;
     --mono: 'Cascadia Code', 'Cascadia Mono', 'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace;
     --radius-xs: 4px;
     --radius-sm: 8px;
@@ -232,7 +252,9 @@ textarea,
        var, so the tab strip stays aligned with the center column at any
        width; its traffic-light clearance comes from the brand's own 88px
        padding, not from the rail width. */
-    --w-left: clamp(240px, 28vw, 320px);
+    --w-left: clamp(240px, 24vw, 280px);
+    /* Webview zoom factor, kept in sync by lib/ui-scale.ts. */
+    --ui-scale: 1;
     /* The right rail additionally YIELDS below this value (flex-shrink,
        min-width 200px on .panel-right) when space runs out — it is the
        last flex item and clips first. Everything positioning against it
@@ -772,6 +794,415 @@ textarea,
     --bg-terminal: #130f11; /* Match bg-app */
 }
 
+/* Mist (soft depth) and vivid (between soft and deep, more saturated) rows: each column turns to its own hue in
+   every new row, so a column changes colour going down; depth and contrast follow its soft and deep palettes. */
+/* ─── oat — neutral, mist ──── */
+[data-theme="oat"] {
+    --bg-app: #25221e;
+    --bg-panel: #2d2a26;
+    --bg-card: rgba(233, 230, 225, 0.025);
+    --bg-input: #35322d;
+    --bg-input-focus: #3e3a34;
+    --bg-hover: rgba(181, 166, 139, 0.07);
+    --bg-active: rgba(181, 166, 139, 0.11);
+
+    --border: rgba(233, 230, 225, 0.1);
+    --border-input: rgba(233, 230, 225, 0.15);
+    --border-focus: rgba(181, 166, 139, 0.5);
+
+    --text-1: #e9e6e1;
+    --text-2: #bdb9b2;
+    --text-3: #a5a19a;
+
+    --accent: #b5a68b;
+    --accent-hover: #bdb097;
+    --accent-active: #af9f82;
+    --accent-bg: rgba(181, 166, 139, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 181, 166, 139;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #25221e; /* Match bg-app */
+}
+
+/* ─── coral — rose, mist ──── */
+[data-theme="coral"] {
+    --bg-app: #27201f;
+    --bg-panel: #2f2827;
+    --bg-card: rgba(232, 226, 225, 0.025);
+    --bg-input: #382f2e;
+    --bg-input-focus: #413735;
+    --bg-hover: rgba(218, 183, 178, 0.07);
+    --bg-active: rgba(218, 183, 178, 0.11);
+
+    --border: rgba(232, 226, 225, 0.09);
+    --border-input: rgba(232, 226, 225, 0.14);
+    --border-focus: rgba(218, 183, 178, 0.5);
+
+    --text-1: #e8e2e1;
+    --text-2: #beb4b2;
+    --text-3: #b3a5a3;
+
+    --accent: #dab7b2;
+    --accent-hover: #e1c4c0;
+    --accent-active: #d5ada8;
+    --accent-bg: rgba(218, 183, 178, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 218, 183, 178;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #27201f; /* Match bg-app */
+}
+
+/* ─── gold — orange, mist ──── */
+[data-theme="gold"] {
+    --bg-app: #292517;
+    --bg-panel: #312d1f;
+    --bg-card: rgba(232, 228, 217, 0.025);
+    --bg-input: #393527;
+    --bg-input-focus: #413d2f;
+    --bg-hover: rgba(210, 194, 142, 0.07);
+    --bg-active: rgba(210, 194, 142, 0.11);
+
+    --border: rgba(232, 228, 217, 0.09);
+    --border-input: rgba(232, 228, 217, 0.14);
+    --border-focus: rgba(210, 194, 142, 0.5);
+
+    --text-1: #e8e4d9;
+    --text-2: #c2bca7;
+    --text-3: #b1a990;
+
+    --accent: #d2c28e;
+    --accent-hover: #d8ca9d;
+    --accent-active: #cebc83;
+    --accent-bg: rgba(210, 194, 142, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 210, 194, 142;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #292517; /* Match bg-app */
+}
+
+/* ─── olive — green, mist ──── */
+[data-theme="olive"] {
+    --bg-app: #23281e;
+    --bg-panel: #2b3026;
+    --bg-card: rgba(228, 232, 224, 0.025);
+    --bg-input: #33382e;
+    --bg-input-focus: #3b4135;
+    --bg-hover: rgba(189, 201, 176, 0.07);
+    --bg-active: rgba(189, 201, 176, 0.11);
+
+    --border: rgba(228, 232, 224, 0.09);
+    --border-input: rgba(228, 232, 224, 0.14);
+    --border-focus: rgba(189, 201, 176, 0.5);
+
+    --text-1: #e4e8e0;
+    --text-2: #b9c0b0;
+    --text-3: #a6af9c;
+
+    --accent: #bdc9b0;
+    --accent-hover: #c7d1bc;
+    --accent-active: #b5c3a7;
+    --accent-bg: rgba(189, 201, 176, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 189, 201, 176;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #23281e; /* Match bg-app */
+}
+
+/* ─── lagoon — blue, mist ──── */
+[data-theme="lagoon"] {
+    --bg-app: #1e2d2f;
+    --bg-panel: #263537;
+    --bg-card: rgba(223, 236, 238, 0.025);
+    --bg-input: #2e3d3f;
+    --bg-input-focus: #364547;
+    --bg-hover: rgba(173, 216, 221, 0.07);
+    --bg-active: rgba(173, 216, 221, 0.11);
+
+    --border: rgba(223, 236, 238, 0.09);
+    --border-input: rgba(223, 236, 238, 0.14);
+    --border-focus: rgba(173, 216, 221, 0.5);
+
+    --text-1: #dfecee;
+    --text-2: #b0c9cc;
+    --text-3: #99b9bd;
+
+    --accent: #add8dd;
+    --accent-hover: #bbdfe3;
+    --accent-active: #a2d3d9;
+    --accent-bg: rgba(173, 216, 221, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 173, 216, 221;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #1e2d2f; /* Match bg-app */
+}
+
+/* ─── iris — purple, mist ──── */
+[data-theme="iris"] {
+    --bg-app: #22202d;
+    --bg-panel: #2a2835;
+    --bg-card: rgba(227, 225, 235, 0.025);
+    --bg-input: #32303c;
+    --bg-input-focus: #3a3844;
+    --bg-hover: rgba(186, 179, 212, 0.07);
+    --bg-active: rgba(186, 179, 212, 0.11);
+
+    --border: rgba(227, 225, 235, 0.09);
+    --border-input: rgba(227, 225, 235, 0.14);
+    --border-focus: rgba(186, 179, 212, 0.5);
+
+    --text-1: #e3e1eb;
+    --text-2: #b7b3c6;
+    --text-3: #a9a5b7;
+
+    --accent: #bab3d4;
+    --accent-hover: #c6c0db;
+    --accent-active: #b1a9ce;
+    --accent-bg: rgba(186, 179, 212, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 186, 179, 212;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #22202d; /* Match bg-app */
+}
+
+/* ─── steel — neutral, vivid ──── */
+[data-theme="steel"] {
+    --bg-app: #121619;
+    --bg-panel: #181e21;
+    --bg-card: rgba(224, 230, 234, 0.025);
+    --bg-input: #1d2429;
+    --bg-input-focus: #232b30;
+    --bg-hover: rgba(132, 156, 173, 0.07);
+    --bg-active: rgba(132, 156, 173, 0.11);
+
+    --border: rgba(224, 230, 234, 0.1);
+    --border-input: rgba(224, 230, 234, 0.15);
+    --border-focus: rgba(132, 156, 173, 0.5);
+
+    --text-1: #e0e6ea;
+    --text-2: #b0b9bf;
+    --text-3: #98a1a7;
+
+    --accent: #849cad;
+    --accent-hover: #90a6b5;
+    --accent-active: #7b95a7;
+    --accent-bg: rgba(132, 156, 173, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 132, 156, 173;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #121619; /* Match bg-app */
+}
+
+/* ─── fuchsia — rose, vivid ──── */
+[data-theme="fuchsia"] {
+    --bg-app: #21131c;
+    --bg-panel: #291b24;
+    --bg-card: rgba(233, 224, 230, 0.025);
+    --bg-input: #30242c;
+    --bg-input-focus: #382c34;
+    --bg-hover: rgba(223, 157, 199, 0.07);
+    --bg-active: rgba(223, 157, 199, 0.11);
+
+    --border: rgba(233, 224, 230, 0.09);
+    --border-input: rgba(233, 224, 230, 0.14);
+    --border-focus: rgba(223, 157, 199, 0.5);
+
+    --text-1: #e9e0e6;
+    --text-2: #c0b0ba;
+    --text-3: #b5a1ae;
+
+    --accent: #df9dc7;
+    --accent-hover: #e4acd0;
+    --accent-active: #db91c0;
+    --accent-bg: rgba(223, 157, 199, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 223, 157, 199;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #21131c; /* Match bg-app */
+}
+
+/* ─── copper — orange, vivid ──── */
+[data-theme="copper"] {
+    --bg-app: #23150e;
+    --bg-panel: #2f1c13;
+    --bg-card: rgba(234, 221, 215, 0.025);
+    --bg-input: #37241a;
+    --bg-input-focus: #3f2c22;
+    --bg-hover: rgba(222, 150, 115, 0.07);
+    --bg-active: rgba(222, 150, 115, 0.11);
+
+    --border: rgba(234, 221, 215, 0.09);
+    --border-input: rgba(234, 221, 215, 0.14);
+    --border-focus: rgba(222, 150, 115, 0.5);
+
+    --text-1: #eaddd7;
+    --text-2: #c6afa3;
+    --text-3: #b6998b;
+
+    --accent: #de9673;
+    --accent-hover: #e2a284;
+    --accent-active: #db8d67;
+    --accent-bg: rgba(222, 150, 115, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 222, 150, 115;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #23150e; /* Match bg-app */
+}
+
+/* ─── jade — green, vivid ──── */
+[data-theme="jade"] {
+    --bg-app: #102722;
+    --bg-panel: #17302a;
+    --bg-card: rgba(223, 233, 231, 0.025);
+    --bg-input: #203732;
+    --bg-input-focus: #283f39;
+    --bg-hover: rgba(161, 201, 192, 0.07);
+    --bg-active: rgba(161, 201, 192, 0.11);
+
+    --border: rgba(223, 233, 231, 0.09);
+    --border-input: rgba(223, 233, 231, 0.14);
+    --border-focus: rgba(161, 201, 192, 0.5);
+
+    --text-1: #dfe9e7;
+    --text-2: #aec2be;
+    --text-3: #99b2ac;
+
+    --accent: #a1c9c0;
+    --accent-hover: #aed0c9;
+    --accent-active: #97c3b9;
+    --accent-bg: rgba(161, 201, 192, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 161, 201, 192;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #102722; /* Match bg-app */
+}
+
+/* ─── sapphire — blue, vivid ──── */
+[data-theme="sapphire"] {
+    --bg-app: #12172c;
+    --bg-panel: #171c38;
+    --bg-card: rgba(223, 226, 238, 0.025);
+    --bg-input: #1b2243;
+    --bg-input-focus: #21294d;
+    --bg-hover: rgba(150, 163, 229, 0.07);
+    --bg-active: rgba(150, 163, 229, 0.11);
+
+    --border: rgba(223, 226, 238, 0.09);
+    --border-input: rgba(223, 226, 238, 0.14);
+    --border-focus: rgba(150, 163, 229, 0.5);
+
+    --text-1: #dfe2ee;
+    --text-2: #acb2d0;
+    --text-3: #949bc2;
+
+    --accent: #96a3e5;
+    --accent-hover: #a6b1e9;
+    --accent-active: #8a98e2;
+    --accent-bg: rgba(150, 163, 229, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 150, 163, 229;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #12172c; /* Match bg-app */
+}
+
+/* ─── orchid — purple, vivid ──── */
+[data-theme="orchid"] {
+    --bg-app: #29112a;
+    --bg-panel: #351636;
+    --bg-card: rgba(236, 223, 236, 0.025);
+    --bg-input: #3d1e3e;
+    --bg-input-focus: #442645;
+    --bg-hover: rgba(213, 161, 215, 0.07);
+    --bg-active: rgba(213, 161, 215, 0.11);
+
+    --border: rgba(236, 223, 236, 0.09);
+    --border-input: rgba(236, 223, 236, 0.14);
+    --border-focus: rgba(213, 161, 215, 0.5);
+
+    --text-1: #ecdfec;
+    --text-2: #c8b0c9;
+    --text-3: #b9a2ba;
+
+    --accent: #d5a1d7;
+    --accent-hover: #dbafdd;
+    --accent-active: #d096d2;
+    --accent-bg: rgba(213, 161, 215, 0.13);
+
+    --green: #98b89d;
+    --red: #d99a9a;
+    --blue: #93b3d2;
+
+    --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.28);
+    --shadow-rgb: 213, 161, 215;
+    --glass-blur: blur(24px);
+
+    --bg-terminal: #29112a; /* Match bg-app */
+}
 /* ─── Day (light) palettes ───────────────────────────────────────────────
    Every night family gets a light counterpart with the same hue, so the
    appearance grid can show the same 12 slots in either mode and the
@@ -1044,6 +1475,270 @@ textarea,
 
 }
 
+/* ─── oat — day ──── */
+[data-mode="light"][data-theme="oat"] {
+    --bg-app: #f2f0ee;
+    --bg-panel: #eae8e5;
+    --bg-hover: rgba(122, 104, 73, 0.07);
+    --bg-active: rgba(122, 104, 73, 0.11);
+
+    --border: rgba(53, 50, 45, 0.14);
+    --border-input: rgba(53, 50, 45, 0.2);
+    --border-focus: rgba(122, 104, 73, 0.6);
+
+    --text-1: #35322d;
+    --text-2: #58544d;
+    --text-3: #635e55;
+
+    --accent: #7a6849;
+    --accent-hover: #6d5d41;
+    --accent-active: #64553c;
+    --accent-bg: rgba(122, 104, 73, 0.1);
+
+}
+
+/* ─── coral — day ──── */
+[data-mode="light"][data-theme="coral"] {
+    --bg-app: #f8f5f4;
+    --bg-panel: #f4eceb;
+    --bg-hover: rgba(119, 67, 59, 0.07);
+    --bg-active: rgba(119, 67, 59, 0.11);
+
+    --border: rgba(56, 47, 46, 0.14);
+    --border-input: rgba(56, 47, 46, 0.2);
+    --border-focus: rgba(119, 67, 59, 0.6);
+
+    --text-1: #382f2e;
+    --text-2: #534846;
+    --text-3: #655957;
+
+    --accent: #77433b;
+    --accent-hover: #693b34;
+    --accent-active: #5f362f;
+    --accent-bg: rgba(119, 67, 59, 0.12);
+
+}
+
+/* ─── gold — day ──── */
+[data-mode="light"][data-theme="gold"] {
+    --bg-app: #faf8f2;
+    --bg-panel: #f6f3e9;
+    --bg-hover: rgba(127, 110, 52, 0.07);
+    --bg-active: rgba(127, 110, 52, 0.11);
+
+    --border: rgba(58, 55, 44, 0.14);
+    --border-input: rgba(58, 55, 44, 0.2);
+    --border-focus: rgba(127, 110, 52, 0.6);
+
+    --text-1: #3a372c;
+    --text-2: #565144;
+    --text-3: #696454;
+
+    --accent: #7f6e34;
+    --accent-hover: #71612e;
+    --accent-active: #66582a;
+    --accent-bg: rgba(127, 110, 52, 0.12);
+
+}
+
+/* ─── olive — day ──── */
+[data-mode="light"][data-theme="olive"] {
+    --bg-app: #f6f8f4;
+    --bg-panel: #f0f3ed;
+    --bg-hover: rgba(91, 112, 67, 0.07);
+    --bg-active: rgba(91, 112, 67, 0.11);
+
+    --border: rgba(51, 55, 47, 0.14);
+    --border-input: rgba(51, 55, 47, 0.2);
+    --border-focus: rgba(91, 112, 67, 0.6);
+
+    --text-1: #33372f;
+    --text-2: #4d5247;
+    --text-3: #5f6558;
+
+    --accent: #5b7043;
+    --accent-hover: #51633b;
+    --accent-active: #495a36;
+    --accent-bg: rgba(91, 112, 67, 0.12);
+
+}
+
+/* ─── lagoon — day ──── */
+[data-mode="light"][data-theme="lagoon"] {
+    --bg-app: #f4f9f9;
+    --bg-panel: #ebf4f5;
+    --bg-hover: rgba(52, 119, 127, 0.07);
+    --bg-active: rgba(52, 119, 127, 0.11);
+
+    --border: rgba(44, 57, 58, 0.14);
+    --border-input: rgba(44, 57, 58, 0.2);
+    --border-focus: rgba(52, 119, 127, 0.6);
+
+    --text-1: #2c393a;
+    --text-2: #445456;
+    --text-3: #546769;
+
+    --accent: #34777f;
+    --accent-hover: #2e6971;
+    --accent-active: #2a5f66;
+    --accent-bg: rgba(52, 119, 127, 0.12);
+
+}
+
+/* ─── iris — day ──── */
+[data-mode="light"][data-theme="iris"] {
+    --bg-app: #f5f4f8;
+    --bg-panel: #eeedf3;
+    --bg-hover: rgba(72, 61, 117, 0.07);
+    --bg-active: rgba(72, 61, 117, 0.11);
+
+    --border: rgba(48, 46, 56, 0.14);
+    --border-input: rgba(48, 46, 56, 0.2);
+    --border-focus: rgba(72, 61, 117, 0.6);
+
+    --text-1: #302e38;
+    --text-2: #494653;
+    --text-3: #5a5865;
+
+    --accent: #483d75;
+    --accent-hover: #403668;
+    --accent-active: #3a315e;
+    --accent-bg: rgba(72, 61, 117, 0.12);
+
+}
+
+/* ─── steel — day ──── */
+[data-mode="light"][data-theme="steel"] {
+    --bg-app: #edeff1;
+    --bg-panel: #e3e7e9;
+    --bg-hover: rgba(65, 97, 120, 0.07);
+    --bg-active: rgba(65, 97, 120, 0.11);
+
+    --border: rgba(45, 50, 53, 0.14);
+    --border-input: rgba(45, 50, 53, 0.2);
+    --border-focus: rgba(65, 97, 120, 0.6);
+
+    --text-1: #2d3235;
+    --text-2: #4d5358;
+    --text-3: #555d63;
+
+    --accent: #416178;
+    --accent-hover: #3a566b;
+    --accent-active: #344e61;
+    --accent-bg: rgba(65, 97, 120, 0.1);
+
+}
+
+/* ─── fuchsia — day ──── */
+[data-mode="light"][data-theme="fuchsia"] {
+    --bg-app: #f8f2f5;
+    --bg-panel: #f4e8f0;
+    --bg-hover: rgba(122, 46, 94, 0.07);
+    --bg-active: rgba(122, 46, 94, 0.11);
+
+    --border: rgba(56, 46, 52, 0.14);
+    --border-input: rgba(56, 46, 52, 0.2);
+    --border-focus: rgba(122, 46, 94, 0.6);
+
+    --text-1: #382e34;
+    --text-2: #53464e;
+    --text-3: #655760;
+
+    --accent: #7a2e5e;
+    --accent-hover: #6b2853;
+    --accent-active: #60244a;
+    --accent-bg: rgba(122, 46, 94, 0.12);
+
+}
+
+/* ─── copper — day ──── */
+[data-mode="light"][data-theme="copper"] {
+    --bg-app: #faf3ef;
+    --bg-panel: #f7ebe5;
+    --bg-hover: rgba(132, 68, 37, 0.07);
+    --bg-active: rgba(132, 68, 37, 0.11);
+
+    --border: rgba(58, 49, 44, 0.14);
+    --border-input: rgba(58, 49, 44, 0.2);
+    --border-focus: rgba(132, 68, 37, 0.6);
+
+    --text-1: #3a312c;
+    --text-2: #564a44;
+    --text-3: #695b54;
+
+    --accent: #844425;
+    --accent-hover: #743c21;
+    --accent-active: #68361d;
+    --accent-bg: rgba(132, 68, 37, 0.12);
+
+}
+
+/* ─── jade — day ──── */
+[data-mode="light"][data-theme="jade"] {
+    --bg-app: #f2f8f6;
+    --bg-panel: #eaf3f1;
+    --bg-hover: rgba(56, 113, 100, 0.07);
+    --bg-active: rgba(56, 113, 100, 0.11);
+
+    --border: rgba(47, 55, 53, 0.14);
+    --border-input: rgba(47, 55, 53, 0.2);
+    --border-focus: rgba(56, 113, 100, 0.6);
+
+    --text-1: #2f3735;
+    --text-2: #47524f;
+    --text-3: #586562;
+
+    --accent: #387164;
+    --accent-hover: #316358;
+    --accent-active: #2c594f;
+    --accent-bg: rgba(56, 113, 100, 0.12);
+
+}
+
+/* ─── sapphire — day ──── */
+[data-mode="light"][data-theme="sapphire"] {
+    --bg-app: #f1f3f9;
+    --bg-panel: #e7e9f7;
+    --bg-hover: rgba(37, 53, 132, 0.07);
+    --bg-active: rgba(37, 53, 132, 0.11);
+
+    --border: rgba(44, 46, 58, 0.14);
+    --border-input: rgba(44, 46, 58, 0.2);
+    --border-focus: rgba(37, 53, 132, 0.6);
+
+    --text-1: #2c2e3a;
+    --text-2: #444656;
+    --text-3: #545869;
+
+    --accent: #253584;
+    --accent-hover: #212f74;
+    --accent-active: #1d2a68;
+    --accent-bg: rgba(37, 53, 132, 0.12);
+
+}
+
+/* ─── orchid — day ──── */
+[data-mode="light"][data-theme="orchid"] {
+    --bg-app: #f7f2f8;
+    --bg-panel: #f3eaf3;
+    --bg-hover: rgba(117, 48, 120, 0.07);
+    --bg-active: rgba(117, 48, 120, 0.11);
+
+    --border: rgba(55, 46, 56, 0.14);
+    --border-input: rgba(55, 46, 56, 0.2);
+    --border-focus: rgba(117, 48, 120, 0.6);
+
+    --text-1: #372e38;
+    --text-2: #534653;
+    --text-3: #655865;
+
+    --accent: #753078;
+    --accent-hover: #672a69;
+    --accent-active: #5c265e;
+    --accent-bg: rgba(117, 48, 120, 0.12);
+
+}
+
 /* Light mode deliberately uses only two solid surfaces: a brighter main
    workspace and a deeper chrome/rail surface. Session rows and ordinary
    controls stay on the rail surface instead of introducing a third white. */
@@ -1102,7 +1797,7 @@ body {
     height: 100%;
     margin: 0;
     font-family: var(--font);
-    font-size: 14px;
+    font-size: var(--type-body);
     /* No bg here — moved to #root so the rounded clip on #root
        fully owns where the app's surface paints. Body with both
        a bg AND clip-path was leaking square corners in non-Glass
@@ -1145,9 +1840,23 @@ html.is-macos #root {
     border-radius: 0 !important;
     clip-path: none !important;
 }
+/* The native traffic lights ignore webview zoom, so the macOS titlebar
+   counter-zooms to stay at 100% and keep its height, brand inset and tabs
+   aligned with them. Widths that must line up with the zoomed panels below
+   multiply by --ui-scale (WebKit scales vw inside a zoomed element too). */
+html.is-macos .titlebar {
+    zoom: calc(1 / var(--ui-scale));
+}
+html.is-macos .titlebar-left-slot:not(.is-collapsed) {
+    width: calc(var(--w-left) * var(--ui-scale));
+}
 
 
 /* ─── Custom Titlebar ────────────────────────────────── */
+/* Settings covers the window: the bar keeps only the window controls. The tab slot stays mounted
+   (the centre portals its tabs into it), just hidden. */
+.titlebar--settings :is(.titlebar-left-slot, .titlebar-tabs, .titlebar-layout-toggles) { display: none; }
+
 .titlebar {
     height: 40px;
     /* Share the side panels' surface; active tabs use the terminal tone. */
@@ -1203,6 +1912,10 @@ html.is-macos #root {
    logo, matching the spacing Finder/ Safari keep around their own chrome. */
 html.is-macos .titlebar-left-slot .brand {
     padding-left: 88px;
+}
+/* Measured on screen, the capitals' centre sat 1px above the traffic lights' centre. */
+html.is-macos .titlebar-left-slot .brand span {
+    transform: translateY(1px);
 }
 .titlebar-left-slot.is-collapsed {
     width: 0;
@@ -1276,7 +1989,7 @@ html.is-macos .titlebar-left-slot.is-collapsed {
        read as heavy and spread. Kept at 13px for legibility; color inherits
        the button so the label stays unified with the keyboard icon. */
     font-family: var(--font);
-    font-size: 13px;
+    font-size: var(--type-body);
     font-weight: 500;
     line-height: 1.2;
     letter-spacing: normal;
@@ -1361,42 +2074,42 @@ html.is-macos .titlebar-left-slot.is-collapsed {
     top: 0;
     bottom: 0;
     z-index: 12;
-    width: 8px;
+    /* Thin seam hit area (2px each side) so it never sits under a panel's
+       scrollbar; the hover cue is a full-height hairline on the seam. */
+    width: 4px;
     padding: 0;
     cursor: col-resize !important;
     touch-action: none;
     user-select: none;
 }
 .pane-resizer-left {
-    left: calc(var(--w-left) - 4px);
+    left: calc(var(--w-left) - 2px);
     transition: left 250ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .pane-resizer-right {
-    right: calc(var(--w-right) - 4px);
+    right: calc(var(--w-right) - 2px);
     transition: right 250ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .pane-resizer-left.is-collapsed {
-    left: -4px;
+    left: -2px;
     pointer-events: none;
 }
 .pane-resizer-right.is-collapsed {
-    right: -4px;
+    right: -2px;
     pointer-events: none;
 }
 .pane-resizer span {
     position: absolute;
-    top: 50%;
+    top: 0;
+    bottom: 0;
     left: 50%;
     display: block;
-    width: 4px;
-    height: 108px;
-    border-radius: 999px;
+    width: 2px;
     background: transparent;
     opacity: 0;
     pointer-events: none;
-    transform: translate(-50%, -50%);
-    transition: opacity 90ms ease-out, width 90ms ease-out, height 90ms ease-out,
-                background-color 90ms ease-out, box-shadow 90ms ease-out;
+    transform: translateX(-50%);
+    transition: opacity 90ms ease-out, background-color 90ms ease-out;
 }
 .pane-resizer:hover span,
 .panel-resizing-left .pane-resizer-left span,
@@ -1406,8 +2119,6 @@ html.is-macos .titlebar-left-slot.is-collapsed {
 }
 .panel-resizing-left .pane-resizer-left span,
 .panel-resizing-right .pane-resizer-right span {
-    width: 5px;
-    height: 144px;
     background: var(--accent);
 }
 .panel-resizing-left .pane-resizer-right span,
@@ -1533,7 +2244,7 @@ body.resizing-panels .pane-resizer {
     justify-content: space-between;
     align-items: center;
     padding: 12px 16px 8px;
-    font-size: 11px;
+    font-size: var(--type-caption);
     font-weight: 700;
     color: var(--text-3);
     letter-spacing: 0.05em;
@@ -1686,7 +2397,7 @@ body.gambit-docked .multi-agent-grid-standalone {
     align-items: center;
     gap: 6px;
     padding: 6px 8px;
-    font-size: 13px;
+    font-size: var(--type-body);
     color: var(--text-2);
     cursor: pointer;
     /* Follow the active shape form (Panel/Sharp = 0, Soft/Glass = radius-sm).
@@ -1703,7 +2414,7 @@ body.gambit-docked .multi-agent-grid-standalone {
 .tree-children.collapsed { display: none; }
 
 .tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-badge { font-size: 10px; color: var(--text-3); }
+.tree-badge { font-size: var(--type-caption); color: var(--text-3); }
 
 .icon-svg {
     width: 16px;
@@ -1718,7 +2429,7 @@ body.gambit-docked .multi-agent-grid-standalone {
 .toast {
     position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
     background: var(--text-1); color: var(--bg-app);
-    padding: 10px 24px; border-radius: 20px; font-size: 13px; font-weight: 600;
+    padding: 10px 24px; border-radius: 20px; font-size: var(--type-body); font-weight: 600;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.20), 0 6px 20px rgba(0, 0, 0, 0.22); z-index: 1000;
     animation: toastIn 0.3s ease;
 }
@@ -1912,7 +2623,7 @@ html.is-windows[data-frost="frost"] #root {
    untouched. */
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-left :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line),
 :is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-right :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line),
-:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-center :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line, .session-split-pane, .session-split-divider, .tool-control-runtime, .tool-control-agent, .skill-card, .skill-card *, .control-demo, .control-demo *) {
+:is([data-shape="glass"], [data-shape="carbon"], [data-shape="monogram"]) .panel-center :is(div, section, aside, nav, header, footer, main):not(.launchpad-card, .launchpad-card-group, .task-card, .task-note-card, .task-prompt-card, .task-prompt-category-menu, .task-note-head, .task-droppable-area, .guide-card, .remote-form-card, .remote-form-overlay, .remote-protocol-toggle, .remote-pill, .chat-input-container, .library-item, .library-toggle, .library-toggle-knob, .ctx-menu, .gambit, .tool-config-modal, .tab-status-dot, .heatmap-cell, .conversation-navigation-tooltip, .diff-line, .session-split-pane, .session-split-divider, .tool-control-runtime, .tool-control-agent, .skill-card, .skill-card *, .control-demo, .control-demo *, .settings-page, .settings-page *) {
     background: transparent !important;
     border-color: transparent !important;
     box-shadow: none !important;
@@ -2176,8 +2887,7 @@ html.is-windows[data-frost="frost"] #root {
    rgb(from var(--accent) r g b / a) is relative-color syntax; engines that
    don't support it drop the background declaration and fall back to the
    base solid --accent (the safe non-glass look), never to broken. */
-[data-shape="glass"] .gambit-send,
-[data-shape="glass"] .task-fab-simple {
+[data-shape="glass"] .gambit-send {
     color: #fff;
     background: rgb(from var(--accent, #c4956a) r g b / 0.45);
     backdrop-filter: blur(12px) saturate(160%);
@@ -2187,13 +2897,6 @@ html.is-windows[data-frost="frost"] #root {
         inset 0 1px 0 0 rgba(255, 255, 255, 0.35),
         inset 0 -1px 0 0 rgba(0, 0, 0, 0.10);
 }
-/* FAB hover: base .task-fab-simple:hover swaps in an opaque --accent-hover
-   fill at equal specificity, which would clobber the frost. Re-tint it so
-   hover stays glass (a touch more saturated), not a flat solid. */
-[data-shape="glass"] .task-fab-simple:hover {
-    background: rgb(from var(--accent-hover, var(--accent, #c4956a)) r g b / 0.62);
-}
-
 /* Chrome flare ::before/::after paint quarter-arc bridges in
    opaque var(--bg-terminal) from the active tab into the terminal
    bg below. In glass that bg is translucent --glass-tint, so the
@@ -2437,6 +3140,43 @@ html.is-windows[data-frost="frost"] #root {
     background: rgba(255, 255, 255, 0.18);
 }
 
+/* Carbon: a quiet graphite twill instead of the hex mesh. Fine crossed
+   threads over the theme base plus one faint diagonal sheen; the ink takes a
+   touch of the accent. Static gradients only. Character flow and
+   Basalt override these layers below via data-background. */
+[data-shape="carbon"] {
+    --carbon-ink: color-mix(in srgb, rgb(198 206 214) 90%, var(--accent));
+}
+[data-shape="carbon"]:where([data-mode="light"]) {
+    --carbon-ink: color-mix(in srgb, var(--text-1) 90%, var(--accent));
+}
+[data-shape="carbon"] #root {
+    background:
+        linear-gradient(118deg, transparent 14%, rgba(255, 255, 255, 0.03) 48%, transparent 78%),
+        var(--bg-app);
+}
+[data-shape="carbon"]:where([data-mode="light"]) #root {
+    background:
+        linear-gradient(118deg, transparent 14%, color-mix(in srgb, var(--text-1) 3.5%, transparent) 48%, transparent 78%),
+        var(--bg-app);
+}
+[data-shape="carbon"] #root::before {
+    -webkit-mask-image: none;
+            mask-image: none;
+    opacity: 1;
+    background:
+        repeating-linear-gradient(34deg, color-mix(in srgb, var(--carbon-ink) 8%, transparent) 0 1px, transparent 1px 3px),
+        repeating-linear-gradient(-28deg, color-mix(in srgb, var(--carbon-ink) 3.5%, transparent) 0 1px, transparent 1px 4px);
+}
+[data-shape="carbon"]:where([data-mode="light"]) #root::before {
+    background:
+        repeating-linear-gradient(34deg, color-mix(in srgb, var(--carbon-ink) 13%, transparent) 0 1px, transparent 1px 3px),
+        repeating-linear-gradient(-28deg, color-mix(in srgb, var(--carbon-ink) 6%, transparent) 0 1px, transparent 1px 4px);
+}
+[data-shape="carbon"] #root::after {
+    background: none;
+}
+
 /* Character flow shares Carbon's transparent chrome, with one GPU canvas
    replacing the static material. Keep it inside the root's rounded clip. */
 [data-background="characters"] #root {
@@ -2446,6 +3186,19 @@ html.is-windows[data-frost="frost"] #root {
 [data-background="characters"] #root::after {
     display: none;
 }
+/* Basalt (碳岩): fine-sand stone with static grain and pores. The PNG's
+   transparent shadows/highlights keep the theme base underneath. */
+[data-background="basalt"] #root {
+    background: url('/backgrounds/basalt-dark.png') center / cover no-repeat, var(--bg-app);
+}
+[data-mode="light"][data-background="basalt"] #root {
+    background: url('/backgrounds/basalt-light.png') center / cover no-repeat, var(--bg-app);
+}
+[data-background="basalt"] #root::before,
+[data-background="basalt"] #root::after {
+    display: none;
+}
+
 .character-background,
 .character-background canvas {
     position: absolute;
@@ -2544,3 +3297,9 @@ html.is-windows[data-frost="frost"] #root {
 :is([data-shape="carbon"], [data-shape="monogram"])[data-mode="light"] .agent-session-search:focus {
     background: color-mix(in oklab, #fffdf9 80%, transparent);
 }
+
+/* The app's one on/off switch: Settings rows and the composer's effort menu share it. */
+.settings-switch { position: relative; flex-shrink: 0; width: 40px; height: 24px; padding: 0; border: 0; border-radius: 12px; background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-input); cursor: pointer; transition: background 150ms; }
+.settings-switch > span { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 150ms; }
+.settings-switch[aria-checked="true"] { background: var(--accent); box-shadow: none; }
+.settings-switch[aria-checked="true"] > span { transform: translateX(16px); }

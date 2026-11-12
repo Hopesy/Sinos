@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { build } from 'esbuild';
 
-const { chromium } = await import(process.env.COFFEE_PLAYWRIGHT_MODULE || 'playwright-core');
+// COFFEE_TEST_BROWSER=webkit runs the same checks in the engine macOS uses.
+const chromium = (await import(process.env.COFFEE_PLAYWRIGHT_MODULE || 'playwright-core'))[process.env.COFFEE_TEST_BROWSER || 'chromium'];
 const project = fileURLToPath(new URL('..', import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), 'coffee-scroll-'));
 await build({
@@ -21,8 +22,8 @@ await build({
     createRoot(document.getElementById('root')).render(<Fixture/>);
   ` },
   bundle: true, outfile: join(directory, 'fixture.js'), jsx: 'automatic',
-  external: ['/fonts/*', '/monogram.svg'],
-  nodePaths: [join(project, 'node_modules')], loader: { '.webp': 'dataurl', '.webm': 'dataurl', '.gif': 'dataurl' },
+  external: ['/fonts/*', '/monogram.svg', '/backgrounds/*'],
+  nodePaths: [join(project, 'node_modules')], loader: { '.webp': 'dataurl', '.webm': 'dataurl', '.mov': 'dataurl', '.gif': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"development"' },
   plugins: [{ name: 'isolated-session', setup(builder) {
     builder.onResolve({ filter: /(^|\/)tauri$/ }, () => ({ path: 'tauri', namespace: 'fixture' }));
@@ -41,7 +42,7 @@ await build({
     ` : args.path === 'tauri' ? `export const commands=new Proxy({},{get:(_,name)=>async(...args)=>{(window.nativeActions??=[]).push({name,args});if(name==='computerName')return 'TEST-DESKTOP'}});` : `
       import {useSyncExternalStore} from 'react';import {emptyClaudeState,reduceClaudeEvent} from './src/lib/claude-protocol';
       let state={...emptyClaudeState(),ready:true};const listeners=new Set();
-      window.setSession=patch=>{state={...state,...patch};listeners.forEach(fn=>fn())};
+      window.setSession=patch=>{state={...state,...patch};listeners.forEach(fn=>fn())};window.currentMessages=()=>state.messages;
       window.stopFixture=errors=>{state=reduceClaudeEvent({...state,interruptRequested:true},{type:'result',is_error:true,errors});listeners.forEach(fn=>fn())};
       window.reset=kind=>{
         clearInterval(window.streamTimer);window.tick=0;
@@ -56,7 +57,7 @@ await build({
       window.appendReply=()=>window.setSession({messages:[...state.messages,{id:crypto.randomUUID(),role:'assistant',content:'A new reply paragraph.\\n\\n'.repeat(30),timestamp:Date.now()}]});
       window.finish=()=>{window.stopStream();window.setSession({busy:false,status:'idle',endedAt:Date.now(),messages:state.messages.map(m=>m.id==='live'?{...m,partial:false,toolStatus:m.role==='tool'?'done':undefined}:m)})};
       export function useClaudeSession(){return useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>state)};
-      export function retainClaudeSession(){return()=>{}};export async function controlClaude(){return {}};export async function respondClaude(){};
+      export function retainClaudeSession(){return()=>{}};export async function controlClaude(){return {}};export async function respondClaude(){};export function continueClaudeInNewConversation(){};export async function settleClaudeColdReturn(){return ''};
       export async function loadClaudeHistory(){const older=Array.from({length:24},(_,i)=>({id:'older-'+i,role:'user',content:'Older '+i+'\\n\\n'+'Older context. '.repeat(35),timestamp:Date.now()-200000+i}));window.setSession({messages:[...older,...state.messages],historyCursor:0})};
     ` }));
   } }],
@@ -65,10 +66,10 @@ const html = `<!doctype html><link rel="stylesheet" href="/fixture.css"><style>
 *{box-sizing:border-box}body{margin:0;background:#15101d}:root{--font:Arial,sans-serif;--mono:monospace;--accent:#937fa3;--bg-terminal:#15101d;--bg-panel:#231c2b;--bg-hover:#302838;--text-1:#ded5e5;--text-2:#bdb0c7;--text-3:#a597af;--border:#463b50;--gambit-dock-h:180px}#root,.host{height:100vh}.host{width:100%}
 </style><body class="gambit-docked"><div id="root"></div><script src="/fixture.js"></script>`;
 const server = http.createServer(async (req, res) => {
-  if (req.url === '/') return res.setHeader('Content-Type', 'text/html').end(html);
+  if (req.url === '/') return res.setHeader('Content-Type', 'text/html; charset=utf-8').end(html);
   const name = req.url.slice(1);
   if (!['fixture.js', 'fixture.css'].includes(name)) return res.writeHead(404).end();
-  res.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : 'text/css');
+  res.setHeader('Content-Type', `${name.endsWith('.js') ? 'text/javascript' : 'text/css'}; charset=utf-8`);
   res.end(await readFile(join(directory, name)));
 });
 await new Promise(accept => server.listen(0, '127.0.0.1', accept));
@@ -106,12 +107,13 @@ try {
     console.log('ok', role, 'stream, upward reading, return follow and completion');
   }
   await returnBottom();
-  await page.evaluate(() => window.setSession({usage:{input_tokens:69000,output_tokens:2100},totalCost:1.4818}));
+  // A turn's totals ride on its last message.
+  await page.evaluate(() => window.setSession({messages:window.currentMessages().map(m=>m.id==='live'?{...m,turnStats:{durationMs:2000,usage:{input:69000,output:2100},cost:1.4818}}:m)}));
   const summary = page.locator('.claude-turn-summary'); await summary.waitFor();
   assert.equal(await summary.locator('..').getAttribute('data-message-id'), 'live', 'usage belongs inside the final timeline message');
   const summaryBox = await summary.boundingBox(), copyBox = await summary.locator('..').locator('.conversation-copy').boundingBox();
   assert.ok(summaryBox.y - copyBox.y - copyBox.height >= 0 && summaryBox.y - copyBox.y - copyBox.height <= 12, 'usage follows the copy action without a large gap');
-  assert.ok((await summary.textContent()).includes('71.1k') && (await summary.textContent()).includes('1.4818'), 'usage values remain intact');
+  assert.ok((await summary.textContent()).includes('71.1k') && (await summary.textContent()).includes('1.48'), 'usage values remain intact');
   console.log('ok usage is inside the timeline, close to copy, with original values');
   await page.setViewportSize({ width: 1100, height: 600 }); await page.waitForTimeout(150); await atBottom();
   await page.setViewportSize({ width: 1100, height: 850 }); await page.waitForTimeout(150); await atBottom();
@@ -131,8 +133,8 @@ try {
   console.log('ok viewport resizing and tab hide/reveal');
 
   await page.evaluate(() => window.reset('write')); await page.waitForTimeout(450); await returnBottom();
-  await page.locator('.claude-tool-body .claude-tool-resize').click(); await page.waitForTimeout(200); await atBottom();
-  await wheelUp(180); await page.locator('.claude-tool-body .claude-tool-resize').evaluate(el => el.click()); await page.waitForTimeout(200);
+  await page.locator('.claude-tool-body .claude-expand-tab').click(); await page.waitForTimeout(200); await atBottom();
+  await wheelUp(180); await page.locator('.claude-tool-body .claude-expand-tab').evaluate(el => el.click()); await page.waitForTimeout(200);
   const collapsed = await metrics(); await page.evaluate(() => window.appendReply()); await page.waitForTimeout(350);
   assert.ok(Math.abs((await metrics()).top - collapsed.top) < 2, 'tool collapse cannot silently resume follow');
   console.log('ok tool expansion follows only while pinned; collapse cannot re-enable follow');
@@ -150,15 +152,33 @@ try {
   assert.ok(Math.abs((await metrics()).top - keyboardPosition.top) < 2, 'keyboard reading stays paused');
   await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); }); await page.evaluate(() => window.startStream()); await page.waitForTimeout(200); await atBottom(); await page.evaluate(() => window.stopStream());
   console.log('ok keyboard reading and manual bottom resume');
+  await scroll.hover(); await page.waitForTimeout(100);
+  await page.locator('.cc-scrollbar-wide .cc-scrollbar-slider').dispatchEvent('pointerdown', { button: 0, clientY: 300 });
   await scroll.evaluate(el => { el.scrollTop -= 30; window.appendReply(); }); await page.waitForTimeout(200);
+  await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerup')));
   assert.ok((await metrics()).distance > 10, 'a scrollbar movement is respected even before its scroll event is delivered');
   await returnBottom(); await scroll.dispatchEvent('touchmove');
   await scroll.evaluate(el => { el.scrollTop -= 30; window.appendReply(); }); await page.waitForTimeout(200);
   assert.ok((await metrics()).distance > 10, 'touch movement pauses follow before content updates');
-  console.log('ok scrollbar event race and touch intent');
+  await returnBottom(); await scroll.dispatchEvent('pointerdown', { button: 0 });
+  await scroll.evaluate(el => { el.scrollTop -= 30; window.appendReply(); }); await page.waitForTimeout(200);
+  await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerup')));
+  assert.ok((await metrics()).distance > 10, 'selecting text upward with the button held pauses follow');
+  console.log('ok scrollbar event race, touch and selection intent');
+
+  // macOS WebKit can restore an older scroll position after a programmatic jump.
+  // Without user input that must not stop following the reply.
+  await returnBottom(); await page.evaluate(() => window.startStream()); await page.waitForTimeout(150);
+  for (const delay of [0, 120]) {
+    await scroll.evaluate(el => { el.scrollTop -= 400; }); await page.waitForTimeout(delay);
+    await page.evaluate(() => window.appendReply()); await page.waitForTimeout(250); await atBottom();
+    assert.equal(await page.locator('.claude-scroll-bottom').count(), 0, 'an engine scroll restore keeps following without the jump button');
+  }
+  await page.evaluate(() => window.stopStream());
+  console.log('ok engine scroll restore keeps following');
 
   await page.evaluate(() => window.reset('assistant')); await page.waitForTimeout(400);
-  await scroll.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); }); await page.waitForTimeout(350);
+  await scroll.evaluate(el => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); }); await page.waitForTimeout(350);
   const anchor = page.locator('[data-message-id="history-0"]');
   const before = await anchor.boundingBox(); await page.getByRole('button', { name: 'Load earlier messages', exact: true }).click(); await page.waitForTimeout(400);
   const after = await anchor.boundingBox(); assert.ok(Math.abs(after.y - before.y) < 2, `loading earlier history preserves its visible anchor: ${JSON.stringify({ before, after, scroll: await metrics() })}`);
@@ -180,7 +200,7 @@ try {
   const jumped = await metrics(); await page.evaluate(() => window.startStream()); await page.waitForTimeout(350);
   assert.ok(Math.abs((await metrics()).top - jumped.top) < 2, 'navigation pauses streaming follow');
   await wheelUp(90); const afterJumpWheel = await metrics(); await page.waitForTimeout(200);
-  assert.ok(afterJumpWheel.top < jumped.top - 30 && Math.abs((await metrics()).top - afterJumpWheel.top) < 2, 'manual scrolling releases the navigation anchor');
+  assert.ok(afterJumpWheel.top < jumped.top - 30 && Math.abs((await metrics()).top - afterJumpWheel.top) < 2, `manual scrolling releases the navigation anchor: ${JSON.stringify({ jumped, afterJumpWheel, now: await metrics() })}`);
   await returnBottom(); await page.waitForTimeout(200); await atBottom(); await page.evaluate(() => window.stopStream());
   await turn.click(); await page.waitForTimeout(300);
   assert.ok(Math.abs((await page.locator('[data-message-id="history-10"]').boundingBox()).y - 24) < 2, 'repeat jumps use measured rows accurately');
@@ -231,7 +251,7 @@ try {
   await page.evaluate(() => window.setSession({ messages: [window.reasoningMessage, ...Array.from({ length: 60 }, (_, i) => ({ id: 'toggle-tail-' + i, role: 'user', content: 'Another turn. '.repeat(50), timestamp: Date.now() }))] }));
   await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); }); await page.waitForTimeout(350);
   assert.equal(await thinking.count(), 0, 'offscreen reasoning is virtualized');
-  await scroll.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); }); await page.waitForTimeout(350);
+  await scroll.evaluate(el => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); }); await page.waitForTimeout(350);
   assert.equal(await thinking.evaluate(el => el.open), true, 'expansion survives virtual row remounting');
   await page.evaluate(() => window.setSession({ messages: [{ ...window.reasoningMessage, content: '' }] }));
   assert.equal(await thinking.locator('summary').count(), 0, 'empty or withheld reasoning has no misleading expand arrow');
@@ -252,34 +272,40 @@ try {
   const outputScroll = outputRow.locator('.claude-tool-content-scroll');
   const preview = await outputScroll.boundingBox();
   assert.ok(preview.height <= 180);
-  await outputRow.getByRole('button', { name: 'Click to expand', exact: true }).click(); await page.waitForTimeout(100);
+  await page.locator('.claude-expand-tab').click(); await page.waitForTimeout(100);
   assert.ok((await outputScroll.boundingBox()).height > preview.height + 100);
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, output: window.toolMessage.output + '\nLast streamed line' }] }));
-  assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'true', 'stream updates preserve expanded output');
+  assert.equal(await page.locator('.claude-expand-tab').getAttribute('aria-expanded'), 'true', 'stream updates preserve expanded output');
   await page.evaluate(() => window.setActive(false)); await page.waitForTimeout(100);
   assert.equal(await page.locator('.claude-code').count(), 0, 'hidden tool output releases code rendering');
   await page.evaluate(() => window.setActive(true)); await page.waitForTimeout(100);
-  assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'true', 'tab switching preserves expanded tool output');
-  await outputRow.getByRole('button', { name: 'Collapse', exact: true }).click();
-  assert.equal(await outputRow.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.claude-expand-tab').getAttribute('aria-expanded'), 'true', 'tab switching preserves expanded tool output');
+  await page.locator('.claude-expand-tab').click();
+  assert.equal(await page.locator('.claude-expand-tab').getAttribute('aria-expanded'), 'false');
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, toolName: 'Write', toolStatus: 'running', input: {}, output: undefined }] }));
   assert.equal(await page.locator('.claude-tool-pending').count(), 1, 'a streaming Write with incomplete arguments displays a pending state');
   assert.equal(await page.locator('.claude-tool-subtitle').count(), 0, 'incomplete Write arguments do not claim a one-line file');
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, toolName: 'Write', input: { file_path: 'example.ts', content: 'new file line\n'.repeat(40) } }] }));
   await page.locator('.claude-tool-body').getByRole('button', { name: 'Copy message', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copiedText), 'new file line\n'.repeat(40));
-  await page.locator('.claude-tool-resize').click();
-  assert.equal(await page.locator('.claude-tool-resize').getAttribute('aria-expanded'), 'true');
+  await page.locator('.claude-expand-tab').click();
+  assert.equal(await page.locator('.claude-expand-tab').getAttribute('aria-expanded'), 'true');
   await page.evaluate(() => window.setSession({ messages: [{ ...window.toolMessage, toolName: 'Edit', input: { file_path: 'example.ts', old_string: 'before\n'.repeat(20), new_string: 'after\n'.repeat(20) } }] }));
   await page.locator('.claude-diff').getByRole('button', { name: 'Copy message', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copiedText), 'after\n'.repeat(20));
-  await page.locator('.claude-tool-resize').click();
+  await page.locator('.claude-expand-tab').click();
   assert.equal(await page.locator('.claude-diff.is-expanded').count(), 1);
   await page.evaluate(() => window.setActive(false)); await page.waitForTimeout(100);
   assert.equal(await page.locator('.claude-diff-row').count(), 0, 'hidden diffs release rendered rows');
   await page.evaluate(() => window.setActive(true)); await page.waitForTimeout(100);
   assert.equal(await page.locator('.claude-diff.is-expanded').count(), 1, 'tab switching preserves expanded diffs');
   assert.ok(await page.locator('.claude-diff-row').count() > 0);
+  const diffTab = await page.locator('.claude-expand-tab').boundingBox(), diffBox = await page.locator('.claude-diff').boundingBox();
+  assert.ok(diffTab.y >= diffBox.y + diffBox.height - 2 && diffTab.x + diffTab.width <= diffBox.x + diffBox.width, 'the tab hangs from the lower right edge');
+  assert.equal(await page.locator('.claude-expand-tab').textContent(), 'Collapse', 'an open block offers Collapse right at its bottom');
+  assert.equal(await page.locator('.claude-diff-scroll').evaluate(el => el.scrollHeight <= el.clientHeight + 1), true, 'an open block shows everything without an inner scroll');
+  await page.locator('.claude-diff .claude-tool-resize').click();
+  assert.equal(await page.locator('.claude-expand-tab').textContent(), 'Expand', 'the top-right icon and the bottom tab share one state');
   await page.setViewportSize({ width: 390, height: 800 }); await page.waitForTimeout(150);
   assert.ok(await scroll.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
   console.log('ok tool input/output copy, expansion, streaming updates, Write pending state and diff controls');
@@ -332,7 +358,7 @@ try {
   assert.equal(await page.locator('.claude-working').count(),0,'startup shows the welcome screen without a Connecting row');
   await page.evaluate(()=>window.setSession({error:'Startup unavailable'}));
   await page.waitForFunction(()=>document.querySelector('.claude-reconnect'));
-  assert.equal(await page.locator('.claude-session-error').count(),0,'connection failures do not become red conversation messages');
+  assert.equal(await page.locator('.claude-session-error').textContent(),'Startup unavailable','a failed start says why in place');
   assert.equal(await page.locator('.claude-reconnect').getAttribute('title'),'Startup unavailable');
   await page.evaluate(()=>window.setSession({ready:true,status:'idle',error:undefined}));
   const resolvedModel = 'deepseek-flash[1m]';
@@ -412,10 +438,10 @@ try {
   await page.evaluate(()=>window.setSession({busy:false,ready:true,messages:[{id:'link',role:'assistant',content:'[Open page](./test%20page.html) [Website](https://example.com)',timestamp:Date.now()}]}));
   const local=page.getByRole('link',{name:'Open page',exact:true});await local.click();assert.deepEqual(await page.evaluate(()=>window.nativeActions.at(-1)),{name:'openUrl',args:['D:/Test/test page.html']});
   await page.getByRole('link',{name:'Website',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.nativeActions.at(-1).args),['https://example.com']);
-  await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:'Copy link address',exact:true}).click();assert.equal(await page.evaluate(()=>window.copiedText),'D:/Test/test page.html');
+  await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:'Copy path',exact:true}).click();assert.equal(await page.evaluate(()=>window.copiedText),'D:/Test/test page.html');
   await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:'Reveal in File Explorer',exact:true}).click();assert.equal(await page.evaluate(()=>window.nativeActions.at(-1).name),'showInFolder');
-  await local.evaluate(el=>window.getSelection().selectAllChildren(el));await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Copy Ctrl/}).click();assert.equal(await page.evaluate(()=>window.copiedText),'Open page');
-  await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Paste Ctrl/}).click();assert.deepEqual(await page.evaluate(()=>window.actions.at(-1)),{type:'APPEND_GAMBIT_DRAFT',id:'scroll',text:'pasted text'});
+  await local.evaluate(el=>window.getSelection().selectAllChildren(el));await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Copy (Ctrl|⌘)/}).click();assert.equal(await page.evaluate(()=>window.copiedText),'Open page');
+  await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Paste (Ctrl|⌘)/}).click();assert.deepEqual(await page.evaluate(()=>window.actions.at(-1)),{type:'APPEND_GAMBIT_DRAFT',id:'scroll',text:'pasted text'});
   console.log('ok Claude local files, website clicks, link actions, selection copy and paste into draft');
   assert.deepEqual(errors, []);
 } finally {

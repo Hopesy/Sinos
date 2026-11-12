@@ -17,9 +17,10 @@ const { code: diffContextResolver } = await transform(resolver + '\n' + normaliz
 const mock = `
 import {useSyncExternalStore} from 'react';
 const listeners=new Set();
-let state={gitTrackingDisabledPaths:[],currentLang:'zh-CN',iconTheme:'material',taskViewMode:'list',activeTerminalId:'a',terminals:[{id:'a',tool:null,folderPath:'D:/test'}],diffMode:'overlay',diffSelection:null};
+let state={gitTrackingDisabledPaths:[],taskViewMode:'list',currentLang:'zh-CN',iconTheme:'material',preInputQueue:[],preInputReveal:0,preInputButton:true,activeTerminalId:'a',terminals:[{id:'a',tool:null,folderPath:'D:/test'}],diffMode:'overlay',diffSelection:null};
 function emit(){state={...state};listeners.forEach(fn=>fn())}
-function dispatch(action){if(action.type==='SET_DIFF_SELECTION')state={...state,diffSelection:action.selection};if(action.type==='CLEAR_DIFF')state={...state,diffSelection:null};if(action.type==='SET_DIFF_MODE')state={...state,diffMode:action.mode};if(action.type==='SET_GIT_TRACKING'){const key=normalizeProjectPath(action.path);state={...state,gitTrackingDisabledPaths:action.enabled?state.gitTrackingDisabledPaths.filter(path=>path!==key):[...state.gitTrackingDisabledPaths,key]}}emit()}
+function dispatch(action){if(action.type==='APPEND_GAMBIT_DRAFT')window.appended=action.text;if(action.type==='SET_DIFF_SELECTION')state={...state,diffSelection:action.selection};if(action.type==='CLEAR_DIFF')state={...state,diffSelection:null};if(action.type==='SET_DIFF_MODE')state={...state,diffMode:action.mode};if(action.type==='SAVE_PRE_INPUT')state={...state,preInputQueue:[...state.preInputQueue,action.text],preInputReveal:state.preInputReveal+1,rightPanelHidden:false};if(action.type==='TAKE_PRE_INPUT')state={...state,preInputQueue:state.preInputQueue.slice(action.count)};if(action.type==='SET_GIT_TRACKING'){const key=normalizeProjectPath(action.path);state={...state,gitTrackingDisabledPaths:action.enabled?state.gitTrackingDisabledPaths.filter(path=>path!==key):[...state.gitTrackingDisabledPaths,key]}}emit()}
+window.savePreInput=text=>dispatch({type:'SAVE_PRE_INPUT',text});window.hideRight=()=>{state={...state,rightPanelHidden:true};emit()};window.showRight=()=>{state={...state,rightPanelHidden:false};emit()};window.preInputQueue=()=>state.preInputQueue;
 export function useAppState(){return {state:useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>state),dispatch}}
 export function useAppLanguage(){return 'zh-CN'}
 ${diffContextResolver}
@@ -30,7 +31,6 @@ window.setChanges=kind=>{changes=kind==='ok'?fixture:{state:kind};emit();window.
 window.makeLongList=()=>{fixture.uncommitted=Array.from({length:60},(_,i)=>entry('src/file-'+i+'.tsx'));changes=fixture;emit();window.dispatchEvent(new CustomEvent('fs-refresh',{detail:{dirPath:'D:/test'}}))};
 window.setFolder=folder=>{state={...state,terminals:[{...state.terminals[0],folderPath:folder}]};emit()};
 window.setTool=tool=>{state={...state,terminals:[{...state.terminals[0],tool}]};emit()};
-window.setTaskMode=mode=>{state={...state,taskViewMode:mode};emit()};
 window.getSelection=()=>state.diffSelection;
 window.movePreview=mode=>dispatch({type:'SET_DIFF_MODE',mode});
 window.previewExplorerFile=()=>dispatch({type:'SET_DIFF_SELECTION',selection:{path:'D:/test/README.md',repoRoot:'D:/test',folderPath:'D:/test',rel:'README.md',kind:'file',fileSize:100}});
@@ -41,7 +41,7 @@ export async function invoke(){throw new Error('Unexpected native call in file-r
 export const commands={
  async gitCaptureBaseline(){},
  async gitChanges(){window.calls.gitReads++;if(window.holdGit)await new Promise(resolve=>window.resolveGit=resolve);if(changes.state==='error')throw new Error('fixture read failure');return structuredClone(changes)},
- async loadTasks(){window.calls.taskLoads++;return JSON.stringify([{id:'task-one',title:'保留原有任务',status:'todo',createdAt:1}])},
+ async loadTasks(){window.calls.taskLoads++;return window.savedTasks?JSON.stringify(window.savedTasks):JSON.stringify([{id:'task-one',title:'保留原有任务',description:'旧的待办备注',status:'todo',createdAt:1}])},
  async saveTasks(data){window.calls.taskSaves++;window.savedTasks=JSON.parse(data)},
  async gitProjectStatus(){return {repo_root:'D:/test',branch:'feature/sidebar',github:'ok',pull_request:{number:42,url:'https://github.com/example/repo/pull/42',state:'open',ci:'success'}}},
  async gitCommitFiles(root,hash){window.calls.commits++;return [entry('src/shared.tsx',2,1)]},
@@ -59,8 +59,8 @@ export function getShikiTheme(){return 'github-dark-default'}
 export function useTextContextMenu(){return {menu:null,openMenu(){}}}
 export async function submitTerminalPrompt(id,text){window.pastedTask=text}
 `;
-await build({stdin:{resolveDir:project,loader:'tsx',contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {RightPanel} from './src/components/right/Compiler';import {GitStatusProvider} from './src/lib/git-status';import './src/styles/global.css';import './src/components/left/Explorer.css';createRoot(document.getElementById('root')).render(<GitStatusProvider><RightPanel/></GitStatusProvider>);`},bundle:true,outfile:join(directory,'fixture.js'),jsx:'automatic',nodePaths:[join(project,'node_modules')],loader:{'.woff2':'dataurl','.woff':'dataurl','.png':'dataurl','.svg':'dataurl'},define:{'process.env.NODE_ENV':'"development"','__IS_LINUX__':'false'},plugins:[{name:'review-fixture',setup(b){
- b.onResolve({filter:/^\/(?:fonts\/|monogram)/},args=>({path:join(project,'public',args.path)}));
+await build({stdin:{resolveDir:project,loader:'tsx',contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {RightPanel} from './src/components/right/Compiler';import {useAppState} from './src/store/app-state';function Host(){const {state}=useAppState();return state.rightPanelHidden?null:<RightPanel/>}import {GitStatusProvider} from './src/lib/git-status';import './src/styles/global.css';import './src/components/left/Explorer.css';createRoot(document.getElementById('root')).render(<GitStatusProvider><Host/></GitStatusProvider>);`},bundle:true,outfile:join(directory,'fixture.js'),jsx:'automatic',nodePaths:[join(project,'node_modules')],loader:{'.woff2':'dataurl','.woff':'dataurl','.ttf':'dataurl','.png':'dataurl','.svg':'dataurl'},define:{'process.env.NODE_ENV':'"development"','__IS_LINUX__':'false'},plugins:[{name:'review-fixture',setup(b){
+ b.onResolve({filter:/^\/(?:fonts\/|monogram|backgrounds\/)/},args=>({path:join(project,'public',args.path)}));
  b.onResolve({filter:/^\.\/terminal-control$/},()=>({path:'mock',namespace:'fixture'}));
  b.onResolve({filter:/(?:store\/app-state|tauri|lib\/(?:explorer-drag|shiki|use-text-context-menu|terminal-control)|left\/Explorer)$/},()=>({path:'mock',namespace:'fixture'}));
  b.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:mock,resolveDir:project,loader:'tsx'}));
@@ -163,21 +163,30 @@ try{
  await page.locator('.changes-scroll').evaluate(el=>{el.scrollTop=245});
  const scrollBefore=await page.locator('.changes-scroll').evaluate(el=>el.scrollTop);assert.ok(scrollBefore>200);
  await rows.nth(8).click();await listTab.click();assert.equal(await page.locator('.changes-scroll').evaluate(el=>el.scrollTop),scrollBefore,'list scroll position survives detail visits');
- const taskTab=page.getByRole('tab',{name:'任务列表'});await taskTab.click();await page.locator('.task-title-text').waitFor();assert.equal(await page.locator('.task-board').count(),1);assert.equal(await page.evaluate(()=>window.calls.taskLoads),1);
+ const taskTab=page.getByRole('tab',{name:'预输入'});await taskTab.click();await page.locator('.task-note-preview').waitFor();assert.equal(await page.locator('.task-board').count(),1);
+ // Old to-do notes (and prompt bodies) fold into the note text once and are saved that way.
+ assert.equal(await page.locator('.task-note-preview').textContent(),'保留原有任务\n\n旧的待办备注');await page.waitForFunction(()=>window.savedTasks?.[0]&&!('description' in window.savedTasks[0]));assert.equal(await page.evaluate(()=>window.calls.taskLoads),1);
  const todoPreviewReads=await page.evaluate(()=>window.calls.fileReads);await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fs-refresh',{detail:{dirPath:'D:/test'}})));await page.waitForTimeout(950);assert.equal(await page.evaluate(()=>window.calls.fileReads),todoPreviewReads,'Todo also suspends hidden preview reads');
- await page.locator('.task-edit-inline').click();await page.locator('.task-title-edit').fill('移到右侧后保留任务');await page.locator('.task-title-edit').press('Enter');
- await listTab.click();await taskTab.click();assert.equal(await page.locator('.task-title-text').textContent(),'移到右侧后保留任务');
- await page.evaluate(()=>window.setFolder('D:/another-workspace'));assert.equal(await taskTab.getAttribute('aria-selected'),'true');assert.equal(await page.evaluate(()=>window.calls.taskLoads),1,'workspace changes must not remount task storage/editors');assert.equal(await page.locator('.task-title-text').textContent(),'移到右侧后保留任务');
+ await listTab.click();await taskTab.click();assert.equal(await page.locator('.task-note-preview').textContent(),'保留原有任务\n\n旧的待办备注');
+ await page.evaluate(()=>window.setFolder('D:/another-workspace'));assert.equal(await taskTab.getAttribute('aria-selected'),'true');assert.equal(await page.evaluate(()=>window.calls.taskLoads),1,'workspace changes must not remount task storage');assert.equal(await page.locator('.task-note-preview').textContent(),'保留原有任务\n\n旧的待办备注');
  await page.evaluate(()=>window.setTool('terminal'));
- await page.locator('.task-slot-send').click();assert.equal(await page.evaluate(()=>window.pastedTask),'移到右侧后保留任务');await page.waitForFunction(()=>window.savedTasks?.[0]?.status==='working');
- await page.locator('.task-check-btn').click();await page.waitForFunction(()=>window.savedTasks?.[0]?.status==='done');assert.equal(await page.evaluate(()=>window.savedTasks[0].title),'移到右侧后保留任务');
- await page.evaluate(()=>window.setTaskMode('note'));await page.locator('.task-note-body').waitFor();assert.equal(await page.locator('.task-note-body').inputValue(),'移到右侧后保留任务');
- await page.evaluate(()=>window.setTaskMode('prompt'));await page.locator('.task-prompt-group').waitFor();assert.equal(await page.locator('.task-prompt-group').getAttribute('data-category'),'移到右侧后保留任务');
- await page.evaluate(()=>window.setTaskMode('list'));await page.locator('.task-title-text').waitFor();assert.equal(await page.evaluate(()=>window.calls.taskLoads),1,'all task presentations share the same mounted storage');
+ await page.locator('.task-note-preview').first().click();assert.equal(await page.evaluate(()=>window.appended),'保留原有任务\n\n旧的待办备注','a click puts the note in the composer');assert.equal(await page.evaluate(()=>window.pastedTask),undefined,'and sends nothing');
+ assert.equal(await page.evaluate(()=>window.savedTasks[0].title),'保留原有任务\n\n旧的待办备注');assert.equal(await page.evaluate(()=>window.calls.taskLoads),1,'the board loads its notes once');
  const reads=await page.evaluate(()=>window.calls.gitReads);await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fs-refresh',{detail:{dirPath:'D:/another-workspace'}})));await page.waitForTimeout(950);assert.equal(await page.evaluate(()=>window.calls.gitReads),reads,'hidden review does not poll Git while using Todo');
  await page.locator('#root').screenshot({path:join(directory,'right-task-panel.png')});
  await page.evaluate(()=>{localStorage.removeItem('cc-right-tab');localStorage.setItem('cc-left-tab','tasks')});await page.reload();await taskTab.waitFor();assert.equal(await taskTab.getAttribute('aria-selected'),'true','previous left task preference opens the new right task tab');
  await page.waitForFunction(()=>localStorage.getItem('cc-right-tab')==='tasks');await page.evaluate(()=>localStorage.setItem('cc-left-tab','history'));await page.reload();assert.equal(await taskTab.getAttribute('aria-selected'),'true','migrated right preference survives later launches');
  await page.evaluate(()=>localStorage.setItem('cc-left-tab','tasks'));await listTab.click();await page.waitForFunction(()=>localStorage.getItem('cc-right-tab')==='changes');await page.reload();await listTab.waitFor();assert.equal(await listTab.getAttribute('aria-selected'),'true','new right-tab preference takes precedence over the legacy left-tab value');
+ // Saving a composer draft as pre-input: hidden panel opens on the pre-input tab and the draft tops the current view.
+ await page.evaluate(()=>window.hideRight());await taskTab.waitFor({state:'detached'});
+ await page.evaluate(()=>window.savePreInput('等 Agent 忙完再发'));await taskTab.waitFor();
+ assert.equal(await taskTab.getAttribute('aria-selected'),'true','saving opens the pre-input tab');
+ await page.waitForFunction(()=>window.savedTasks?.[0]?.title==='等 Agent 忙完再发');assert.deepEqual(await page.evaluate(()=>window.preInputQueue()),[],'the board takes the queued draft once');
+ assert.equal(await page.locator('#root .task-note-preview').first().textContent(),'等 Agent 忙完再发');
+ assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('.task-note-list')),false,'a saved draft does not take focus');
+ await listTab.click();await page.evaluate(()=>window.hideRight());await taskTab.waitFor({state:'detached'});await page.evaluate(()=>window.showRight());await listTab.waitFor();await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+ assert.equal(await listTab.getAttribute('aria-selected'),'true','reopening the panel keeps the tab the user chose after a save');
+ await page.evaluate(()=>window.savePreInput('第二条'));await page.waitForFunction(()=>window.savedTasks?.[0]?.title==='第二条');assert.equal(await taskTab.getAttribute('aria-selected'),'true','a later save switches again while the panel is open');
+ assert.equal(await page.evaluate(()=>window.savedTasks.filter(task=>task.title==='等 Agent 忙完再发').length),1,'no duplicate from remounting');
  assert.deepEqual(errors,[]);console.log('OK: Explorer-matched typography, themed keyboard/resize-safe scope menu, aligned footer dot; Todo persistence and review navigation, retained state, center placement and narrow/light/glass geometry');console.log('Screenshots: '+directory);
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve))}

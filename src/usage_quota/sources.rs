@@ -63,7 +63,7 @@ fn builtin(provider: &str) -> Option<(&'static str, &'static str)> {
 
 fn endpoint(base_url: Option<String>, api_key: Option<String>) -> Route {
     let (Some(base_url), Some(api_key)) = (base_url.filter(|s| !s.trim().is_empty()), api_key.filter(|s| !s.trim().is_empty())) else { return Route::Unknown };
-    // A local proxy (cc-switch, a gateway) hides the provider behind it.
+    // A local proxy or gateway hides the provider behind it.
     let local = url::Url::parse(&base_url).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase))
         .is_none_or(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1" | "0.0.0.0"));
     if local { Route::Unknown } else { Route::Endpoint { base_url: base_url.trim().to_string(), api_key: api_key.trim().to_string() } }
@@ -102,7 +102,32 @@ fn host(base_url: &str) -> Option<String> {
 
 /// Settings `env` blocks override the inherited environment; later files win:
 /// user < project < local project < managed policy.
+/// Whether the tool talks to its vendor with an account sign-in: the official route with no API key in play.
+pub fn account_mode(tool: &str, cx: &Context) -> bool {
+    if resolve(tool, cx) != Route::Official { return false; }
+    match tool {
+        "claude" => {
+            let env = claude_env(cx);
+            !["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].iter().any(|key| env.get(*key).and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()))
+        }
+        _ => true,
+    }
+}
+
 fn claude(cx: &Context) -> Route {
+    let env = claude_env(cx);
+    let get = |key: &str| env.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    let truthy = |key: &str| get(key).is_some_and(|value| !matches!(value.as_str(), "0" | "false"));
+    if truthy("CLAUDE_CODE_USE_BEDROCK") || truthy("CLAUDE_CODE_USE_VERTEX") || truthy("CLAUDE_CODE_USE_FOUNDRY") { return Route::Unknown; }
+    match get("ANTHROPIC_BASE_URL") {
+        None => Route::Official,
+        Some(base) if host(&base).as_deref() == Some("api.anthropic.com") => Route::Official,
+        base => endpoint(base, get("ANTHROPIC_AUTH_TOKEN").or_else(|| get("ANTHROPIC_API_KEY"))),
+    }
+}
+
+/// Claude Code's effective `env`: the shell, then user, project, local and managed settings.
+fn claude_env(cx: &Context) -> Map<String, Value> {
     let keys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"];
     let mut env: Map<String, Value> = keys.iter().filter_map(|key| cx.var(key).map(|value| (key.to_string(), Value::String(value)))).collect();
     let user = cx.var("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| cx.home.join(".claude"));
@@ -112,14 +137,7 @@ fn claude(cx: &Context) -> Route {
     for file in files {
         if let Some(Value::Object(block)) = read_json(&file).and_then(|settings| settings.get("env").cloned()) { env.extend(block); }
     }
-    let get = |key: &str| env.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from);
-    let truthy = |key: &str| get(key).is_some_and(|value| !matches!(value.as_str(), "0" | "false"));
-    if truthy("CLAUDE_CODE_USE_BEDROCK") || truthy("CLAUDE_CODE_USE_VERTEX") || truthy("CLAUDE_CODE_USE_FOUNDRY") { return Route::Unknown; }
-    match get("ANTHROPIC_BASE_URL") {
-        None => Route::Official,
-        Some(base) if host(&base).as_deref() == Some("api.anthropic.com") => Route::Official,
-        base => endpoint(base, get("ANTHROPIC_AUTH_TOKEN").or_else(|| get("ANTHROPIC_API_KEY"))),
-    }
+    env
 }
 
 // ── Codex CLI ────────────────────────────────────────────────────────────
@@ -142,6 +160,17 @@ fn codex(cx: &Context) -> Route {
 }
 
 // ── OpenCode and its forks (Kilo CLI, MiMo CLI) ──────────────────────────
+
+/// OpenCode 2 keeps `opencode auth` sign-ins in its database, one row per account of a provider, where the
+/// active row wins and the newest otherwise. OAuth rows are not keys, and 1.x databases have no such table.
+fn stored_key(tool: &str, provider: &str, cx: &Context) -> Option<String> {
+    let file = cx.var(if tool == "opencode" { "OPENCODE_DB" } else { "" }).unwrap_or_else(|| format!("{tool}.db"));
+    let path = cx.dir("XDG_DATA_HOME", ".local/share").join(tool).join(file);
+    let db = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+    let value: String = db.query_row("SELECT value FROM credential WHERE integration_id = ?1 ORDER BY active DESC, time_created DESC, id DESC LIMIT 1", [provider], |row| row.get(0)).ok()?;
+    let value: Value = serde_json::from_str(&value).ok()?;
+    (value["type"] == "key").then(|| str_at(&value, "/key")).flatten()
+}
 
 fn opencode_family(tool: &str, cx: &Context) -> Route {
     let name = tool;
@@ -180,6 +209,7 @@ fn opencode_family(tool: &str, cx: &Context) -> Route {
     let builtin = builtin(provider);
     let base = str_at(&options, "/baseURL").and_then(substitute).or_else(|| builtin.map(|(base, _)| base.to_string()));
     let key = str_at(&options, "/apiKey").and_then(substitute)
+        .or_else(|| stored_key(tool, provider, cx))
         .or_else(|| {
             let auth = read_json(&cx.dir("XDG_DATA_HOME", ".local/share").join(name).join("auth.json"))?;
             (auth.pointer(&format!("/{}/type", pointer_escape(provider))).and_then(Value::as_str) == Some("api")).then(|| str_at(&auth, &format!("/{}/key", pointer_escape(provider)))).flatten()
@@ -310,6 +340,21 @@ mod tests {
     }
 
     #[test]
+    fn account_mode_needs_the_official_route_without_api_keys() {
+        let f = Fixture::new();
+        let mode = |tool: &str, vars: &[(&str, &str)]| {
+            let var = |key: &str| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string());
+            account_mode(tool, &Context { home: f.root.join("home"), cwd: Some(f.root.join("repo/app")), var: &var, claude_managed: None })
+        };
+        assert!(mode("claude", &[]));
+        assert!(!mode("claude", &[("ANTHROPIC_API_KEY", "sk-ant")]), "an API key is not an account");
+        f.write("home/.claude/settings.json", r#"{"env":{"ANTHROPIC_BASE_URL":"https://relay.example","ANTHROPIC_AUTH_TOKEN":"t"}}"#);
+        assert!(!mode("claude", &[]), "a relay is not an account");
+        assert!(mode("codex", &[]));
+        assert!(!mode("codex", &[("OPENAI_BASE_URL", "https://relay.example")]));
+    }
+
+    #[test]
     fn codex_reads_profiles_providers_and_keys() {
         let f = Fixture::new();
         f.write("home/.codex/config.toml", "model_provider = \"OpenAI\"\n[desktop]\nfollowUpQueueMode = \"steer\"\n");
@@ -340,6 +385,30 @@ mod tests {
         f.write("home/.config/kilo/kilo.json", r#"{"model":"openrouter/anthropic/claude-sonnet"}"#);
         f.write("home/.local/share/kilo/auth.json", r#"{"kilo":{"type":"oauth","access":"x"},"openrouter":{"type":"api","key":"sk-or"}}"#);
         assert_eq!(f.resolve("kilo", &[]), at("https://openrouter.ai/api/v1", "sk-or"));
+        // OpenCode 2 moved those keys into its database; the active account wins and OAuth is not a key.
+        std::fs::remove_file(f.root.join("repo/opencode.json")).unwrap();
+        f.write("repo/opencode.json", r#"{"model":"deepseek/deepseek-chat"}"#);
+        let path = f.root.join("home/.local/share/opencode/opencode.db");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE credential(id TEXT PRIMARY KEY, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER);").unwrap();
+            for (id, value, active, time) in [("cred_old", r#"{"type":"key","key":"sk-old"}"#, Some(1), 1), ("cred_new", r#"{"type":"key","key":"sk-new"}"#, Some(0), 2)] {
+                db.execute("INSERT INTO credential VALUES (?1,'deepseek','Default',?2,?3,?4)", rusqlite::params![id, value, active, time]).unwrap();
+            }
+            db.execute("INSERT INTO credential VALUES ('cred_other','openrouter','Default','{\"type\":\"key\",\"key\":\"sk-other\"}',NULL,3)", []).unwrap();
+        }
+        assert_eq!(f.resolve("opencode", &[]), at("https://api.deepseek.com", "sk-old"));
+        {
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute("UPDATE credential SET active = NULL WHERE integration_id = 'deepseek'", []).unwrap();
+        }
+        assert_eq!(f.resolve("opencode", &[]), at("https://api.deepseek.com", "sk-new"), "legacy rows have no active flag: the newest wins");
+        {
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute("UPDATE credential SET value = '{\"type\":\"oauth\",\"access\":\"token\"}' WHERE integration_id = 'deepseek'", []).unwrap();
+        }
+        assert_eq!(f.resolve("opencode", &[]), Route::Unknown, "an OAuth sign-in has no key to read");
         // MiMo with a provider but no selected model stays hidden.
         f.write("home/.config/mimocode/mimocode.jsonc", r#"{"provider":{"echobird-desktop":{"options":{"apiKey":"sk","baseURL":"https://api.deepseek.com"}}}}"#);
         assert_eq!(f.resolve("mimocode", &[]), Route::Unknown);

@@ -11,9 +11,9 @@ vi.mock('../../lib/clipboard', () => ({ clipboardWrite: copy, clipboardHasImage:
 vi.mock('../../i18n/useT', () => ({ useT: () => (key: string) => key }));
 afterEach(() => { cleanup(); copy.mockReset(); window.getSelection()?.removeAllRanges(); });
 beforeEach(() => { hasImage.mockReset().mockResolvedValue(false); });
-function Harness({ read, application }: { read: () => string; application?: () => (() => Promise<void>) | undefined }) {
+function Harness({ read, application, link }: { read: () => string; application?: () => (() => Promise<void>) | undefined; link?: (x: number, y: number) => TermContextMenuState['link'] }) {
   const [menu, setMenu] = useState<TermContextMenuState | null>(null);
-  const { contextMenuHandlers, copyMenuSelection, closeMenu } = useTerminalContextMenu(read, setMenu, application);
+  const { contextMenuHandlers, copyMenuSelection, closeMenu } = useTerminalContextMenu(read, setMenu, application, link);
   return <div {...contextMenuHandlers}>
     <div data-testid="terminal" /><output>{menu ? JSON.stringify(menu) : 'closed'}</output>
     {menu && <TermContextMenu menu={menu} onCopy={() => copyMenuSelection(menu)} onClose={closeMenu} onPaste={closeMenu} onSelectAll={closeMenu} />}
@@ -168,6 +168,31 @@ it('does not auto-copy after the user dismisses the menu while the clipboard pro
   resolve(false);
   await waitFor(() => expect(view.getByRole('status').textContent).toBe('closed'));
   expect(copy).not.toHaveBeenCalled();
+});
+it('keeps the pointer link snapshot while terminal output and the clipboard probe change', async () => {
+  let resolve!: (value: boolean) => void;
+  hasImage.mockReturnValue(new Promise<boolean>(done => { resolve = done; }));
+  let target: TermContextMenuState['link'] = { local: true, target: '/project/original.ts' };
+  const link = vi.fn(() => target);
+  const view = render(<Harness read={() => 'selected'} link={link} />), terminal = view.getByTestId('terminal');
+  fireEvent.mouseDown(terminal, { button: 2, clientX: 30, clientY: 40 });
+  target = { local: true, target: '/project/repainted.ts' };
+  fireEvent.contextMenu(terminal, { button: 2, clientX: 30, clientY: 40 });
+  resolve(true);
+  await waitFor(() => expect(view.getByText('menu.paste_image')).toBeTruthy());
+  expect(link).toHaveBeenCalledExactlyOnceWith(30, 40);
+  expect(view.getByRole('status').textContent).toContain('/project/original.ts');
+  expect(view.getByRole('status').textContent).not.toContain('/project/repainted.ts');
+});
+it('reveals local output paths without offering an executable open action', () => {
+  const onOpen = vi.fn(), onReveal = vi.fn(), onCopy = vi.fn();
+  const view = render(<TermContextMenu menu={{ x: 0, y: 0, hasSelection: false }} onClose={vi.fn()} onCopy={vi.fn()} onPaste={vi.fn()} onSelectAll={vi.fn()} link={{ local: true, onOpen, onReveal, onCopy }} />);
+  expect(view.queryByText('conversation.open_link')).toBeNull();
+  fireEvent.click(view.getByText('menu.show_in_folder'), { detail: 0 });
+  fireEvent.click(view.getByText('conversation.copy_path'));
+  expect(onReveal).toHaveBeenCalledOnce();
+  expect(onCopy).toHaveBeenCalledOnce();
+  expect(onOpen).not.toHaveBeenCalled();
 });
 it('does not copy DOM selections belonging to another panel', () => {
   const view = render(<div><div data-testid="ours">ours</div><div data-testid="other">other</div></div>);

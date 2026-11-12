@@ -8,15 +8,15 @@ function find(source, match) { let result; function visit(node) { if (match(node
 const effect = file => { const source = parse(file); return find(source, n => ts.isCallExpression(n) && n.expression.getText(source) === 'useEffect' && n.arguments[0]?.getText(source).includes("addEventListener('keydown'")).arguments[0].getText(source); };
 const js = text => ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 let failed = 0;
-for (const kind of ['claude', 'codex', 'dsh', 'permission']) {
+for (const kind of ['claude', 'codex', 'dsh', 'opencode', 'pi', 'permission']) {
   try {
     const dom = new JSDOM('<button id="outside">Workspace</button><div role="dialog" aria-modal="true"><button id="setting">Setting</button></div>');
     let actions = 0;
-    const context = { window: dom.window, document: dom.window.document, Element: dom.window.Element, isActive: true, s: { busy: true, requests: [] }, sessionId: 'tab', keyboardEnabled: true, submitting: false, interaction: { options: [{ position: 0, number: 1 }] }, keyboardPosition: 0, selectOption: () => actions++, setFailed() {}, setKeyboardPosition() {}, controlClaude: async () => actions++, interruptCodex: async () => actions++, stopDsh: async () => actions++ };
+    const context = { window: dom.window, document: dom.window.document, Element: dom.window.Element, isActive: true, s: { busy: true, requests: [] }, sessionId: 'tab', keyboardEnabled: true, submitting: false, interaction: { options: [{ position: 0, number: 1 }] }, keyboardPosition: 0, selectOption: () => actions++, setFailed() {}, setKeyboardPosition() {}, controlClaude: async () => actions++, interruptCodex: async () => actions++, stopDsh: async () => actions++, interruptOpenCode: async () => actions++, abortPi: async () => actions++ };
     if (existsSync('src/lib/session-keyboard.ts')) {
       const module = { exports: {} }; runInNewContext(js(readFileSync('src/lib/session-keyboard.ts', 'utf8')), { ...context, module, exports: module.exports }); Object.assign(context, module.exports);
     }
-    const file = kind === 'permission' ? 'TerminalInteractionCard' : `${kind === 'dsh' ? 'Dsh' : kind[0].toUpperCase() + kind.slice(1)}Conversation`;
+    const file = kind === 'permission' ? 'TerminalInteractionCard' : `${kind === 'dsh' ? 'Dsh' : kind === 'opencode' ? 'OpenCode' : kind[0].toUpperCase() + kind.slice(1)}Conversation`;
     const cleanup = runInNewContext(js(`(${effect(`components/center/${file}.tsx`)})()`), context);
     const key = kind === 'permission' ? 'Enter' : 'Escape';
     const fire = (id, extra = {}) => dom.window.document.getElementById(id).dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }));
@@ -45,7 +45,7 @@ try {
 } catch (error) { failed++; console.error('FAIL: Settings Escape', error); }
 try {
   const source = parse('components/center/CenterPanel.tsx');
-  for (const component of ['ClaudeConversation', 'CodexConversation', 'DshConversation', 'TierTerminal', 'ConversationView']) {
+  for (const component of ['ClaudeConversation', 'CodexConversation', 'DshConversation', 'OpenCodeConversation', 'PiConversation', 'TierTerminal', 'ConversationView']) {
     const node = find(source, n => (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && n.tagName.getText(source) === component);
     const evaluate = (prop, settingsOpen) => {
       const expression = node.attributes.properties.find(p => p.name?.getText(source) === prop)?.initializer?.expression;

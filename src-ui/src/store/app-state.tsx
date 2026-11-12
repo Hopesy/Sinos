@@ -37,14 +37,16 @@ export function supportsAgentStatus(tool: ToolType): boolean {
 }
 
 // Theme: color palette family (orthogonal to shape and to mode).
-// 6 hues × 2 depths. The mid-depth row that shipped in v3.5.4 was dropped
+// 6 hues × 4 rows (mist, soft, vivid, deep). The mid-depth row that shipped in v3.5.4 was dropped
 // again — it read as a duplicate of its soft/deep neighbours (see
 // RETIRED_THEMES for where a saved pick from that row lands now).
 export type ThemeColor =
   | 'dark' | 'light' | 'sakura' | 'lavender' | 'mint'
   | 'obsidian' | 'moss'
   | 'amber' | 'teal' | 'indigo'
-  | 'glacier' | 'slate';
+  | 'glacier' | 'slate'
+  | 'oat' | 'coral' | 'gold' | 'olive' | 'lagoon' | 'iris'
+  | 'steel' | 'fuchsia' | 'copper' | 'jade' | 'sapphire' | 'orchid';
 // Theme: which half of that family's palette to paint. 'system' follows the OS
 // light/dark preference live (App.tsx watches prefers-color-scheme), so the
 // centre tabs in Settings ▸ Appearance is purely a view of this value.
@@ -56,7 +58,7 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type ThemeShape =
   | 'soft' | 'slab' | 'sharp' | 'glass'
   | 'frost'
-  | 'panel' | 'carbon' | 'monogram' | 'characters';
+  | 'panel' | 'carbon' | 'monogram' | 'characters' | 'basalt';
 // Icon theme: visual style for file/folder icons in the explorer.
 // 8 themes, each with genuinely distinct folder silhouette + file icon style.
 // Fetched upstream (6): material, vscode-icons, catppuccin-mocha, devicon, fluent, symbols
@@ -127,21 +129,32 @@ export interface TerminalSession {
   toolData?: string;  // Extra context for the tool (e.g. SSH connection JSON for remote)
   claudeMode?: ClaudeMode;
   codexMode?: ClaudeMode;
+  opencodeMode?: ClaudeMode;
+  piMode?: ClaudeMode;
   folderPath: string | null;
   /// Live terminal title set by the tool via OSC 0/2 (e.g. Claude Code's
   /// conversation summary). When set, the tab shows this instead of the cwd
   /// basename — matching how other terminals display the tool's own title.
   toolTitle?: string;
+  /// The user's own name for a conversation reopened from history; outranks the tool's title.
+  pinnedTitle?: string;
   restartKey?: number;
   /// When set, this tab was opened from a history "Continue this session"
   /// action. TierTerminal's mount effect passes it to tierTerminalStart,
   /// which spawns the tool with its `--resume <token>` flag instead of a
   /// fresh launch. Cleared on any subsequent SET_TERMINAL_TOOL.
   resumeToken?: string;
+  /** The token this tab's own session reported after starting fresh; equal to `resumeToken` when it was not resumed. */
+  ownToken?: string;
   strictCwd?: boolean;
+  /** The conversation works in its own git worktree; `worktreeOrigin` is the folder it was opened on. */
+  worktree?: import('../lib/worktree').Worktree;
+  worktreeOrigin?: string;
   parentId?: string;
   isHidden?: boolean;
   agentStatus?: AgentStatus;
+  /** Last time agentStatus changed; keeps an active session on top of the history list before the disk cache catches up. */
+  activeAt?: number;
   gambitDraft?: string;    // Unsent textarea content, preserved across tab switches
   /** Local launch timestamp used to reject older history files when binding
    *  a live conversation to this terminal tab. */
@@ -174,7 +187,7 @@ export interface AppState {
 
   // Terminal foreground color override ('' = use theme default)
   termColorScheme: string;
-  // Terminal font family override ('' = bundled CascadiaMono + fallbacks)
+  // Terminal font family override ('' = bundled JetBrainsMono + fallbacks)
   termFont: string;
   // Default shell id for new terminal tabs ('' = Auto / platform fallback).
   // Resolved to a concrete program at spawn time on the Rust side. See
@@ -197,6 +210,8 @@ export interface AppState {
   // Personalization settings modal (opened by the titlebar gear). App-level
   // so the titlebar gear and the App-mounted modal share one flag.
   settingsOpen: boolean;
+  /** The settings page's section: one of SettingsModal's sections, or 'agent' for Coffee Agent. */
+  settingsSection: string;
 
   // Gambit compose-box send key. true → Enter sends (Shift/Ctrl/Cmd+Enter =
   // newline); false → Ctrl/Cmd+Enter sends (Enter = newline). Chosen in the
@@ -219,7 +234,12 @@ export interface AppState {
   // 'note' = big sticky-note cards (traffic-light status + timestamp + roomy
   // text area). Same task data either way — purely a presentation choice made
   // in the settings modal. Default 'list' so existing users see no change.
-  taskViewMode: 'list' | 'note' | 'prompt';
+  /** Composer drafts saved as pre-input, waiting for the task board to take them. */
+  preInputQueue: string[];
+  /** Bumped on each save so the right panel opens on the pre-input tab. */
+  preInputReveal: number;
+  /** Settings: show the composer's save-as-pre-input button. */
+  preInputButton: boolean;
 
   // Project folders where Git change tracking is disabled. Stored as
   // normalized absolute paths so each project can opt out independently.
@@ -254,6 +274,8 @@ export interface AppState {
   activeEditorId: string | null;
   editorTabActive: boolean;
   usageOpen: boolean;
+  /** The automations page in the centre, one of the full pages like usage. */
+  automationsOpen: boolean;
   toolSettingsOpen: boolean;
 }
 
@@ -322,6 +344,7 @@ export function resolveDiffContext(session: TerminalSession | null | undefined):
 
 type Action =
   | { type: 'SET_USAGE_OPEN'; open: boolean }
+  | { type: 'SET_AUTOMATIONS_OPEN'; open: boolean }
   | { type: 'SET_TOOL_SETTINGS_OPEN'; open: boolean }
   | { type: 'SET_FOLDER'; path: string }
   | { type: 'SET_TERMINAL_CWD'; id: string; path: string }
@@ -335,15 +358,16 @@ type Action =
   | { type: 'OPEN_SESSION_SPLIT'; id: string; targetId: string; edge: SplitEdge }
   | { type: 'CLOSE_SESSION_SPLIT'; id: string }
   | { type: 'RESIZE_SESSION_SPLIT'; path: string; ratio: number }
-  | { type: 'LAUNCH_TERMINAL_TOOL'; id: string; tool: ToolType; cwd?: string; toolData?: string; resumeToken?: string; strictCwd?: boolean; claudeMode?: ClaudeMode; codexMode?: ClaudeMode; parentId?: string; background?: boolean }
+  | { type: 'LAUNCH_TERMINAL_TOOL'; id: string; tool: ToolType; cwd?: string; toolData?: string; resumeToken?: string; strictCwd?: boolean; claudeMode?: ClaudeMode; codexMode?: ClaudeMode; opencodeMode?: ClaudeMode; piMode?: ClaudeMode; parentId?: string; background?: boolean }
   | { type: 'REMOVE_TERMINAL'; id: string }
   | { type: 'CLOSE_TERMINAL_GROUP'; id: string; childIds: string[]; keepChildren: boolean }
   | { type: 'RESTORE_WORKER_SESSION'; parent?: TerminalSession; child: TerminalSession }
   | { type: 'REORDER_TAB'; tabId: string; beforeId: string | null }
   | { type: 'SET_ACTIVE_TERMINAL'; id: string | null }
-  | { type: 'SET_TERMINAL_TOOL'; id: string; tool: ToolType; toolData?: string; resumeToken?: string; claudeMode?: ClaudeMode; codexMode?: ClaudeMode }
+  | { type: 'SET_TERMINAL_TOOL'; id: string; tool: ToolType; toolData?: string; resumeToken?: string; claudeMode?: ClaudeMode; codexMode?: ClaudeMode; opencodeMode?: ClaudeMode; piMode?: ClaudeMode }
   | { type: 'SET_TERMINAL_HIDDEN'; id: string; isHidden: boolean }
-  | { type: 'RESTART_TERMINAL'; id: string; newId: string }
+  | { type: 'RESTART_TERMINAL'; id: string; newId: string; fresh?: boolean }
+  | { type: 'SET_TERMINAL_WORKTREE'; id: string; newId: string; cwd: string; worktree?: import('../lib/worktree').Worktree; origin?: string }
   | { type: 'OPEN_HYPER_AGENT_TAB' }
   | { type: 'SET_AGENT_STATUS'; id: string; status: AgentStatus | undefined }
   | { type: 'SET_BG'; path: string; bgType: 'image' | 'video' }
@@ -354,7 +378,8 @@ type Action =
   | { type: 'SET_DEFAULT_SHELL'; shell: string }
   | { type: 'TOGGLE_GAMBIT' }
   | { type: 'TOGGLE_SETTINGS' }
-  | { type: 'SET_SETTINGS_OPEN'; open: boolean }
+  | { type: 'SET_SETTINGS_OPEN'; open: boolean; section?: string }
+  | { type: 'SET_SETTINGS_SECTION'; section: string }
   | { type: 'SET_GAMBIT_ENTER_TO_SEND'; value: boolean }
   | { type: 'SET_HOTKEY_SCHEME'; value: HotkeyScheme }
   | { type: 'SET_TITLEBAR_TOGGLE_DISPLAY'; value: TitlebarToggleDisplay }
@@ -365,8 +390,10 @@ type Action =
   | { type: 'SET_SESSION_TOKEN'; id: string; token: string }
   | { type: 'TOGGLE_LEFT_PANEL' }
   | { type: 'TOGGLE_RIGHT_PANEL' }
-  | { type: 'SET_TASK_VIEW_MODE'; mode: 'list' | 'note' | 'prompt' }
   | { type: 'SET_GIT_TRACKING'; path: string; enabled: boolean }
+  | { type: 'SAVE_PRE_INPUT'; text: string }
+  | { type: 'TAKE_PRE_INPUT'; count: number }
+  | { type: 'SET_PRE_INPUT_BUTTON'; value: boolean }
   | { type: 'SET_TAB_TITLE'; id: string; title: string }
   | { type: 'SET_DIFF_SELECTION'; selection: DiffSelection }
   | { type: 'CLEAR_DIFF' }
@@ -399,13 +426,17 @@ function splitForSession(state: AppState, id: string, targetId: string, edge: Sp
 }
 
 function reducer(state: AppState, action: Action): AppState {
-  if ((state.usageOpen || state.toolSettingsOpen) && !(action.type === 'LAUNCH_TERMINAL_TOOL' && action.background) && ['OPEN_EDITOR', 'OPEN_IMAGE', 'SET_EDITOR_ACTIVE', 'ADD_TERMINAL', 'LAUNCH_TERMINAL_TOOL', 'SET_ACTIVE_TERMINAL', 'OPEN_AGENT_PAGE', 'OPEN_SESSION_SPLIT', 'SET_DIFF_SELECTION', 'SET_DIFF_TAB_ACTIVE'].includes(action.type)) state = { ...state, usageOpen: false, toolSettingsOpen: false };
+  // Sinos Agent configuration lives in settings; its old tab opens that section.
+  if (action.type === 'OPEN_AGENT_PAGE' && action.page === 'config') return { ...state, settingsOpen: true, settingsSection: 'agent', usageOpen: false, toolSettingsOpen: false, automationsOpen: false };
+  if ((state.usageOpen || state.toolSettingsOpen || state.settingsOpen || state.automationsOpen) && !(action.type === 'LAUNCH_TERMINAL_TOOL' && action.background) && ['OPEN_EDITOR', 'OPEN_IMAGE', 'SET_EDITOR_ACTIVE', 'ADD_TERMINAL', 'LAUNCH_TERMINAL_TOOL', 'SET_ACTIVE_TERMINAL', 'OPEN_AGENT_PAGE', 'OPEN_SESSION_SPLIT', 'SET_DIFF_SELECTION', 'SET_DIFF_TAB_ACTIVE'].includes(action.type)) state = { ...state, usageOpen: false, toolSettingsOpen: false, settingsOpen: false, automationsOpen: false };
   if (state.editorTabActive && !(action.type === 'LAUNCH_TERMINAL_TOOL' && action.background) && ['ADD_TERMINAL', 'LAUNCH_TERMINAL_TOOL', 'OPEN_AGENT_PAGE', 'OPEN_SESSION_SPLIT'].includes(action.type)) state = { ...state, editorTabActive: false };
   switch (action.type) {
     case 'SET_USAGE_OPEN':
-      return { ...state, usageOpen: action.open, toolSettingsOpen: false };
+      return { ...state, usageOpen: action.open, toolSettingsOpen: false, ...(action.open ? { settingsOpen: false, automationsOpen: false } : {}) };
+    case 'SET_AUTOMATIONS_OPEN':
+      return { ...state, automationsOpen: action.open, ...(action.open ? { usageOpen: false, toolSettingsOpen: false, settingsOpen: false } : {}) };
     case 'SET_TOOL_SETTINGS_OPEN':
-      return { ...state, toolSettingsOpen: action.open, usageOpen: false };
+      return { ...state, toolSettingsOpen: action.open, usageOpen: false, ...(action.open ? { settingsOpen: false, automationsOpen: false } : {}) };
     case 'OPEN_SESSION_SPLIT': {
       const session = state.terminals.find(session => session.id === action.id);
       if (!session?.tool) return state;
@@ -473,13 +504,17 @@ function reducer(state: AppState, action: Action): AppState {
       // multiple writers for the same native conversation.
       const existing = action.session.resumeToken && state.terminals.find(t =>
         t.tool === action.session.tool && t.resumeToken === action.session.resumeToken);
+      // Resolving history acquires a new lease even if this session already exists or the split is refused.
+      // Keep every tab sharing that worktree on the current lease, so the last close can release it.
+      const worktree = action.session.worktree;
+      const terminals = worktree ? state.terminals.map(tab => tab.worktree?.path === worktree.path ? { ...tab, worktree } : tab) : state.terminals;
       const layout = action.split ? splitForSession(state, existing ? existing.id : action.session.id, action.split.targetId, action.split.edge) : null;
       // A stale drop or full layout must not launch an invisible second writer.
-      if (action.split && (!layout || !splitSessionIds(layout).includes(existing ? existing.id : action.session.id))) return state;
+      if (action.split && (!layout || !splitSessionIds(layout).includes(existing ? existing.id : action.session.id))) return worktree ? { ...state, terminals } : state;
       if (existing) return {
         ...state,
         sessionSplit: action.split ? layout : state.sessionSplit,
-        terminals: existing.isHidden ? state.terminals.map(t => t.id === existing.id ? { ...t, isHidden: false } : t) : state.terminals,
+        terminals: existing.isHidden ? terminals.map(t => t.id === existing.id ? { ...t, isHidden: false } : t) : terminals,
         activeTerminalId: existing.id,
         agentPageActive: null,
         diffTabActive: false,
@@ -490,7 +525,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { 
         ...state, 
         sessionSplit: action.split ? layout : state.sessionSplit,
-        terminals: [...state.terminals, session],
+        terminals: [...terminals, session],
         tabOrder: [...getTabOrder(state), session.id],
         activeTerminalId: session.id,
         agentPageActive: null,
@@ -504,8 +539,10 @@ function reducer(state: AppState, action: Action): AppState {
         folderPath: action.cwd ?? previous?.folderPath ?? null,
         toolData: action.toolData, resumeToken: action.resumeToken, strictCwd: action.strictCwd,
         parentId: action.parentId,
-        claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'conversation' : undefined,
+        claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'terminal' : undefined,
         codexMode: action.tool === 'codex' ? action.codexMode ?? 'terminal' : undefined,
+        opencodeMode: action.tool === 'opencode' ? action.opencodeMode ?? 'terminal' : undefined,
+        piMode: action.tool === 'pi' ? action.piMode ?? 'terminal' : undefined,
         toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now(),
       };
       if (action.cwd) {
@@ -532,6 +569,8 @@ function reducer(state: AppState, action: Action): AppState {
         if (!parent) next = reducer(next, { type: 'ADD_TERMINAL', session: action.parent });
       }
       const existingChild = next.terminals.find(tab => tab.id === action.child.id || tab.tool === action.child.tool && action.child.resumeToken && tab.resumeToken === action.child.resumeToken);
+      const worktree = action.child.worktree;
+      if (existingChild && worktree) next = { ...next, terminals: next.terminals.map(tab => tab.worktree?.path === worktree.path ? { ...tab, worktree } : tab) };
       next = existingChild ? reducer(next, { type: 'SET_ACTIVE_TERMINAL', id: existingChild.id }) : reducer(next, { type: 'ADD_TERMINAL', session: { ...action.child, parentId } });
       const childId = next.activeTerminalId!;
       const order = getTabOrder(next).filter(id => id !== childId);
@@ -590,7 +629,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_TERMINAL_TOOL':
       return {
         ...state,
-        terminals: state.terminals.map(t => t.id === action.id ? { ...t, tool: action.tool, claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'conversation' : undefined, codexMode: action.tool === 'codex' ? action.codexMode ?? 'terminal' : undefined, toolData: action.toolData, resumeToken: action.resumeToken, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now() } : t)
+        terminals: state.terminals.map(t => t.id === action.id ? { ...t, tool: action.tool, claudeMode: action.tool === 'claude' ? action.claudeMode ?? 'terminal' : undefined, codexMode: action.tool === 'codex' ? action.codexMode ?? 'terminal' : undefined, opencodeMode: action.tool === 'opencode' ? action.opencodeMode ?? 'terminal' : undefined, piMode: action.tool === 'pi' ? action.piMode ?? 'terminal' : undefined, toolData: action.toolData, resumeToken: action.resumeToken, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now() } : t)
       };
     case 'SET_TERMINAL_HIDDEN':
       return {
@@ -602,10 +641,19 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         sessionSplit: replaceSplitSession(state.sessionSplit, action.id, action.newId),
         terminals: state.terminals.map(t =>
-          t.id === action.id ? { ...t, id: action.newId, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now() } : t
+          t.id === action.id ? { ...t, id: action.newId, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now(), ...(action.fresh ? { resumeToken: undefined } : {}) } : t
         ),
         tabOrder: getTabOrder(state).map(id => id === action.id ? action.newId : id),
         activeTerminalId: state.activeTerminalId === action.id ? action.newId : state.activeTerminalId
+      };
+    case 'SET_TERMINAL_WORKTREE':
+      // A conversation that has not started moves into (or out of) its worktree as a fresh session there.
+      return {
+        ...state,
+        sessionSplit: replaceSplitSession(state.sessionSplit, action.id, action.newId),
+        terminals: state.terminals.map(t => t.id === action.id ? { ...t, id: action.newId, folderPath: action.cwd, worktree: action.worktree, worktreeOrigin: action.worktree ? action.origin : undefined, toolTitle: undefined, agentStatus: undefined, chatPending: undefined, viewMode: 'terminal', startedAt: Date.now(), resumeToken: undefined } : t),
+        tabOrder: getTabOrder(state).map(id => id === action.id ? action.newId : id),
+        activeTerminalId: state.activeTerminalId === action.id ? action.newId : state.activeTerminalId,
       };
     case 'SET_AGENT_STATUS': {
       // Native titles and rendered-screen spinners can both emit frequent
@@ -613,7 +661,7 @@ function reducer(state: AppState, action: Action): AppState {
       let changed = false;
       const terminals = state.terminals.map(t => {
         if (t.id === action.id && supportsAgentStatus(t.tool) && t.agentStatus !== action.status) {
-          changed = true; return { ...t, agentStatus: action.status };
+          changed = true; return { ...t, agentStatus: action.status, activeAt: action.status ? Date.now() : t.activeAt };
         }
         return t;
       });
@@ -645,10 +693,13 @@ function reducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_GAMBIT':
       if (!state.agentPageActive && !state.diffTabActive && isConversationSession(state.terminals.find(t => t.id === state.activeTerminalId))) return state;
       return { ...state, gambitOpen: !state.gambitOpen };
+    // Settings covers the whole window; it and the usage and tool settings pages are open one at a time.
     case 'TOGGLE_SETTINGS':
-      return { ...state, settingsOpen: !state.settingsOpen };
+      return { ...state, settingsOpen: !state.settingsOpen, usageOpen: false, toolSettingsOpen: false, automationsOpen: false };
     case 'SET_SETTINGS_OPEN':
-      return { ...state, settingsOpen: action.open };
+      return { ...state, settingsOpen: action.open, ...(action.open ? { usageOpen: false, toolSettingsOpen: false, automationsOpen: false } : {}), ...(action.section ? { settingsSection: action.section } : {}) };
+    case 'SET_SETTINGS_SECTION':
+      return { ...state, settingsSection: action.section };
     case 'SET_GAMBIT_ENTER_TO_SEND':
       return { ...state, gambitEnterToSend: action.value };
     case 'SET_HOTKEY_SCHEME':
@@ -678,7 +729,7 @@ function reducer(state: AppState, action: Action): AppState {
         terminals: state.terminals.map(t => t.id === action.id ? { ...t, chatPending: action.pending } : t),
       };
     case 'SET_SESSION_TOKEN':
-      return { ...state, terminals: state.terminals.map(t => t.id === action.id && t.resumeToken !== action.token ? { ...t, resumeToken: action.token } : t) };
+      return { ...state, terminals: state.terminals.map(t => t.id === action.id && t.resumeToken !== action.token ? { ...t, resumeToken: action.token, ownToken: t.resumeToken && t.resumeToken !== t.ownToken ? t.ownToken : action.token } : t) };
     case 'TOGGLE_LEFT_PANEL': {
       const next = !state.leftPanelHidden;
       try { localStorage.setItem('cc-left-hidden', next ? '1' : '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
@@ -689,9 +740,15 @@ function reducer(state: AppState, action: Action): AppState {
       try { localStorage.setItem('cc-right-hidden', next ? '1' : '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
       return { ...state, rightPanelHidden: next };
     }
-    case 'SET_TASK_VIEW_MODE': {
-      try { localStorage.setItem('cc-task-view', action.mode); } catch { /* Best-effort operation; failure is non-fatal. */ }
-      return { ...state, taskViewMode: action.mode };
+    case 'SAVE_PRE_INPUT': {
+      try { localStorage.setItem('cc-right-hidden', '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
+      return { ...state, preInputQueue: [...state.preInputQueue, action.text], preInputReveal: state.preInputReveal + 1, rightPanelHidden: false };
+    }
+    case 'TAKE_PRE_INPUT':
+      return { ...state, preInputQueue: state.preInputQueue.slice(action.count) };
+    case 'SET_PRE_INPUT_BUTTON': {
+      try { localStorage.setItem('cc-pre-input-button', action.value ? '1' : '0'); } catch { /* Best-effort operation; failure is non-fatal. */ }
+      return { ...state, preInputButton: action.value };
     }
     case 'SET_DIFF_SELECTION':
       // In tab mode, selecting a file focuses the diff tab immediately (the
@@ -826,6 +883,8 @@ const VALID_THEMES: ThemeColor[] = [
   'obsidian', 'moss',
   'amber', 'teal', 'indigo',
   'glacier', 'slate',
+  'oat', 'coral', 'gold', 'olive', 'lagoon', 'iris',
+  'steel', 'fuchsia', 'copper', 'jade', 'sapphire', 'orchid',
 ];
 // Palettes the picker no longer offers because their row was redundant. A
 // saved pick from that row moves to its own column's deep neighbour, which
@@ -843,7 +902,7 @@ const VALID_THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
 const VALID_SHAPES: ThemeShape[] = [
   'soft', 'slab', 'sharp', 'glass',
   'frost',
-  'panel', 'carbon', 'monogram', 'characters',
+  'panel', 'carbon', 'monogram', 'characters', 'basalt',
 ];
 const VALID_ICON_THEMES: IconTheme[] = [
   'outline', 'material', 'vscode-icons', 'catppuccin-mocha',
@@ -853,9 +912,9 @@ const VALID_ICON_THEMES: IconTheme[] = [
 function getInitialState(): AppState {
   // Keep theme/shape defaults in sync with index.html's pre-paint script.
   // Saved preferences take priority for returning users.
-  let theme: ThemeColor = 'obsidian';
+  let theme: ThemeColor = 'oat';
   let themeMode: ThemeMode = 'dark';
-  let shape: ThemeShape = 'characters';
+  let shape: ThemeShape = 'basalt';
   let iconTheme: IconTheme = 'devicon';
   let lang = 'zh-CN';
   let folderPath: string | null = null;
@@ -939,7 +998,7 @@ function getInitialState(): AppState {
   // Ctrl+QWE preset is opt-in despite clashing with terminal Ctrl+W/E/Q.
   // Overridden only by a stored valid scheme.
   let hotkeyScheme: HotkeyScheme = 'alt-qwe';
-  let titlebarToggleDisplay: TitlebarToggleDisplay = 'icon';
+  const titlebarToggleDisplay: TitlebarToggleDisplay = 'icon';
   try {
     const storedPath = localStorage.getItem('cc-bg-path');
     const storedType = localStorage.getItem('cc-bg-type') as 'image' | 'video' | 'none' | null;
@@ -968,10 +1027,8 @@ function getInitialState(): AppState {
     if (storedScheme && HOTKEY_SCHEMES.some(h => h.code === storedScheme)) {
       hotkeyScheme = storedScheme as HotkeyScheme;
     }
-    const storedTtd = localStorage.getItem('cc-titlebar-toggle-display');
-    if (storedTtd === 'icon-hotkey' || storedTtd === 'icon' || storedTtd === 'hidden') {
-      titlebarToggleDisplay = storedTtd;
-    }
+    // The titlebar toggles always show as icons now; the setting that chose labels or hiding was removed.
+    try { localStorage.removeItem('cc-titlebar-toggle-display'); } catch { /* Best-effort operation; failure is non-fatal. */ }
     // New key (post-refactor): wallpaper opacity, 0-100, larger = more
     // visible. Old key was `cc-wallpaper-dim` (0-80, larger = darker
     // overlay). On first load after upgrade, fall back to the legacy
@@ -996,13 +1053,8 @@ function getInitialState(): AppState {
   const defaultTerminalId = crypto.randomUUID();
 
   let leftPanelHidden = false;
-  let rightPanelHidden = false;
-  // Default 'note' (big sticky-note view) — the welcome guide + the whole
-  // task-board UX are tuned for it. A saved pref in localStorage (written by
-  // the SET_TASK_VIEW_MODE toggle) still wins for returning users. Previously
-  // 'list', only flipped to 'note' by the TaskBoard first-launch seed — which
-  // was fragile (cleared localStorage or a removed seed fell back to list).
-  let taskViewMode: 'list' | 'note' | 'prompt' = 'note';
+  let rightPanelHidden = true;
+  let preInputButton = true;
   // Default 'overlay' (the gentle half-height panel) — existing users see no
   // change. Only flips to 'tab' if the user explicitly expanded-to-tab before.
   let diffMode: 'overlay' | 'tab' = 'overlay';
@@ -1010,9 +1062,10 @@ function getInitialState(): AppState {
   let gambitOpen = false;
   try {
     leftPanelHidden = localStorage.getItem('cc-left-hidden') === '1';
-    rightPanelHidden = localStorage.getItem('cc-right-hidden') === '1';
-    const savedTaskView = localStorage.getItem('cc-task-view');
-    if (savedTaskView === 'list' || savedTaskView === 'note' || savedTaskView === 'prompt') taskViewMode = savedTaskView;
+    rightPanelHidden = localStorage.getItem('cc-right-hidden') !== '0';
+    preInputButton = localStorage.getItem('cc-pre-input-button') !== '0';
+    // The board has one view now; forget the old view choice.
+    localStorage.removeItem('cc-task-view');
     const savedDiffMode = localStorage.getItem('cc-diff-mode');
     if (savedDiffMode === 'tab' || savedDiffMode === 'overlay') diffMode = savedDiffMode;
     gambitOpen = localStorage.getItem('cc-gambit-open') === '1';
@@ -1035,13 +1088,16 @@ function getInitialState(): AppState {
     sessionSplit: null,
     gambitOpen,
     settingsOpen: false,
+    settingsSection: 'general',
     gambitEnterToSend,
     hotkeyScheme,
     titlebarToggleDisplay,
     leftPanelHidden,
     rightPanelHidden,
-    taskViewMode,
     gitTrackingDisabledPaths,
+    preInputQueue: [],
+    preInputReveal: 0,
+    preInputButton,
     diffSelection: null,
     diffMode,
     diffTabActive: false,
@@ -1049,6 +1105,7 @@ function getInitialState(): AppState {
     activeEditorId: null,
     editorTabActive: false,
     usageOpen: false,
+    automationsOpen: false,
     toolSettingsOpen: false,
     agentPages: [],
     agentPageActive: null,

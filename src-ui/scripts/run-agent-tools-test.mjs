@@ -68,6 +68,19 @@ function fixture({ deferOpen = false } = {}) {
   const execute = api.createAgentToolExecutor({ stateRef, dispatch, pending: async () => !cancelled, isCancelled: () => cancelled });
   return { api, stateRef, dispatch, execute: (name, args = {}, metadata = {}) => execute({ requestId: 'request', name, arguments: args, ...metadata }), writes, actions, directories, files, mount, cancel: () => { cancelled = true; }, dispose: () => { mounted.forEach(stop => stop()); } };
 }
+await test('deduplicated history updates the shared worktree lease', async () => {
+  const f = fixture();
+  try {
+    const worktree = { root: '/project', path: '/project/.claude/worktrees/coffee-task-1', branch: 'project/task-1', lease: 'old' };
+    f.dispatch({ type: 'ADD_TERMINAL', session: { id: 'one', tool: 'codex', folderPath: worktree.path, resumeToken: 'native', worktree } });
+    f.dispatch({ type: 'ADD_TERMINAL', session: { id: 'two', tool: 'codex', folderPath: worktree.path, resumeToken: 'native', worktree: { ...worktree, lease: 'new' } } });
+    assert.equal(f.stateRef.current.terminals.length, 1);
+    assert.equal(f.stateRef.current.terminals[0].worktree.lease, 'new');
+    f.dispatch({ type: 'RESTORE_WORKER_SESSION', child: { id: 'three', tool: 'codex', folderPath: worktree.path, resumeToken: 'native', worktree: { ...worktree, lease: 'worker-new' } } });
+    assert.equal(f.stateRef.current.terminals.length, 1);
+    assert.equal(f.stateRef.current.terminals[0].worktree.lease, 'worker-new');
+  } finally { f.dispose(); }
+});
 await test('coordinated worker tabs group after the parent without stealing focus or closing settings', async () => {
   const f = fixture();
   try {
@@ -205,8 +218,11 @@ await test('reordering, focus and Agent pages cannot redirect input or discard t
     f.dispatch({ type: 'SET_ACTIVE_TERMINAL', id: 'first' });
     f.dispatch({ type: 'REORDER_TAB', tabId: 'second', beforeId: 'first' });
     assert.deepEqual(Array.from(f.stateRef.current.terminals, tab => tab.id), ['second', 'first']);
-    for (const page of ['agent', 'config']) f.dispatch({ type: 'OPEN_AGENT_PAGE', page });
-    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:config', beforeId: 'first' });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
+    // Configuration opens the settings page's Agent section, not a tab.
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' });
+    assert.equal(f.stateRef.current.settingsOpen, true); assert.equal(f.stateRef.current.settingsSection, 'agent');
+    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:agent', beforeId: 'first' });
     const text = 'Fix the login button in D:\\用户项目. Keep its label exactly "登录". Run: npm test';
     const result = await f.execute('terminal_send', { sessionId: target.sessionId, generation: target.generation, text });
     assert.equal(result.written, true);
@@ -214,12 +230,12 @@ await test('reordering, focus and Agent pages cannot redirect input or discard t
     assert.equal(f.writes[0].data, text);
     f.dispatch({ type: 'SET_ACTIVE_TERMINAL', id: 'first' });
     assert.equal(f.stateRef.current.agentPageActive, null);
-    assert.deepEqual([...f.stateRef.current.agentPages], ['config', 'agent']);
+    assert.deepEqual([...f.stateRef.current.agentPages], ['agent']);
+    assert.equal(f.stateRef.current.settingsOpen, false, 'switching tabs leaves the settings page');
     assert.equal(f.stateRef.current.activeTerminalId, 'first');
     assert.equal(f.stateRef.current.terminals.length, 2);
     assert.equal(f.api.getTerminalObserver('second').generation, target.generation);
-    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' });
-    f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'config' });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
     assert.equal(f.stateRef.current.agentPageActive, 'agent');
     f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'agent' });
     assert.equal(f.stateRef.current.agentPageActive, null);
@@ -228,23 +244,22 @@ await test('reordering, focus and Agent pages cannot redirect input or discard t
     assert.equal(f.api.getTerminalObserver('second').generation, target.generation);
   } finally { f.dispose(); }
 });
-await test('Agent and settings tabs move both ways between terminals without changing focus, drafts or identity', async () => {
+await test('The Agent tab moves both ways between terminals without changing focus, drafts or identity', async () => {
   const f = fixture();
   try {
     for (const id of ['first', 'second']) f.dispatch({ type: 'ADD_TERMINAL', session: { id, tool: null, folderPath: id, gambitDraft: id } });
-    for (const page of ['config', 'agent']) f.dispatch({ type: 'OPEN_AGENT_PAGE', page });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
     const sessions = [...f.stateRef.current.terminals];
     const order = () => Array.from(f.api.getTabOrder(f.stateRef.current));
-    assert.deepEqual(order(), ['first', 'second', 'agent:config', 'agent:agent']);
-    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:agent', beforeId: 'first' });
-    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:config', beforeId: 'second' });
-    assert.deepEqual(order(), ['agent:agent', 'first', 'agent:config', 'second']);
+    assert.deepEqual(order(), ['first', 'second', 'agent:agent']);
+    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:agent', beforeId: 'second' });
+    assert.deepEqual(order(), ['first', 'agent:agent', 'second']);
     assert.equal(f.stateRef.current.agentPageActive, 'agent');
     assert.equal(f.stateRef.current.activeTerminalId, 'second');
     for (const session of sessions) assert.equal(f.stateRef.current.terminals.find(item => item.id === session.id), session);
     f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:agent', beforeId: null });
     f.dispatch({ type: 'REORDER_TAB', tabId: 'second', beforeId: 'first' });
-    assert.deepEqual(order(), ['second', 'first', 'agent:config', 'agent:agent']);
+    assert.deepEqual(order(), ['second', 'first', 'agent:agent']);
     assert.deepEqual(Array.from(f.stateRef.current.terminals, tab => tab.id), ['second', 'first']);
     for (const action of [
       { type: 'REORDER_TAB', tabId: 'missing', beforeId: 'first' },
@@ -260,24 +275,24 @@ await test('mixed ordering survives hidden tabs, restart and launch; reopened pa
   const f = fixture();
   try {
     for (const id of ['first', 'hidden']) f.dispatch({ type: 'ADD_TERMINAL', session: { id, tool: null, folderPath: id, isHidden: id === 'hidden' } });
-    for (const page of ['config', 'agent']) f.dispatch({ type: 'OPEN_AGENT_PAGE', page });
-    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:config', beforeId: 'first' });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
+    f.dispatch({ type: 'REORDER_TAB', tabId: 'agent:agent', beforeId: 'first' });
     const order = () => Array.from(f.api.getTabOrder(f.stateRef.current));
     f.dispatch({ type: 'RESTART_TERMINAL', id: 'first', newId: 'restarted' });
-    assert.deepEqual(order(), ['agent:config', 'restarted', 'hidden', 'agent:agent']);
+    assert.deepEqual(order(), ['agent:agent', 'restarted', 'hidden']);
     f.dispatch({ type: 'LAUNCH_TERMINAL_TOOL', id: 'restarted', tool: 'terminal', cwd: 'chosen' });
-    assert.deepEqual(order(), ['agent:config', 'restarted', 'hidden', 'agent:agent']);
+    assert.deepEqual(order(), ['agent:agent', 'restarted', 'hidden']);
     f.dispatch({ type: 'SET_TERMINAL_HIDDEN', id: 'hidden', isHidden: false });
-    assert.deepEqual(order(), ['agent:config', 'restarted', 'hidden', 'agent:agent']);
-    f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'config' });
-    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' });
-    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' });
+    assert.deepEqual(order(), ['agent:agent', 'restarted', 'hidden']);
+    f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'agent' });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
+    f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
     f.dispatch({ type: 'ADD_TERMINAL', session: { id: 'new', tool: null, folderPath: null } });
-    assert.deepEqual(order(), ['restarted', 'hidden', 'agent:agent', 'agent:config', 'new']);
+    assert.deepEqual(order(), ['restarted', 'hidden', 'agent:agent', 'new']);
     for (const id of ['restarted', 'hidden', 'new']) f.dispatch({ type: 'REMOVE_TERMINAL', id });
     const replacement = f.stateRef.current.terminals[0];
     assert.equal(replacement.tool, null);
-    assert.deepEqual(order(), ['agent:agent', 'agent:config', replacement.id]);
+    assert.deepEqual(order(), ['agent:agent', replacement.id]);
   } finally { f.dispose(); }
 });
 await test('stale generations, cancellation and arbitrary IPC are rejected before mutations', async () => {

@@ -8,6 +8,7 @@ export function useTerminalContextMenu(
   readSelection: () => string,
   setMenu: (menu: TermContextMenuState | null) => void,
   readApplicationSelection?: () => (() => Promise<void>) | undefined,
+  readLink?: (x: number, y: number) => TermContextMenuState['link'],
 ) {
   const pressed = useRef<{ menu: TermContextMenuState; pointer: boolean } | null>(null);
   const request = useRef(0);
@@ -37,7 +38,7 @@ export function useTerminalContextMenu(
   const snapshot = (event: MouseEvent<HTMLElement>): TermContextMenuState => {
     const text = readSelection();
     const copySelection = text ? undefined : readApplicationSelection?.();
-    return { x: event.clientX, y: event.clientY, hasSelection: Boolean(text || copySelection), text, copySelection };
+    return { x: event.clientX, y: event.clientY, hasSelection: Boolean(text || copySelection), text, copySelection, link: readLink?.(event.clientX, event.clientY) };
   };
   const openMenu = (menu: TermContextMenuState, autoCopy: boolean) => {
     const current = ++request.current;

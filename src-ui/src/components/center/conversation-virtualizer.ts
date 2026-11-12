@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState,
   type RefObject,
 } from 'react';
 import type { ChatMessage } from '../../lib/chat-transcript';
@@ -17,6 +17,7 @@ interface VirtualMetrics {
   offsets: number[];
   total: number;
   keys: string[];
+  indexes: Map<string, number>;
 }
 
 // Protocol reducers replace changed messages. Reuse estimates for immutable
@@ -82,6 +83,7 @@ export function useConversationVirtualizer(
 ) {
   const [heights, setHeights] = useState(() => new Map<string, number>());
   const pendingHeightsRef = useRef(new Map<string, number>());
+  const measuredRef = useRef(new Set<string>());
   const measureFrameRef = useRef<number | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const [range, setRange] = useState<VirtualRange>({ start: 0, end: 0 });
@@ -91,16 +93,21 @@ export function useConversationVirtualizer(
   const metrics = useMemo<VirtualMetrics>(() => {
     const offsets = new Array<number>(messages.length + 1);
     const keys = new Array<string>(messages.length);
+    const indexes = new Map<string, number>();
     offsets[0] = 0;
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
       const { key, height: estimate } = messageMeasurement(message);
       keys[index] = key;
+      indexes.set(key, index);
       const height = heights.get(key) ?? estimate;
       offsets[index + 1] = offsets[index] + height;
     }
-    return { offsets, total: offsets[messages.length] ?? 0, keys };
+    return { offsets, total: offsets[messages.length] ?? 0, keys, indexes };
   }, [messages, heights]);
+  const metricsRef = useRef(metrics);
+  // Before any layout effect, as the rows below measure in theirs.
+  useInsertionEffect(() => { metricsRef.current = metrics; }, [metrics]);
 
   const updateRange = useCallback(() => {
     scrollFrameRef.current = null;
@@ -178,12 +185,26 @@ export function useConversationVirtualizer(
 
   const measureRow = useCallback((messageId: string, height: number) => {
     if (!Number.isFinite(height) || height <= 0) return;
+    // Correct estimates above the reader before paint, without moving the live tail.
+    const { offsets, indexes } = metricsRef.current;
+    const scroll = scrollRef.current;
+    const index = indexes.get(messageId);
+    if (scroll?.clientHeight && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop >= 2
+      && index !== undefined && index < indexes.size - 1
+      && !measuredRef.current.has(messageId) && offsets[index + 1] <= scroll.scrollTop - THREAD_TOP_PADDING_PX) {
+      scroll.scrollTop += height - (offsets[index + 1] - offsets[index]);
+    }
+    measuredRef.current.add(messageId);
     pendingHeightsRef.current.set(messageId, height);
     scheduleMeasurements();
-  }, [scheduleMeasurements]);
+  }, [scheduleMeasurements, scrollRef]);
 
   useLayoutEffect(() => {
     currentKeysRef.current = currentKeys;
+    // Streaming creates new measurement IDs; release their historical markers too.
+    for (const key of measuredRef.current) {
+      if (!currentKeys.has(key)) measuredRef.current.delete(key);
+    }
     scheduleMeasurements();
   }, [currentKeys, scheduleMeasurements]);
 

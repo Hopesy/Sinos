@@ -13,7 +13,8 @@
 // editable path strings. AI CLI agents that support local image paths (e.g.
 // Claude Code) will read the file; agents that don't just see the raw path.
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { isWorktreePending } from '../../lib/worktree-pending';
 import { createPortal } from 'react-dom';
 import { clipboardRead, clipboardWrite } from '../../lib/clipboard';
 import { subscribeGambitHistory, getGambitHistorySnapshot, pushGambitHistory } from '../../lib/gambit-history';
@@ -24,11 +25,16 @@ import { registerFileDropTarget, formatPathsForInsert } from '../../lib/file-dro
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { ClaudeComposerControls, AttachIcon } from './ClaudeComposerControls';
 import { CodexComposerControls } from './CodexComposerControls';
+import { OpenCodeComposerControls } from './OpenCodeComposerControls';
+import { PiComposerControls } from './PiComposerControls';
 import { DshComposerControls } from './DshComposerControls';
 import { UsageMeter } from './UsageMeter';
+import { VoiceInputButton, VoiceUsageSlot } from './VoiceInputButton';
 import { useUsageQuota } from '../../lib/usage-quota';
 import { gambitAttachments, removeGambitAttachment } from '../../lib/gambit-attachments';
 import './Gambit.css';
+import { OrchestrationPicker } from './OrchestrationPicker';
+import { fileToBase64 } from '../../lib/answer-image-paste';
 
 interface GambitProps {
   sessionId: string;
@@ -43,9 +49,15 @@ interface GambitProps {
   onSend: (text: string) => boolean | Promise<boolean>;
   running?: boolean;
   claude?: boolean;
+  /** The agent's guess at the next prompt, offered while the composer is empty; Tab takes it. */
+  suggestion?: string;
   codex?: boolean;
   /** DeepSeek Harness desktop conversation (always desktop in Coffee CLI). */
   dsh?: boolean;
+  /** OpenCode desktop conversation. */
+  opencode?: boolean;
+  /** Pi desktop conversation. */
+  pi?: boolean;
   /** Local file paths are meaningful to this target (false for SSH tabs). */
   attachable?: boolean;
   onCancel?: () => void;
@@ -76,6 +88,8 @@ interface GambitProps {
   orchestration?: boolean;
   computer?: boolean;
   browser?: boolean;
+  /** Controls beside the target label: the worktree switch for desktop conversations, New chat for Coffee Agent. */
+  worktreeControl?: React.ReactNode;
 }
 
 // Matches any absolute image path inside the compose draft — both our
@@ -116,6 +130,30 @@ function wrapImagePathsForSend(text: string): string {
 // mirroring how VS Code's bottom panel works.
 const DOCK_MIN_HEIGHT = 120;
 const DOCK_MAX_HEIGHT_RATIO = 0.7; // never let the dock eat more than 70% of viewport height
+/** "Save to pre-input": flips up from face down when there is text, and flips back down when the text is sent or cleared. */
+const PRE_INPUT_FLIP_OUT_MS = 450;
+function PreInputSave({ shown, label, clearLabel, onSave, onClear }: { shown: boolean; label: string; clearLabel: string; onSave: () => void; onClear: () => void }) {
+  const [leaving, setLeaving] = useState(false);
+  // Adjusted during render (not in an effect): the moment the text goes, it starts leaving; text back cancels that.
+  const [prevShown, setPrevShown] = useState(shown);
+  if (prevShown !== shown) { setPrevShown(shown); setLeaving(!shown); }
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => setLeaving(false), PRE_INPUT_FLIP_OUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [leaving]);
+  if (!shown && !leaving) return null;
+  const leave = shown ? '' : ' is-leaving';
+  return <span className="gambit-pre-input-ground">
+    <button type="button" className={`gambit-pre-input-save${leave}`} tabIndex={shown ? undefined : -1} aria-hidden={shown ? undefined : true} onMouseDown={e => e.preventDefault()} onClick={shown ? onSave : undefined}><span className="gambit-pre-input-face">{label}</span></button>
+    {/* Empties the draft in one click; it flips in step with Save. */}
+    <button type="button" className={`gambit-pre-input-save gambit-pre-input-clear${leave}`} tabIndex={shown ? undefined : -1} aria-hidden={shown ? undefined : true} aria-label={clearLabel} onMouseDown={e => e.preventDefault()} onClick={shown ? onClear : undefined}>
+      <span className="gambit-pre-input-face"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" /><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" /></svg></span>
+    </button>
+  </span>;
+}
+
+const DOCK_AUTO_HEIGHT_RATIO = 0.5; // a long draft stops lifting the dock here and scrolls instead
 const LS_DOCK_H = 'cc-gambit-dock-h';
 
 function GambitImpl({
@@ -127,9 +165,12 @@ function GambitImpl({
   onTogglePause,
   agentStatus, canUseChat = false, viewMode = 'terminal', onViewModeChange,
   running = false,
+  suggestion: offered,
   claude = false,
   codex = false,
   dsh = false,
+  opencode = false,
+  pi = false,
   attachable = false,
   onCancel,
   sendFailedHint,
@@ -142,14 +183,24 @@ function GambitImpl({
   orchestration,
   computer,
   browser,
+  worktreeControl,
 }: GambitProps) {
   const t = useT();
   // Desktop conversations own their composer controls and send prompts verbatim.
-  const desktop = claude || codex || dsh;
+  const desktop = claude || codex || dsh || opencode || pi;
+  // Every desktop conversation accepts prompts during a running turn.
+  const steerable = claude || codex || dsh || opencode || pi;
   const usage = useUsageQuota(sessionId, tool, cwd, claude ? 'claude' : codex ? 'codex' : dsh ? 'dsh' : null);
-  const usageMeter = <UsageMeter quotas={usage.quotas} onRefresh={usage.refresh} />;
+  // A selected dictation source can fill any tool's composer.
+  const voiceTool = claude ? 'claude' : codex ? 'codex' : tool;
+  // While listening the live waveform takes the usage meter's place, wherever the meter is.
+  const meter = <UsageMeter quotas={usage.quotas} onRefresh={usage.refresh} />;
+  const usageMeter = <VoiceUsageSlot waveKey={sessionId}>{meter}</VoiceUsageSlot>;
+  const suggestion = draft ? undefined : offered;
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // When the IME composition ended, for the Enter that confirms a candidate (see onKeyDown).
+  const compositionEndRef = useRef(0);
   const claudeKeyHandler = useRef<((event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | undefined>(undefined);
   const codexSubmitHandler = useRef<((text: string) => boolean) | undefined>(undefined);
   const sendingRef = useRef(false);
@@ -197,6 +248,9 @@ function GambitImpl({
     } catch { /* optional preference */ }
     return DOCK_MIN_HEIGHT;
   });
+  // Height the draft needs. The dragged height stays the floor, so clearing the draft returns to it.
+  const [contentH, setContentH] = useState(0);
+  const effectiveH = Math.max(dockedH, contentH);
   // Caches the latest height written to the DOM during a resize drag, so
   // onUp commits it back to React state once without thrashing intermediate
   // renders. Null when no resize is in progress.
@@ -204,6 +258,18 @@ function GambitImpl({
 
   useEffect(() => {
     textareaRef.current?.focus();
+  }, []);
+
+  // A mouse click on a footer control or its menu leaves the caret in the draft, so Enter still sends instead of
+  // pressing that control again. Only the mouse: tabbing to a control still focuses it.
+  useEffect(() => {
+    const keepCaret = (e: MouseEvent) => {
+      if (!(e.target as Element).closest?.('button')?.closest('.gambit-footer, .claude-control-menu')) return;
+      e.preventDefault();
+      if (!document.querySelector('.claude-control-menu')) textareaRef.current?.focus();
+    };
+    document.addEventListener('mousedown', keepCaret, true);
+    return () => document.removeEventListener('mousedown', keepCaret, true);
   }, []);
 
   // Floating scrollbar for the input box. A long draft's scroll owner is
@@ -228,12 +294,12 @@ function GambitImpl({
     const root = document.documentElement;
     const body = document.body;
     body.classList.add('gambit-docked');
-    root.style.setProperty('--gambit-dock-h', `${dockedH}px`);
+    root.style.setProperty('--gambit-dock-h', `${effectiveH}px`);
     return () => {
       body.classList.remove('gambit-docked');
       root.style.removeProperty('--gambit-dock-h');
     };
-  }, [dockedH]);
+  }, [effectiveH]);
 
   // Persist dock height. Cheap to write — runs only on settle.
   useEffect(() => {
@@ -250,7 +316,7 @@ function GambitImpl({
     handle.classList.add('resizing');
     dockResizeRef.current = {
       startY: e.clientY,
-      origH: dockedH,
+      origH: effectiveH,
       handle,
     };
     e.preventDefault();
@@ -420,10 +486,10 @@ function GambitImpl({
     return () => clearTimeout(t);
   }, [sendEmpty]);
 
-  const { state: appState } = useAppState();
+  const { state: appState, dispatch: appDispatch } = useAppState();
 
   // Auto-grow the textarea to fit its content as the user types.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
     const scroller = inputRef.current;
@@ -438,6 +504,8 @@ function GambitImpl({
     ta.style.height = 'auto';
     ta.style.height = `${ta.scrollHeight}px`;
     if (!scroller) return;
+    const dock = rootRef.current;
+    if (dock) setContentH(Math.min(dock.offsetHeight - scroller.clientHeight + ta.scrollHeight, Math.floor(window.innerHeight * DOCK_AUTO_HEIGHT_RATIO)));
     // Remeasuring via height:'auto' momentarily collapses the (rows=1) textarea
     // for the synchronous reflow that reading scrollHeight forces; while
     // collapsed the scroll container has almost no content, so the browser
@@ -635,7 +703,9 @@ function GambitImpl({
   };
 
   const handleSend = useCallback(async () => {
-    if (running && !claude && !dsh) return;
+    if (running && !steerable) return;
+    // A worktree on its way would move the conversation; the message waits in the box until it is ready.
+    if (isWorktreePending(sessionId)) return;
     // CRITICAL: the draft text is the ONLY thing that gets sent.
     // Thumbnails rendered from pastedImagePaths are a pure derived view
     // with zero data-side responsibility. DO NOT re-append paths or
@@ -647,7 +717,7 @@ function GambitImpl({
       setSendEmpty(true);
       return;
     }
-    if ((codex || dsh) && codexSubmitHandler.current?.(text)) return;
+    if ((codex || dsh || opencode || pi) && codexSubmitHandler.current?.(text)) return;
     const body = desktop ? text : wrapImagePathsForSend(text);
     if (sendingRef.current) return;
     sendingRef.current = true;
@@ -665,7 +735,7 @@ function GambitImpl({
     // the newest entry (which is the one we just pushed).
     historyCursorRef.current = null;
     if (latestDraftRef.current === draft) onDraftChange('');
-  }, [draft, onSend, onDraftChange, running, claude, codex, dsh, desktop]);
+  }, [draft, onSend, onDraftChange, running, steerable, codex, dsh, opencode, pi, desktop, sessionId]);
 
   // Scroll the active agent surface in small increments while the Gambit
   // textarea stays focused. The textarea is a controlled editor, so letting
@@ -687,6 +757,9 @@ function GambitImpl({
     // IME composition in progress — let the IME keep Enter for confirming
     // candidates. nativeEvent.isComposing is the canonical flag.
     if (e.nativeEvent.isComposing) return;
+    // macOS WebKit ends the composition before the confirming Enter's keydown, so isComposing is already false there.
+    // That keydown still carries keyCode 229, and it lands right after compositionend.
+    if (e.key === 'Enter' && (e.nativeEvent.keyCode === 229 || performance.now() - compositionEndRef.current < 50)) return;
     if (!desktop) {
     // Bare ←/→ recall history only from an empty prompt, or while already
     // browsing history. With regular text in the box they retain native
@@ -708,6 +781,11 @@ function GambitImpl({
     }
     }
     if (desktop && claudeKeyHandler.current?.(e)) return;
+    if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && suggestion) {
+      e.preventDefault();
+      onDraftChange(suggestion);
+      return;
+    }
     // History recall is gated behind Alt+↑/↓. Bare ↑/↓ stays native caret
     // movement — users complained that hijacking them stole vertical caret
     // positioning inside a multi-line draft. Alt+arrow has no native
@@ -833,11 +911,11 @@ function GambitImpl({
     bottom: 8,
     top: 'auto',
     width: 'auto',
-    height: dockedH,
+    height: effectiveH,
   };
 
   const capabilitiesStatus = (orchestration || computer || browser) && <div className="gambit-capabilities" role="status">
-    {orchestration && <span className="gambit-capability is-orchestration">{t('tools.tab.orchestration')}</span>}
+    {orchestration && <OrchestrationPicker sessionId={sessionId} />}
     {computer && <span className="gambit-capability is-computer">{t('control.computer_label')}</span>}
     {browser && <span className="gambit-capability is-browser">{t('control.browser_label')}</span>}
   </div>;
@@ -855,6 +933,9 @@ function GambitImpl({
     >
       {/* Top-edge handle for vertical height resize (VS Code bottom-panel style). */}
       <div className="gambit-dock-resize" onMouseDown={onDockResizeStart} />
+
+      {/* Save the draft for later: it goes to the right panel's pre-input tab, which opens to show it. */}
+      <PreInputSave shown={appState.preInputButton && !!draft.trim()} label={t('gambit.save_pre_input')} clearLabel={t('gambit.clear_draft')} onSave={() => { appDispatch({ type: 'SAVE_PRE_INPUT', text: draft.trim() }); onDraftChange(''); }} onClear={() => onDraftChange('')} />
 
       {attachments.length > 0 && <div className="gambit-attachments">
         {attachments.map(({ path, image }) => <div className="gambit-attachment" key={path}>
@@ -887,13 +968,17 @@ function GambitImpl({
           ref={textareaRef}
           className="gambit-textarea"
           value={draft}
-          placeholder={t('gambit.placeholder', { send: sendCombo, newline: newlineCombo })}
+          placeholder={suggestion ? undefined : t('gambit.placeholder', { send: sendCombo, newline: newlineCombo })}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={onKeyDown}
+          onCompositionEnd={() => { compositionEndRef.current = performance.now(); }}
           onPaste={onPaste}
           spellCheck={false}
           rows={1}
+          aria-description={suggestion}
         />
+        {/* Not the placeholder: that cannot end in an ellipsis, and a long guess would be silently cut. */}
+        {suggestion && <div className="gambit-suggestion" aria-hidden="true">{suggestion}</div>}
       </div>
 
       <div className={`gambit-footer${desktop ? ' gambit-footer--claude' : ''}${!desktop && attachable ? ' gambit-footer--attach' : ''}${capabilitiesStatus ? ' gambit-footer--capabilities' : ''}`}>
@@ -910,11 +995,14 @@ function GambitImpl({
             <span className="gambit-workspace-name">{workspaceName}</span>
           </span>
         )}
+        {worktreeControl}
+        {!desktop && attachable && <button type="button" className="gambit-attach" aria-label={t('claude.attach')} onClick={() => { void attachFiles(); }}><AttachIcon /></button>}
         {claude && <ClaudeComposerControls sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} quota={usageMeter}>{capabilitiesStatus}</ClaudeComposerControls>}
         {codex && <CodexComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</CodexComposerControls>}
 
+        {opencode && <OpenCodeComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</OpenCodeComposerControls>}
+        {pi && <PiComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</PiComposerControls>}
         {dsh && <DshComposerControls key={sessionId} sessionId={sessionId} draft={draft} onDraftChange={onDraftChange} keyHandler={claudeKeyHandler} submitHandler={codexSubmitHandler} quota={usageMeter}>{capabilitiesStatus}</DshComposerControls>}
-        {!desktop && attachable && <button type="button" className="gambit-attach" aria-label={t('claude.attach')} onClick={() => { void attachFiles(); }}><AttachIcon /></button>}
         {!desktop && capabilitiesStatus}
         {!desktop && usageMeter}
 
@@ -964,14 +1052,16 @@ function GambitImpl({
             </button>
           </div>
         )}
+        <VoiceInputButton key={`${sessionId}:${voiceTool}`} tool={voiceTool ?? ''} cwd={cwd} waveKey={sessionId} draft={draft} onDraftChange={onDraftChange} />
+
         {!onTogglePause && <>
         <button
           className={`gambit-send${sendFailed ? ' gambit-send--failed' : ''}${!running && !draft.trim() ? ' gambit-send--empty' : ''}`}
-          aria-label={t(running && (!(claude || dsh) || !draft.trim()) ? 'gambit.stop' : 'gambit.send')}
+          aria-label={t(running && (!steerable || !draft.trim()) ? 'gambit.stop' : 'gambit.send')}
           disabled={running && !onCancel}
-          onClick={running && (!(claude || dsh) || !draft.trim()) ? onCancel : handleSend}
+          onClick={running && (!steerable || !draft.trim()) ? onCancel : handleSend}
         >
-          {running && (!(claude || dsh) || !draft.trim()) ? <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg> : <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          {running && (!steerable || !draft.trim()) ? <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg> : <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M8 14 V3 M3 8 L8 3 L13 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>}
         </button>
@@ -1081,18 +1171,3 @@ function GambitImpl({
 // reset the inline height from React, clobbering the direct DOM writes we
 // use for smooth resizing and making the panel visibly snap back.
 export const Gambit = memo(GambitImpl);
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // data:image/png;base64,xxxx — strip the prefix so Rust gets pure base64.
-      const comma = result.indexOf(',');
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-

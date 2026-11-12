@@ -23,7 +23,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue" />
-  <img src="https://img.shields.io/badge/languages-10-orange" />
+  <img src="https://img.shields.io/badge/languages-11-orange" />
   <img src="https://img.shields.io/badge/built%20with-Tauri%20%2B%20Rust-brown" />
   <img src="https://img.shields.io/github/license/Hopesy/sinos" />
 </p>
@@ -48,16 +48,16 @@ Built with Tauri and a Rust backend, Sinos CLI is available for Windows, macOS, 
 
 ### Supported AI CLIs
 
-Sinos CLI can launch **any** command-line agent — but the ones below get deeper, purpose-built integration. The tier tells you how much of the workspace lights up for each one: **Dynamic Island** (live status), **History** (saved conversations), **Heatmap** (activity), **Changes** (diff panel), **Brand icon**, **One-click launch**, and **Custom launch args** (per-tool flags).
+Sinos CLI can launch **any** command-line agent — but the ones below get deeper, purpose-built integration. **T1 supports two modes — a dedicated Desktop conversation and the native Terminal — plus usage statistics.** Lower tiers remain native terminal experiences, with the additional capabilities listed below.
 
 | Tier | What you get | CLIs |
 |---|---|---|
-| **T1** | Dynamic Island · History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | **Claude Code** · **Codex CLI** · **Grok Build** |
-| **T2** | History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | OpenCode · mimocode · Kimi Code · OpenClaw · Hermes Agent · Antigravity · Qwen Code · Pi · Oh-My-Pi · CodeBuddy |
-| **T3** | Brand icon · One-click launch | Crush · Aider · Goose · Copilot CLI · Cursor · Cline |
+| **T1** | **Desktop mode + Terminal mode · Usage statistics** · History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | **Claude Code** · **DeepSeek Harness** · **Codex CLI** · **OpenCode** · **Pi** |
+| **T2** | Native terminal · History · Heatmap · Changes · Brand icon · One-click launch · Custom launch args | Antigravity · Kimi Code · mimocode · Grok Build · OpenClaw · Hermes Agent · Qwen Code · Kilo Code · Oh-My-Pi · CodeBuddy |
+| **T3** | Brand icon · One-click launch | Crush · Aider · Goose · Copilot CLI · Cursor · Cline · Muse Code |
 | **T4** | Open a terminal tab and type the command to launch | any other CLI |
 
-*Dynamic Island status is hook-free for Claude Code, Codex CLI, Grok Build, Oh-My-Pi and Kimi Code. Sinos reads native terminal titles or supported screen states and does not install status hooks. Oh-My-Pi and CodeBuddy support history resume and conversation rendering on desktop and mobile.*
+*Desktop mode and usage statistics are currently available for Claude Code, DeepSeek Harness, Codex CLI, OpenCode, and Pi. Other tools stay in their native terminal UI even when Sinos CLI can read their history.*
 
 *T1 and T2 CLIs ship today; T3 integrations are rolling in.*
 
@@ -65,7 +65,7 @@ Muse Code launches `muse` in your selected directory. Its session history and he
 
 ### Desktop & Terminal Modes
 
-**Claude Code and Codex CLI** offer `Desktop / Terminal` tabs on their launch cards. Terminal is the default in Sinos to retain shared mobile sessions; saved preferences are preserved. Desktop mode displays conversations, tool activity, permission/input cards, and conversation navigation while staying connected to the native background session. Coffee Agent can read and operate that same desktop-mode session without opening a separate terminal.
+**Claude Code and Codex CLI** offer `Desktop / Terminal` tabs on their launch cards. Terminal is the default in Sinos to retain shared mobile sessions; saved preferences are preserved. Desktop mode displays conversations, tool activity, permission/input cards, and conversation navigation while staying connected to the native background session. Sinos Agent can read and operate that same desktop-mode session without opening a separate terminal.
 
 ---
 
@@ -122,7 +122,7 @@ The Sinos CLI app ships with a fully localized UI in 11 languages — menus, dia
 
 | Feature | Description |
 |---|---|
-| **Desktop Conversations** | Claude Code and Codex CLI support Desktop or Terminal launch modes, with native background sessions and same-session Coffee Agent control |
+| **Desktop Conversations** | Claude Code and Codex CLI support Desktop or Terminal launch modes, with native background sessions and same-session Sinos Agent control |
 | **Multi-Tab Sessions** | Run multiple agents side by side, each with its own independent process and context |
 | **Session History** | Every session auto-saved and searchable; resume any conversation from where you left off |
 | **Built-In File Explorer** | Browse your workspace, copy paths, drag references directly into your prompt |
@@ -158,20 +158,20 @@ sinos-cli launch --tool codex --cwd ~/work/project
 
 **Windows**
 ```powershell
-irm https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.ps1 | iex
 ```
 
 **macOS** (Apple Silicon & Intel)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.sh | sh
 ```
 
 **Linux** (Debian / Ubuntu / AppImage)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.sh | sh
 ```
 
-Or download directly from [Releases](https://github.com/Hopesy/sinos/releases).
+Or download directly from [Releases](https://github.com/Hopesy/Sinos/releases).
 
 | Platform | Installer |
 |---|---|
@@ -191,7 +191,7 @@ See [Android setup and build instructions](src-ui/android/README.md).
 
 ```bash
 # Prerequisites: Rust, Node.js
-git clone https://github.com/Hopesy/sinos
+git clone https://github.com/Hopesy/Sinos
 cd sinos
 cd src-ui && npm install && cd ..
 cargo tauri build
@@ -241,15 +241,15 @@ sinos-cli launch --tool codex --cwd ~/work/project
 
 **Windows**
 ```powershell
-irm https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.ps1 | iex
 ```
 
 **macOS / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.sh | sh
 ```
 
-也可以直接从 [Releases](https://github.com/Hopesy/sinos/releases) 下载对应平台的安装包。
+也可以直接从 [Releases](https://github.com/Hopesy/Sinos/releases) 下载对应平台的安装包。
 
 Android 请下载 `Sinos-<版本>-android-release.apk`。电脑打开「设置 → 移动端 → 连接新设备」，
 再用 App 扫码配对；以后打开自动重连。连接期间电脑需要运行且在线。

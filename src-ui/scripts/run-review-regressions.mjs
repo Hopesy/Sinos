@@ -98,7 +98,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   visit(tree); assert.ok(callback);
   const history = [], cleared = [], failed = [];
   const context = {
-    useCallback: fn => fn, draft: 'original prompt', running: false, claude: false, codex: false, dsh: false, desktop: false,
+    useCallback: fn => fn, sessionId: 'tab-1', isWorktreePending: () => false, draft: 'original prompt', running: false, claude: false, codex: false, dsh: false, opencode: false, pi: false, steerable: false, desktop: false,
     sendingRef: { current: false }, latestDraftRef: { current: 'original prompt' }, historyCursorRef: { current: null },
     onSend: async () => true, onDraftChange: text => cleared.push(text),
     pushGambitHistory: text => history.push(text), setSendFailed: value => failed.push(value), setSendEmpty() {},
@@ -106,6 +106,10 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   const send = () => evaluate(`${declaration('components/center/Gambit.tsx', 'wrapImagePathsForSend')}; ${callback}`, {
     ...context, IMAGE_PATH_RE: /(?:[A-Za-z]:[\\/]|\/)[^\s<>"'`]+?\.(?:png|jpe?g|gif|webp|bmp)/gi,
   });
+  context.isWorktreePending = () => true;
+  await send()();
+  assert.equal(cleared.length + history.length, 0, 'a message waits in the box while the worktree is created');
+  context.isWorktreePending = () => false;
   context.running = true;
   await send()();
   assert.equal(history.length, 0);
@@ -197,7 +201,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     cursor = 0;
     const page = component();
     const nodes = elements(page);
-    const thread = nodes.find(node => node.props.className === 'agent-chat-thread');
+    const thread = nodes.find(node => String(node.props.className ?? '').split(' ').includes('agent-chat-thread'));
     thread.props.ref.current = scroll;
     const list = nodes.find(node => node.props.className === 'agent-message-list');
     if (list) list.props.ref.current = {};
@@ -248,7 +252,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(elements(nodes.find(node => node.type === 'article' && node.props['data-conversation-navigation-id'] === '102')).find(node => node.type === 'copy').props.copied, false);
 
   scroll.scrollTop = 700;
-  nodes.find(node => node.props.className === 'agent-chat-thread').props.onScroll();
+  nodes.find(node => String(node.props.className ?? '').split(' ').includes('agent-chat-thread')).props.onScroll();
   nodes.find(node => node.type === 'button' && node.children.includes('agent.chat.older')).props.onClick();
   assert.ok(olderRequest, 'the real older-history handler requested the archive');
   // Older rows add 300 px above, while an active reply grows another 500 px
@@ -277,6 +281,8 @@ function deferred() {
 // Actual reducer: a background PTY may only change its own session.
 const reducer = evaluate(`${declaration('store/app-state.tsx', 'reducer')}; reducer`, {
   localStorage: { setItem() {} },
+  getTabOrder: evaluate(`${declaration('store/app-state.tsx', 'getTabOrder').replace(/^export /, '')}; getTabOrder`),
+  replaceSplitSession: evaluate(`${declaration('lib/session-split-layout.ts', 'splitSessionIds').replace(/^export /, '')}; ${declaration('lib/session-split-layout.ts', 'replaceSplitSession').replace(/^export /, '')}; replaceSplitSession`),
 });
 const state = { activeTerminalId: 'A', terminals: [
   { id: 'A', folderPath: '/A' }, { id: 'B', folderPath: '/B' },
@@ -302,6 +308,19 @@ assert.equal(reducer(statistics, { type: 'SET_TOOL_SETTINGS_OPEN', open: true })
 const conversation = reducer(toolSettings, { type: 'SET_ACTIVE_TERMINAL', id: 'B' });
 assert.equal(conversation.toolSettingsOpen, false);
 assert.equal(conversation.activeTerminalId, 'B');
+
+// Fresh worktree IDs release stale PTY submission state while preserving the user's draft.
+const worktreeState = { ...state, agentPages: [], tabOrder: ['A', 'B', 'C'], terminals: state.terminals.map(tab => tab.id === 'A' ? { ...tab, tool: 'claude', chatPending: { text: 'old pending', sentAt: 1 }, gambitDraft: 'unsent draft', viewMode: 'chat' } : tab) };
+const moved = reducer(worktreeState, { type: 'SET_TERMINAL_WORKTREE', id: 'A', newId: 'worktree-A', cwd: '/worktree' });
+assert.equal(moved.terminals[0].chatPending, undefined);
+assert.equal(moved.terminals[0].viewMode, 'terminal');
+assert.equal(moved.terminals[0].gambitDraft, 'unsent draft');
+assert.equal(moved.activeTerminalId, 'worktree-A');
+for (const tool of ['claude', 'codex']) {
+  const mode = `${tool}Mode`;
+  assert.equal(reducer(worktreeState, { type: 'LAUNCH_TERMINAL_TOOL', id: 'A', tool }).terminals[0][mode], 'terminal', `${tool} defaults to the shared terminal path`);
+  assert.equal(reducer(worktreeState, { type: 'LAUNCH_TERMINAL_TOOL', id: 'A', tool, [mode]: 'conversation' }).terminals[0][mode], 'conversation', `${tool} preserves explicit desktop choices`);
+}
 
 // Cleanup during both async import and listen() registration, including StrictMode remounts.
 for (const [file, fragment] of [
@@ -479,11 +498,12 @@ console.log('OK: Cline selection and toggling, retired pins, catalog consistency
 // Exercise the actual tool-card handler: manual and Agent launch share one action.
 const manualLaunches = [];
 const checkedLaunchFolders = [];
+const rememberedFolders = [];
 const selectTool = evaluate(pinDeclarations.get('selectTool').initializer.getText(centerTree), {
   activeTerminalId: 'launchpad', dispatch: action => manualLaunches.push(action),
   activeIdRef: { current: 'launchpad' },
   commands: { async checkProjectDirectories(paths) { checkedLaunchFolders.push(...paths); return paths.map(path => ({ path, status: 'available' })); } },
-  pushRecentFolder() {}, claudeLaunchMode: 'conversation',
+  rememberFolder(tool, folder) { rememberedFolders.push([tool, folder]); }, claudeLaunchMode: 'conversation',
 });
 await selectTool('claude', undefined, 'E:\\tmp');
 assert.deepEqual(checkedLaunchFolders, ['E:\\tmp']);
@@ -492,7 +512,8 @@ assert.equal(manualLaunches[0].type, 'LAUNCH_TERMINAL_TOOL');
 assert.equal(manualLaunches[0].id, 'launchpad');
 assert.equal(manualLaunches[0].tool, 'claude');
 assert.equal(manualLaunches[0].cwd, 'E:\\tmp');
-console.log('OK: actual tool-card folder selection uses the same launch action as Sinos Agent');
+assert.deepEqual(rememberedFolders, [['claude', 'E:\\tmp']], 'the launch is remembered as this tool\'s last folder');
+console.log('OK: actual tool-card folder selection uses the same launch action as Sinos Agent and remembers the tool\'s folder');
 
 // Exercise the actual history-card click: a directoryless Coffee conversation
 // must open its Agent page, while native history still resumes a real CLI tab.
@@ -521,7 +542,7 @@ console.log('OK: actual tool-card folder selection uses the same launch action a
     id: 'coffee-history', route: 'weixin-bound', source: '微信', title: 'hello', updatedAt: newest, messageCount: 2,
   }];
   const sortByMtime = evaluate(`${declaration('lib/history-cache.ts', 'sortByMtime').replace(/^export\s+/, '')}; sortByMtime`);
-  const merged = evaluate(merge, { useMemo: callback => callback(), nativeSessions, liveSessions: [], nowMs: newest, agentConversations, sortByMtime });
+  const merged = evaluate(merge, { useMemo: callback => callback(), nativeSessions, liveSessions: [], state: { terminals: [] }, nowMs: newest, agentConversations, sortByMtime });
   assert.equal(merged[0].id, 'coffee-history', 'the newest Agent conversation must lead mixed timestamp histories');
   assert.equal(merged.slice(0, 30).some(session => session.id === 'coffee-history'), true, 'Agent history must appear on the first visible page');
   assert.deepEqual(Array.from(merged.slice(-2), session => session.id), ['native-seconds', 'native-iso']);
@@ -542,13 +563,16 @@ console.log('OK: actual tool-card folder selection uses the same launch action a
   const click = evaluate(`const click = ${handler}; click`, {
     dispatch: action => actions.push(action), setAgentError() {},
     openAgentConversation: async id => opened.push(id), crypto: { randomUUID: () => 'native-tab' },
-    isTauri: false, state: { terminals: [] }, liveSessions: [],
+    isTauri: false, state: { terminals: [] }, liveSessions: [], renamed: { 'claude:claude-renamed': 'My name' },
   });
   await click(coffee);
   assert.deepEqual(opened, ['coffee-history']);
   assert.deepEqual(actions.map(action => action.type), ['OPEN_AGENT_PAGE']);
   await click({ id: 'claude-history', tool: 'claude', cwd: 'E:\\tmp', session_token: 'native-resume' });
   assert.deepEqual(actions.slice(1).map(action => action.type), ['ADD_TERMINAL']);
+  await click({ id: 'claude-renamed', tool: 'claude', name: 'History title', cwd: 'E:\\tmp', session_token: 'native-renamed' });
+  assert.equal(actions.at(-1).session.toolTitle, 'History title', 'a reopened tab starts under its history title');
+  assert.equal(actions.at(-1).session.pinnedTitle, 'My name', 'the name the user gave it outranks later tool titles');
   const filtered = evaluate(filter, {
     useMemo: callback => callback(), availableSessions: [coffee], debouncedQuery: 'Sinos Agent', matchesQuery,
   });

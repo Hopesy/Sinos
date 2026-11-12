@@ -9,6 +9,7 @@
 //   3. Multi-agent layout mode — only visible when the active tab is a
 //      multi-agent quadrant. Two modes: grid (2×2) and columns (1×4).
 
+import { useEffect } from 'react';
 import { commands, isTauri } from '../../tauri';
 import { useAppState, useAppDispatch, schemeLabels } from '../../store/app-state';
 import { IS_MACOS } from '../../lib/platform';
@@ -26,6 +27,16 @@ export function TitleBar() {
   // Gambit / right buttons — a deliberate memory hook for the product's
   // signature one-hand shortcuts (left=Q · Gambit=W · right=E by default).
   const hk = schemeLabels(state.hotkeyScheme);
+  // ⌘, (Ctrl+, elsewhere) opens and closes settings, as in most desktop apps.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== ',' || event.altKey || event.shiftKey || !(IS_MACOS ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
+      event.preventDefault();
+      dispatch({ type: 'TOGGLE_SETTINGS' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dispatch]);
 
   const minimize = () => isTauri && commands.windowMinimize().catch(() => {});
   const maximize = () => isTauri && commands.windowMaximize().catch(() => {});
@@ -71,7 +82,8 @@ export function TitleBar() {
   };
 
   return (
-    <div className="titlebar" onMouseDown={onDragMouseDown} onDoubleClick={onDragDoubleClick}>
+    <div className={`titlebar${state.settingsOpen ? ' titlebar--settings' : ''}`} onMouseDown={onDragMouseDown} onDoubleClick={onDragDoubleClick}>
+      {/* While settings covers the window, the bar keeps only the window controls; Back is on the settings page. */}
       {/* Left slot mirrors the left panel's width so the tab strip begins at
           the TOP OF THE CENTER COLUMN, not the window's left edge — that
           far-left strip belongs to the left sidebar (and hosts the macOS
@@ -97,12 +109,9 @@ export function TitleBar() {
           No separator between groups — VS Code's titlebar uses pure
           proximity to group, which stays clean whether 2 or 4 icons
           are showing. */}
-      {/* Sharp-corner 24×24 glyphs — strokeWidth 1.8 so the icons read
-          at the same optical weight as Phosphor/Lucide at 16px render.
-          Internal dividers are inset (y=4 → y=20) so they STOP before
-          the outer border instead of crossing through it — avoids the
-          "crossed-lines" look the user flagged. Active signal still travels
-          via .is-active background only. */}
+      {/* Rounded 24×24 glyphs (rx=2, strokeWidth 2, round caps) shared by
+          all layout toggles so the panels and the keyboard read as one set.
+          Active signal travels via .is-active background only. */}
       <div className="titlebar-layout-toggles" data-toggle-display={state.titlebarToggleDisplay}>
         <Changelog />
         {/* Left panel · Gambit · right panel — the three hinted chrome toggles,
@@ -115,9 +124,9 @@ export function TitleBar() {
           aria-label={`Toggle left panel (${hk.left})`}
           aria-pressed={!state.leftPanelHidden}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" strokeLinejoin="miter">
-            <rect x="3" y="3" width="18" height="18" />
-            <line x1="9" y1="4" x2="9" y2="20" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <path d="M9 4v16" />
           </svg>
           <span className="titlebar-hotkey-hint">{hk.left}</span>
         </button>
@@ -150,9 +159,9 @@ export function TitleBar() {
           aria-label={`Toggle right panel (${hk.right})`}
           aria-pressed={!state.rightPanelHidden}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" strokeLinejoin="miter">
-            <rect x="3" y="3" width="18" height="18" />
-            <line x1="15" y1="4" x2="15" y2="20" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <path d="M15 4v16" />
           </svg>
           <span className="titlebar-hotkey-hint">{hk.right}</span>
         </button>
@@ -160,7 +169,8 @@ export function TitleBar() {
             replaced the old left-panel theme/language popovers. It joins the
             configured titlebar display mode, except "hidden" intentionally
             degrades to icon-only so Settings always remains reachable. */}
-        <button
+        {/* Settings lives at the left sidebar's bottom; here only while that sidebar is hidden, so it stays reachable. */}
+        {state.leftPanelHidden && <button
           className={`titlebar-btn titlebar-btn--layout titlebar-btn--hinted titlebar-btn--settings${state.settingsOpen ? ' is-active' : ''}`}
           onClick={() => dispatch({ type: 'TOGGLE_SETTINGS' })}
           aria-label={t('settings.title')}
@@ -171,7 +181,7 @@ export function TitleBar() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
           <span className="titlebar-hotkey-hint titlebar-settings-label">{t('settings.title')}</span>
-        </button>
+        </button>}
       </div>
 
       {/* Custom min/max/close — Windows/Linux only. On macOS the OS draws the

@@ -23,7 +23,6 @@ export function formatAgentError(error: string, t: AgentTranslator): string {
     case '请求失败': return t('agent.error.request_failed');
     case '请先在 Agent 配置中填写服务地址': return t('agent.error.url_required');
     case '请先在 Agent 配置中填写模型 ID': return t('agent.error.model_required');
-    case '请先在 Agent 配置中填写 API 密钥': return t('agent.error.api_key_required');
     case 'Agent 正在处理上一条消息':
     case '请先停止当前身份正在执行的 Agent 请求，再开始新对话':
     case '这个身份的 Agent 正在处理上一条请求，请先等待完成或取消': return t('agent.error.busy');
@@ -38,7 +37,7 @@ export function formatAgentMessage(message: string, t: AgentTranslator): string 
   return message;
 }
 
-export interface AgentMessage { id: number; role: 'user' | 'assistant'; text: string }
+export interface AgentMessage { id: number; role: 'user' | 'assistant'; text: string; tools?: { name: string; ok: boolean }[] }
 export interface AgentConversation { id: string; route: string; source: string; title: string; updatedAt: number; messageCount: number }
 interface ConversationPage { id: string; route: string; messages: AgentMessage[]; hasOlder: boolean; runId: string | null }
 export interface ChannelSettings {
@@ -159,15 +158,17 @@ export function receiveAgentEvent(event: AgentEvent) {
     }
   }
 }
-export async function sendAgentMessage(text: string) {
+export async function startNewAgentConversation() {
   if (!snapshot.conversationId) await refreshAgentConversation();
   if (snapshot.running) throw new Error('Agent 正在处理上一条消息');
-  if (['/new', '新对话', '开始新对话'].includes(text.trim())) {
-    const id = await invoke<string>('agent_new_conversation', { conversationId: snapshot.conversationId });
-    await openAgentConversation(id);
-    await refreshAgentConversations();
-    return;
-  }
+  const id = await invoke<string>('agent_new_conversation', { conversationId: snapshot.conversationId });
+  await openAgentConversation(id);
+  await refreshAgentConversations();
+}
+export async function sendAgentMessage(text: string) {
+  if (['/new', '新对话', '开始新对话'].includes(text.trim())) return startNewAgentConversation();
+  if (!snapshot.conversationId) await refreshAgentConversation();
+  if (snapshot.running) throw new Error('Agent 正在处理上一条消息');
   const conversationId = snapshot.conversationId;
   update({ messages: [...snapshot.messages, { id: -Date.now(), role: 'user', text }], running: true, error: '', activity: '正在连接模型…' });
   try { await invoke('agent_send_message', { conversationId, text }); }

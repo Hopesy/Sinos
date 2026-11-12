@@ -298,22 +298,6 @@ pub const AGENT_PRESETS: &[AgentPreset] = &[
         ),
         token_format: Some(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
     },
-    // Antigravity CLI (Google) — `agy` binary, successor to Gemini CLI.
-    // Google retired Gemini CLI for consumers 2026-05-19 in favor of
-    // this tool. Resume uses `--conversation <uuid>` (NOT `--resume`).
-    // Conversation id is the basename of the JSON file under
-    // `~/.antigravitycli/<uuid>.json`; nothing in stdout scrapes
-    // reliably yet, so session_id_pattern is None and resume tokens
-    // can only come from the history reader (deferred until the JSON
-    // schema is observed).
-    AgentPreset {
-        tool_name: "antigravity",
-        resume_program: Some("agy"),
-        resume_args_before: &["--conversation"],
-        resume_args_after: &[],
-        session_id_pattern: None,
-        token_format: Some(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
-    },
     AgentPreset {
         tool_name: "hermes",
         resume_program: Some("hermes"),
@@ -497,6 +481,17 @@ pub const AGENT_PRESETS: &[AgentPreset] = &[
         // band — leaves headroom if Kimi ever shifts the id shape, while still
         // preventing whitespace/flag injection.
         token_format: Some(r"^session_[A-Za-z0-9._-]+$"),
+    },
+    // Antigravity CLI (`agy`). Resume via `agy --conversation <id>` (verified against
+    // `agy --help`, 1.4.12). The id is the UUID primary key of its
+    // conversation_summaries.db, sourced by find_antigravity_sessions.
+    AgentPreset {
+        tool_name: "antigravity",
+        resume_program: Some("agy"),
+        resume_args_before: &["--conversation"],
+        resume_args_after: &[],
+        session_id_pattern: None,
+        token_format: Some(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
     },
 ];
 
@@ -733,6 +728,80 @@ pub(crate) fn claude_launch_token(args: &mut Vec<String>, assign_new: bool) -> O
         token = Some(id);
     }
     token
+}
+
+/// Pi 0.76+ accepts `--session-id <id>` (opens that project session, creating
+/// it when missing), so a fresh tab owns its native id from launch and the
+/// history row merges with the live tab instead of duplicating it (#180).
+/// Older Pi swallows the unknown `--flag value` pair as an extension flag.
+pub(crate) fn pi_launch_token(args: &mut Vec<String>, assign_new: bool) -> Option<String> {
+    let mut token = None;
+    let mut has_selector = false;
+    for (index, arg) in args.iter().enumerate() {
+        if matches!(arg.as_str(), "--session" | "--session-id") {
+            has_selector = true;
+            // `--session` also takes a path or partial id; only a full UUID is a usable identity.
+            token = args.get(index + 1).filter(|value| uuid::Uuid::parse_str(value).is_ok()).cloned();
+        } else if matches!(arg.as_str(), "--continue" | "-c" | "--resume" | "-r" | "--fork" | "--no-session") {
+            // These pick another conversation, or none; `--session-id` conflicts with them.
+            return None;
+        }
+    }
+    if !has_selector && assign_new {
+        let id = uuid::Uuid::new_v4().to_string();
+        args.extend(["--session-id".to_string(), id.clone()]);
+        token = Some(id);
+    }
+    token
+}
+
+/// Oh-My-Pi has no way to pick a new session's id at launch, but it records
+/// each terminal's current session in a breadcrumb keyed by the TTY
+/// (`<agent state>/terminal-sessions/<tty>`, `/dev/ttys012` → `ttys012`):
+/// line 1 the cwd, line 2 the session file (possibly relative to that cwd,
+/// and possibly not written yet). Once that file exists, reading it for the tab's own PTY gives the
+/// native id without guessing by cwd. Windows PTYs have no TTY path, so omp
+/// keeps no breadcrumb there and this stays None.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn omp_breadcrumb_token(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    let cwd = std::path::Path::new(lines.next()?.trim());
+    let file = lines.next()?.trim();
+    if file.is_empty() { return None; }
+    // Only a session omp has written resumes; a fresh crumb names a file that
+    // may never appear, and reporting it would make a restart resume nothing.
+    let file = std::fs::File::open(cwd.join(file)).ok()?;
+    use std::io::BufRead;
+    std::io::BufReader::new(file).lines().map_while(Result::ok).take(4).find_map(|line| {
+        let value: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if value.get("type")?.as_str()? != "session" { return None; }
+        let id = value.get("id")?.as_str()?;
+        uuid::Uuid::parse_str(id).is_ok().then(|| id.to_string())
+    })
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn omp_breadcrumb_dir() -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR").filter(|v| !v.is_empty()) {
+        return Some(std::path::PathBuf::from(dir).join("terminal-sessions"));
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+        let root = std::path::PathBuf::from(state).join("omp");
+        if root.is_dir() { return Some(root.join("terminal-sessions")); }
+    }
+    Some(dirs::home_dir()?.join(".omp").join("agent").join("terminal-sessions"))
+}
+
+/// The session omp currently runs in this PTY, from a breadcrumb written after
+/// `since` (TTY names are reused, so an older crumb belongs to a previous process).
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn omp_terminal_token(tty: &std::path::Path, since: std::time::SystemTime) -> Option<String> {
+    let name = tty.to_string_lossy();
+    let id = name.strip_prefix("/dev/")?.replace('/', "-");
+    let crumb = omp_breadcrumb_dir()?.join(id);
+    if std::fs::metadata(&crumb).ok()?.modified().ok()? < since { return None; }
+    omp_breadcrumb_token(&std::fs::read_to_string(crumb).ok()?)
 }
 
 // ─── Spawn ────────────────────────────────────────────────
@@ -1550,6 +1619,48 @@ mod tests {
         assert_eq!(custom, vec!["wrapper-arg".to_string()]);
     }
 
+    #[test]
+    fn omp_breadcrumb_names_the_tab_session() {
+        let dir = std::env::temp_dir().join(format!("coffee-omp-crumb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("s")).unwrap();
+        let id = "01900000-0000-7000-8000-000000000000";
+        let cwd = dir.to_string_lossy();
+        // Fresh session: nothing written yet, so there is nothing to resume.
+        assert_eq!(omp_breadcrumb_token(&format!("{cwd}\ns/2026-11-03T01-02-03-000Z_{id}.jsonl\nfresh\n")), None);
+        // Written session: the header id wins, relative paths resolve against the cwd line.
+        let other = "01900000-0000-7000-8000-000000000001";
+        std::fs::write(dir.join("s/x_y.jsonl"), format!("{{\"type\":\"session\",\"id\":\"{other}\"}}\n")).unwrap();
+        assert_eq!(omp_breadcrumb_token(&format!("{cwd}\ns/x_y.jsonl\n")), Some(other.to_string()));
+        assert_eq!(omp_breadcrumb_token(&format!("{cwd}\ns/not-an-id.jsonl\n")), None);
+        assert_eq!(omp_breadcrumb_token(&format!("{cwd}\n")), None);
+        // A crumb older than the PTY belongs to a previous process on a reused TTY.
+        assert_eq!(omp_terminal_token(std::path::Path::new("/dev/ttys999"), std::time::SystemTime::now() + std::time::Duration::from_secs(3600)), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pi_fresh_launch_owns_its_history_identity() {
+        let mut fresh = Vec::new();
+        let id = pi_launch_token(&mut fresh, true).unwrap();
+        assert_eq!(fresh, vec!["--session-id".to_string(), id.clone()]);
+        assert_eq!(pi_launch_token(&mut fresh, true), Some(id.clone()));
+        for flag in ["--session", "--session-id"] {
+            let mut args = vec![flag.to_string(), id.clone()];
+            let original = args.clone();
+            assert_eq!(pi_launch_token(&mut args, true), Some(id.clone()));
+            assert_eq!(args, original);
+        }
+        for flags in [vec!["--session", "/tmp/a.jsonl"], vec!["--continue"], vec!["-c"], vec!["--resume"], vec!["--fork", "abc"], vec!["--no-session"]] {
+            let mut args: Vec<String> = flags.iter().map(|value| value.to_string()).collect();
+            let original = args.clone();
+            assert_eq!(pi_launch_token(&mut args, true), None);
+            assert_eq!(args, original);
+        }
+        let mut custom = Vec::new();
+        assert_eq!(pi_launch_token(&mut custom, false), None);
+        assert!(custom.is_empty());
+    }
+
     #[cfg(windows)]
     #[test]
     fn shell_directories_use_drive_paths_and_reject_cmd_fallback() {
@@ -1650,6 +1761,8 @@ mod tests {
 
     #[test]
     fn find_preset_known_tools() {
+        let names: std::collections::HashSet<_> = AGENT_PRESETS.iter().map(|preset| preset.tool_name).collect();
+        assert_eq!(names.len(), AGENT_PRESETS.len(), "resume presets must have unique tool names");
         for tool in &["claude", "antigravity", "hermes", "pi", "kimicode"] {
             assert!(find_preset(tool).is_some(), "preset not found for {tool}");
         }

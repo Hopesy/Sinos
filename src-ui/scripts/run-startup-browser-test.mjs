@@ -14,7 +14,7 @@ await build({ stdin: { resolveDir: root, loader: 'tsx', contents: `
   const p=new URLSearchParams(location.search);document.documentElement.dataset.theme=p.get('theme')||'obsidian';document.documentElement.dataset.mode=p.get('mode')||'dark';localStorage.setItem('cc-lang',p.get('lang')||'zh-CN');
   const ready=new Promise(resolve=>window.completeStartup=resolve);window.reveals=0;
   createRoot(document.getElementById('root')).render(<React.StrictMode><DesktopStartup ready={ready} scaleReady={Promise.resolve()}><div className="fixture-workspace" style={{flex:1,display:'grid',placeItems:'center'}}><button>Workspace ready</button></div></DesktopStartup></React.StrictMode>);
-` }, bundle: true, outfile: join(directory, 'fixture.js'), jsx: 'automatic', external: ['/fonts/*', '/monogram.svg'], plugins: [{ name: 'native-fixture', setup(b) {
+` }, bundle: true, outfile: join(directory, 'fixture.js'), jsx: 'automatic', external: ['/fonts/*', '/backgrounds/*', '/monogram.svg'], plugins: [{ name: 'native-fixture', setup(b) {
   b.onResolve({ filter: /\/tauri$/ }, () => ({ path: 'native', namespace: 'fixture' }));
   b.onResolve({ filter: /\/platform$/ }, () => ({ path: 'platform', namespace: 'fixture' }));
   b.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'platform' ? 'export const IS_MACOS=false;' : 'export const isTauri=false;export const commands={};export async function invoke(){window.reveals++;}' }));
@@ -25,9 +25,9 @@ const server = http.createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
     if (path === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="/fixture.css"></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>'); return; }
-    const file = ['/fixture.js', '/fixture.css'].includes(path) ? join(directory, path.slice(1)) : path.startsWith('/fonts/') ? join(root, 'public/fonts', path.split('/').pop()) : null;
+    const file = ['/fixture.js', '/fixture.css'].includes(path) ? join(directory, path.slice(1)) : path.startsWith('/fonts/') ? join(root, 'public/fonts', path.split('/').pop()) : path.startsWith('/backgrounds/') ? join(root, 'public/backgrounds', path.split('/').pop()) : null;
     if (!file) { res.writeHead(404).end(); return; }
-    res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'font/woff2'); res.end(await readFile(file));
+    res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.png') ? 'image/png' : 'font/woff2'); res.end(await readFile(file));
   } catch { res.writeHead(500).end(); }
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));

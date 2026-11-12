@@ -97,6 +97,11 @@ try {
   assert.deepEqual(unread(), ['claude:shared-token']);
   h.view({ settingsOpen: false });
   assert.deepEqual(unread(), []);
+  h.view({ automationsOpen: true }); startClaude(); finishClaude();
+  h.focus(false); h.focus(true);
+  assert.deepEqual(unread(), ['claude:shared-token'], 'automations covering a session retain its unread reply');
+  h.view({ automationsOpen: false });
+  assert.deepEqual(unread(), []);
   h.view({ activeTerminalId: null }); startClaude();
   h.claude({ type: 'result', subtype: 'error_during_execution', is_error: true });
   startClaude(); await h.api.claude.controlClaude('a', { subtype: 'interrupt' }); finishClaude();
@@ -133,7 +138,9 @@ try {
   await agent.api.agent.openAgentConversation('agent-test');
   agent.view({ agentPageActive: 'agent', settingsOpen: true });
   assert.equal(agent.api.getUnreadTaskCount(), 2, 'settings covering Agent keep its count');
-  agent.view({ settingsOpen: false }); assert.equal(agent.api.getUnreadTaskCount(), 0);
+  agent.view({ settingsOpen: false, automationsOpen: true });
+  assert.equal(agent.api.getUnreadTaskCount(), 2, 'automations covering Agent keep its unread count');
+  agent.view({ automationsOpen: false }); assert.equal(agent.api.getUnreadTaskCount(), 0);
   event('started', 'foreground'); event('done', 'foreground'); assert.equal(agent.api.getUnreadTaskCount(), 0);
   agent.dispose(); transient.dispose();
   unavailable.dispose(); restarted.dispose();

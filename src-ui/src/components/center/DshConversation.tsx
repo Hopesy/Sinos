@@ -1,8 +1,11 @@
 import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { startErrorText } from '../../lib/start-error';
+import { TurnSummary } from './TurnSummary';
+import { useWorktreePending } from '../../lib/worktree-pending';
 import { useAppState } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
-import { arr, obj, str, type DshMessage, type DshRequest } from '../../lib/dsh-protocol';
+import { arr, dshToolCard, obj, str, type DshMessage, type DshRequest } from '../../lib/dsh-protocol';
 import { respondDsh, retainDshSession, stopDsh, useDshSession } from '../../lib/dsh-session';
 import { clipboardWrite } from '../../lib/clipboard';
 import { directoryFailure, directoryFailureMessage } from '../../lib/session-directory';
@@ -11,27 +14,32 @@ import { useConversationVirtualizer } from './conversation-virtualizer';
 import { ConversationVisible } from './conversation-visibility';
 import type { ChatMessage } from '../../lib/chat-transcript';
 import { MarkdownContent } from './MarkdownContent';
-import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
+import { WelcomeGreeting, WelcomeRestoring, WelcomeSessionMeta } from './WelcomeGreeting';
 import { DshWelcomeIcon } from './DshWelcomeIcon';
 import { ConversationDirectory } from '../../lib/conversation-links';
 import { useConversationMenu } from '../../lib/use-conversation-menu';
-import { CollapsibleUserMessage, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem } from './ConversationControls';
+import { CollapsibleUserMessage, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem, Chevron } from './ConversationControls';
+import { ClaudeTool } from './ClaudeConversation';
 import DSH_RUNNING_WHALE from '../../icons-inline/dsh-running-whale.png';
 import './ConversationView.css';
 import './ClaudeConversation.css';
 import './CodexConversation.css';
 import './DshConversation.css';
+import { pasteImageIntoAnswer } from '../../lib/answer-image-paste';
+import { ScrollLatestIcon } from './ScrollLatestIcon';
 
 function Measured({ id, measure, children }: { id: string; measure: (id: string, height: number) => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { const node = ref.current; if (!node) return; const update = () => measure(id, node.getBoundingClientRect().height); update(); const observer = new ResizeObserver(update); observer.observe(node); return () => observer.disconnect(); }, [id, measure]);
   return <div ref={ref}>{children}</div>;
 }
-/** One-line summary of a tool call: its first string argument, else the raw arguments. */
+/** One-line summary of a step: a command's description, else its first string argument; reasoning shows its first line. */
 function title(message: DshMessage): string {
   if (message.role === 'reasoning') return message.content.split('\n').find(line => line.trim())?.trim() ?? '';
-  try { const input = obj(JSON.parse(message.toolInput ?? '')); const first = Object.values(input).find(v => typeof v === 'string'); return [message.toolName, first].filter(Boolean).join(' · '); }
-  catch { return [message.toolName, message.toolInput].filter(Boolean).join(' · '); }
+  let input: Record<string, unknown> = {};
+  try { input = obj(JSON.parse(message.toolInput ?? '')); } catch { /* Arguments still streaming. */ }
+  const first = str(input.description) || Object.values(input).find((v): v is string => typeof v === 'string');
+  return [message.toolName, first].filter(Boolean).join(' · ');
 }
 /** DeepSeek Harness's running status: the swinging whale tail and a blue sweep over "deep diving for …". */
 function Running({ since, stopping }: { since?: number; stopping: boolean }) {
@@ -67,7 +75,7 @@ function RequestCard({ sessionId, request }: { sessionId: string; request: DshRe
       <legend>{str(q.question)}</legend>
       {!!q.detail && <MarkdownContent content={str(q.detail)} />}
       {arr(q.options).map(value => { const option = obj(value), label = str(option.label); return <label key={label}><input type={multi ? 'checkbox' : 'radio'} name={`${request.id}-${id}`} checked={(answers[id] ?? []).includes(label)} onChange={() => choose(id, label, multi)} /><span>{label}<small>{str(option.description)}</small></span></label>; })}
-      <input className="claude-custom-answer" type="text" aria-label={str(q.header) || str(q.question)} value={custom[id] ?? ''} onChange={e => setCustom(c => ({ ...c, [id]: e.target.value }))} />
+      <input className="claude-custom-answer" type="text" aria-label={str(q.header) || str(q.question)} value={custom[id] ?? ''} onChange={e => setCustom(c => ({ ...c, [id]: e.target.value }))} onPaste={e => pasteImageIntoAnswer(e, value => setCustom(c => ({ ...c, [id]: value })))} />
     </fieldset>; }) : <>
       <pre className="codex-request-details">{[str(request.params.toolName), str(request.params.reason)].filter(Boolean).join('\n')}</pre>
     </>}
@@ -86,24 +94,29 @@ function RequestCard({ sessionId, request }: { sessionId: string; request: DshRe
 type Row = DshMessage & { members?: DshMessage[]; running?: boolean };
 export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisible = isActive, hasBg, bgUrl, bgType }: { sessionId: string; cwd: string | null; resumeToken?: string; isActive: boolean; isVisible?: boolean; hasBg?: boolean; bgUrl?: string; bgType?: string }) {
   const s = useDshSession(sessionId), t = useT(), { dispatch } = useAppState();
+  const creatingWorktree = useWorktreePending(sessionId, s.ready || !!s.error);
   const directoryIssue = !s.ready ? directoryFailure(s.error) : undefined;
   const directoryError = directoryFailureMessage(s.error, t);
-  const scroll = useRef<HTMLDivElement>(null), pinned = useRef(true), lastTop = useRef(0);
+  const scroll = useRef<HTMLDivElement>(null), pinned = useRef(true), pointerHeld = useRef(false), lastTop = useRef(0);
   const conversationMenu = useConversationMenu(scroll, sessionId, isActive);
   const viewport = useRef({ width: 0, height: 0 });
   const anchor = useRef<{ messageId: string; offset: number } | null>(null);
   const [scrolled, setScrolled] = useState(false), [expanded, setExpanded] = useState<Record<string, boolean>>({}), [copied, setCopied] = useState('');
   const initialToken = useRef(resumeToken);
+  // Captured at mount like initialToken; state, not a ref, because the welcome screen renders from it.
+  const [resumed] = useState(() => !!resumeToken);
   useEffect(() => retainDshSession(sessionId, cwd, initialToken.current), [sessionId, cwd]);
   useEffect(() => { if (s.sessionId) dispatch({ type: 'SET_SESSION_TOKEN', id: sessionId, token: s.sessionId }); }, [s.sessionId, sessionId, dispatch]);
+  // The conversation's own title names the tab, as a terminal tab takes the tool's OSC title.
+  useEffect(() => { const title = s.title.trim(); if (title) dispatch({ type: 'SET_TAB_TITLE', id: sessionId, title }); }, [s.title, sessionId, dispatch]);
   useEffect(() => { dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: s.requests.length ? 'wait_input' : s.busy ? 'working' : 'idle' }); }, [s.requests.length, s.busy, sessionId, dispatch]);
-  // Tool calls and reasoning within one turn fold into a single process row, as in DeepSeek Harness.
+  // Consecutive tool calls and reasoning fold into one activity row between the things the model says; opened, each step is a full tool card.
   const rows = useMemo<Row[]>(() => {
     const result: Row[] = [];
     for (const message of s.messages) {
       const activity = message.role === 'tool' || message.role === 'reasoning';
       const previous = result.at(-1);
-      if (activity && previous?.members && previous.turn === message.turn) { previous.members.push(message); previous.running ||= message.toolStatus === 'running'; }
+      if (activity && previous?.members && previous.turn === message.turn) result[result.length - 1] = { ...previous, members: [...previous.members, message], running: previous.running || message.toolStatus === 'running' };
       else result.push(activity ? { ...message, id: `group:${message.id}`, members: [message], running: message.toolStatus === 'running' } : message);
     }
     return result;
@@ -116,7 +129,7 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
   const sync = useCallback(() => {
     const node = scroll.current; if (!node || !isVisible || !node.clientHeight) return;
     const resized = viewport.current.width !== node.clientWidth || viewport.current.height !== node.clientHeight;
-    if (!resized && node.scrollTop < lastTop.current && node.scrollHeight - node.scrollTop - node.clientHeight > 2) pinned.current = false;
+    if (pointerHeld.current && !resized && node.scrollTop < lastTop.current && node.scrollHeight - node.scrollTop - node.clientHeight > 2) pinned.current = false;
     viewport.current = { width: node.clientWidth, height: node.clientHeight };
     const saved = anchor.current;
     if (saved) {
@@ -125,7 +138,13 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
     } else if (pinned.current) node.scrollTop = node.scrollHeight;
     lastTop.current = node.scrollTop; setScrolled(!pinned.current);
   }, [isVisible]);
-  useEffect(() => { if (scroll.current) return bindAutoHideScrollbar(scroll.current, { wide: true }); }, []);
+  useEffect(() => {
+    const node = scroll.current; if (!node) return;
+    const unbind = bindAutoHideScrollbar(node, { wide: true, onDragStart: () => { anchor.current = null; pinned.current = false; setScrolled(true); } });
+    const release = () => { pointerHeld.current = false; };
+    document.addEventListener('pointerup', release); document.addEventListener('pointercancel', release);
+    return () => { unbind(); document.removeEventListener('pointerup', release); document.removeEventListener('pointercancel', release); };
+  }, []);
   useLayoutEffect(() => { sync(); }, [s.messages, s.requests, s.busy, virtual.total, virtual.start, virtual.end, isVisible, sync]);
   useEffect(() => { const node = scroll.current; if (!node) return; const observer = new ResizeObserver(sync); observer.observe(node); if (node.firstElementChild) observer.observe(node.firstElementChild); return () => observer.disconnect(); }, [sync]);
   useEffect(() => {
@@ -139,21 +158,22 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
     // Keep the selected turn aligned while virtual rows finish measuring.
     anchor.current = { messageId: item.id, offset: 24 }; sync();
   };
-  const toggle = (id: string) => setExpanded(old => ({ ...old, [id]: !old[id] }));
+  // Activity rows start open so each step's card shows as it happens; a click folds one away.
+  const groupOpen = (id: string) => expanded[id] ?? true;
   const copy = (id: string, content: string) => { void clipboardWrite(content).then(() => { setCopied(id); setTimeout(() => setCopied(''), 1500); }); };
-  const step = (message: DshMessage) => <div className={`codex-tool is-${message.toolStatus ?? 'reasoning'}`} key={message.id}>
-    <div className="codex-tool-heading"><button type="button" className="claude-tool-heading" aria-expanded={!!expanded[message.id]} onClick={() => toggle(message.id)}><span className="codex-chevron" aria-hidden="true">{expanded[message.id] ? '⌄' : '›'}</span><strong>{message.role === 'reasoning' ? t('conversation.reasoning') : message.toolName}</strong><span>{message.role === 'reasoning' ? title(message) : title(message).replace(`${message.toolName} · `, '')}</span></button><MessageCopyButton copied={copied === message.id} onCopy={() => copy(message.id, [message.toolInput, message.content].filter(Boolean).join('\n'))} /></div>
-    {expanded[message.id] && (message.role === 'reasoning' ? <MarkdownContent content={message.content} /> : <pre className="codex-tool-body">{[message.toolInput, message.content].filter(Boolean).join('\n\n')}</pre>)}
-  </div>;
   return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation codex-conversation dsh-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
-    <div className="claude-scroll" ref={scroll} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
+    <div className="claude-scroll" ref={scroll} onPointerDownCapture={e => { if (e.button === 0) pointerHeld.current = true; }} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
       const node = scroll.current; if (!node?.clientHeight) return;
       if (node.scrollTop !== lastTop.current) anchor.current = null;
       const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
       const resized = viewport.current.width !== node.clientWidth || viewport.current.height !== node.clientHeight;
-      if (!resized && node.scrollTop < lastTop.current && distance > 2) pinned.current = false;
-      else if (node.scrollTop > lastTop.current && distance < 2) pinned.current = true;
+      if (!resized && node.scrollTop < lastTop.current && distance > 2) {
+        // Only a held pointer (text selection) moves away here; wheel, touch, keys and the
+        // scrollbar pause first. Otherwise the engine restored an older position (macOS WebKit).
+        if (pointerHeld.current) pinned.current = false;
+        else if (pinned.current) node.scrollTop = node.scrollHeight;
+      } else if (node.scrollTop > lastTop.current && distance < 2) pinned.current = true;
       lastTop.current = node.scrollTop; setScrolled(!pinned.current);
     }}>
       <div className={`claude-thread${!rows.length ? ' is-empty' : ''}`}>
@@ -161,28 +181,32 @@ export function DshConversation({ sessionId, cwd, resumeToken, isActive, isVisib
         {rows.slice(virtual.start, virtual.end).map((row, i) => <Measured key={row.id} id={virtual.measurementKeys[virtual.start + i]} measure={virtual.measureRow}>
           <article className={`claude-row claude-row--${row.members ? (row.running ? 'running' : 'tool') : row.role} codex-row`} data-message-id={row.id}>
             {row.members ? <>
-              <button type="button" className="codex-group-heading" aria-expanded={!!expanded[row.id]} onClick={() => toggle(row.id)}><span aria-hidden="true">{expanded[row.id] ? '⌄' : '›'}</span><span>{t('codex.activity', { count: row.members.length })}</span>{row.running && <span className="codex-spinner" aria-hidden="true" />}<small>{title(row.members.at(-1)!)}</small></button>
-              {expanded[row.id] && <div className="codex-activity-list">{row.members.map(step)}</div>}
-            </> : row.role === 'notice' ? <div className={`claude-turn-summary${row.tone === 'error' ? ' is-error' : ''}`} role="status">{row.content === 'interrupted' ? t('claude.interrupted') : row.content === 'commands-unsupported' ? t('dsh.commands_unsupported') : row.tone === 'error' && !row.content.startsWith('/') ? `${t('codex.failed')} · ${row.content}` : row.content}</div> : <>
+              <button type="button" className="codex-group-heading" aria-expanded={groupOpen(row.id)} onClick={() => setExpanded(old => ({ ...old, [row.id]: !groupOpen(row.id) }))}><span aria-hidden="true"><Chevron open={groupOpen(row.id)} /></span><span>{t('codex.activity', { count: row.members.length })}</span>{row.running && <span className="codex-spinner" aria-hidden="true" />}<small>{title(row.members.at(-1)!)}</small></button>
+              {groupOpen(row.id) && <div className="dsh-activity-steps">{row.members.map(m => m.role === 'tool'
+                ? <ClaudeTool key={m.id} message={dshToolCard(m)} />
+                : <details key={m.id} className="claude-reasoning" open={!!expanded[m.id]} onToggle={event => { const open = event.currentTarget.open; setExpanded(old => ({ ...old, [m.id]: open })); }}><summary>{t('conversation.reasoning')}</summary><MarkdownContent content={m.content} /></details>)}</div>}
+            </>
+            : row.role === 'notice' ? <div className={`claude-turn-summary${row.tone === 'error' ? ' is-error' : ''}`} role="status">{row.content === 'interrupted' ? t('claude.interrupted') : row.content === 'commands-unsupported' ? t('dsh.commands_unsupported') : row.tone === 'error' && !row.content.startsWith('/') ? `${t('codex.failed')} · ${row.content}` : row.content}</div> : <>
               {row.role === 'user'
                 ? <CollapsibleUserMessage sentAt={row.timestamp} expanded={!!expanded[row.id]} onToggle={() => setExpanded(old => ({ ...old, [row.id]: !old[row.id] }))}><MarkdownContent content={row.content} /></CollapsibleUserMessage>
                 : <div><MarkdownContent content={row.content} /></div>}
               <MessageCopyButton copied={copied === row.id} onCopy={() => copy(row.id, row.content)} />
             </>}
+            {(() => { const owner = row.members?.findLast(m => m.turnStats) ?? row; return owner.turnStats && <TurnSummary stats={owner.turnStats} sessionKey={s.sessionId} messageId={owner.id} />; })()}
           </article>
         </Measured>)}
         <div style={{ height: virtual.bottomSpacer }} aria-hidden="true" />
         {s.requests.map(request => <RequestCard key={String(request.id)} sessionId={sessionId} request={request} />)}
         {(s.busy || (s.restarting && s.stopping)) && !s.requests.length && <Running since={s.busy ? s.startedAt : undefined} stopping={!!s.restarting} />}
         {/* A failed start must say why; Reconnect alone hides the cause. */}
-        {s.error && !directoryIssue && <div className="claude-session-error" role="alert">{s.error}</div>}
+        {s.error && !directoryIssue && <div className="claude-session-error" role="alert">{startErrorText(s.error, 'DeepSeek Harness', t)}</div>}
         {directoryIssue && <div className="claude-session-error" role="alert">{directoryError}</div>}
-        {!directoryIssue && !rows.length && <div className="claude-empty"><DshWelcomeIcon isActive={isVisible} /><WelcomeGreeting /><WelcomeSessionMeta cwd={cwd} model={s.models.find(m => m.provider === s.route.provider && m.model === s.route.model)?.name ?? s.route.model} /></div>}
+        {!directoryIssue && !rows.length && <div className="claude-empty"><DshWelcomeIcon isActive={isVisible} /><WelcomeGreeting />{(creatingWorktree || resumed && !s.ready && !s.error) && <WelcomeRestoring label={creatingWorktree ? t('gambit.worktree_creating') : undefined} className="dsh-running" labelClassName="dsh-shimmer" mark={<span className="dsh-running-whale" aria-hidden="true" style={{ maskImage: `url(${DSH_RUNNING_WHALE})`, WebkitMaskImage: `url(${DSH_RUNNING_WHALE})` }} />} />}<WelcomeSessionMeta cwd={cwd} model={s.models.find(m => m.provider === s.route.provider && m.model === s.route.model)?.name ?? s.route.model} /></div>}
       </div>
     </div>
     {navigationItems.length > 1 && isActive && <ConversationNavigation items={navigationItems} scrollRef={scroll} onJump={jumpToTurn} />}
-    {scrolled && <button type="button" className="gambit-send claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { anchor.current = null; pinned.current = true; lastTop.current = scroll.current?.scrollTop ?? 0; sync(); }}>
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v11M3 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    {scrolled && <button type="button" className="claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { anchor.current = null; pinned.current = true; lastTop.current = scroll.current?.scrollTop ?? 0; sync(); }}>
+      <ScrollLatestIcon working={s.busy && !s.requests.length ? <span className="dsh-running-whale dsh-scroll-whale" aria-hidden="true" style={{ maskImage: `url(${DSH_RUNNING_WHALE})`, WebkitMaskImage: `url(${DSH_RUNNING_WHALE})` }} /> : undefined} />
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('dsh.reconnect')}</button>}
     {conversationMenu.menu}

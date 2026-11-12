@@ -9,15 +9,19 @@ import type { IconTheme, ToolType } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { isMaskTintTheme } from '../../lib/personalization';
 import { ScrollPanel } from '../common/ScrollPanel';
+import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { clipboardWrite } from '../../lib/clipboard';
 import { beginExplorerDrag } from '../../lib/explorer-drag';
 import { getFileIconSrc } from '../../lib/file-icons';
 import { useFileStats, useDirtyDirs } from '../../lib/git-status';
 import { refreshHistory } from '../../lib/history-cache';
 import { commands, onSelfUpdateProgress } from '../../tauri';
+import { IS_WINDOWS } from '../../lib/platform';
 import type { DirEntryInfo } from '../../tauri';
 import { HistoryBoard } from '../right/HistoryBoard';
 import './Explorer.css';
+import { fetchLatestManifest, isNewerVersion } from '../../lib/update-manifest';
+
 
 // Snapshot lifecycle and the `+N -M` map live in lib/file-stats.tsx so the
 // right-side ChangesBoard can read the same data when the left panel is
@@ -669,7 +673,7 @@ export function Explorer() {
 
   // Update check
   const [hasUpdate, setHasUpdate] = useState(false);
-  // The brand (logo + title + the self-update button) renders here but DISPLAYS
+  // The brand (title + the self-update button) renders here but DISPLAYS
   // in the titlebar's left slot via portal — so it keeps all its Explorer-local
   // self-update state untouched, and hides together with the left panel (this
   // component unmounts when the panel is hidden, which is exactly what we want:
@@ -680,42 +684,25 @@ export function Explorer() {
     const checkUpdate = async () => {
       try {
         const { getVersion } = await import('@tauri-apps/api/app');
-        const [local, remote] = await Promise.all([
-          getVersion(),
-          fetch('https://api.github.com/repos/Hopesy/sinos/releases/latest', {
-            headers: { Accept: 'application/vnd.github+json' },
-          }).then(r => r.json()),
-        ]);
-        const isNewer = (r: string, l: string) => {
-          const rv = r.split('.').map(Number);
-          const lv = l.split('.').map(Number);
-          for (let i = 0; i < 3; i++) {
-            if ((rv[i] ?? 0) > (lv[i] ?? 0)) return true;
-            if ((rv[i] ?? 0) < (lv[i] ?? 0)) return false;
-          }
-          return false;
-        };
-        const remoteVersion = String(remote?.tag_name ?? '').replace(/^v/, '');
-        if (remoteVersion && isNewer(remoteVersion, local)) setHasUpdate(true);
+        // The manifest resolves published Sinos GitHub Releases only.
+        const [local, remote] = await Promise.all([getVersion(), fetchLatestManifest()]);
+        if (remote && isNewerVersion(remote.version, local)) setHasUpdate(true);
       } catch { /* offline or fetch failed — silent */ }
     };
     checkUpdate();
   }, []);
 
   // In-app self-update. Click the logo's update icon → a circular ring fills
-  // as the installer downloads, then the wizard launches and the app exits.
-  // Windows only; elsewhere (or on download failure) fall back to the page.
+  // as the installer downloads into the Downloads folder. Windows then runs
+  // the wizard and the app exits; macOS opens the DMG and Linux opens the
+  // folder, and the app keeps running. On failure fall back to the page.
   const [installing, setInstalling] = useState(false);
   const [installPct, setInstallPct] = useState(0);
   const [installPhase, setInstallPhase] = useState<
-    'speed_test' | 'downloading' | 'launching' | 'error' | null
+    'speed_test' | 'downloading' | 'launching' | 'downloaded' | 'error' | null
   >(null);
   const handleSelfUpdate = useCallback(async () => {
     if (installing) return;
-    if (!navigator.userAgent.toLowerCase().includes('win')) {
-      commands.openUrl('https://github.com/Hopesy/sinos/releases/latest');
-      return;
-    }
     setInstalling(true);
     setInstallPhase('speed_test');
     setInstallPct(0);
@@ -726,10 +713,16 @@ export function Explorer() {
         setInstallPct(p.percent);
       });
       await commands.downloadAndInstallUpdate();
-      // Success: installer launched and the app is about to exit — leave the
-      // ring as-is until the window goes away.
+      // Windows: the installer launched and the app is about to exit, so
+      // leave the ring until the window goes away. macOS / Linux keep
+      // running with the DMG or Downloads folder open: reset the button.
+      if (!IS_WINDOWS) {
+        setInstalling(false);
+        setInstallPhase(null);
+        setInstallPct(0);
+      }
     } catch {
-      commands.openUrl('https://github.com/Hopesy/sinos/releases/latest');
+      commands.openUrl('https://github.com/Hopesy/Sinos/releases/latest');
       setInstalling(false);
       setInstallPhase(null);
       setInstallPct(0);
@@ -793,6 +786,58 @@ export function Explorer() {
     };
   }, [folderPath]);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (activeTab !== 'history' || !scrollRef.current) return;
+    return bindAutoHideScrollbar(scrollRef.current);
+  }, [activeTab]);
+
+  // The update download sits in the sidebar's bottom row, left of settings, where most desktop apps keep it.
+  const updateButton = hasUpdate ? (
+    <button
+      className={`agent-sidebar-button update-check-btn update-available${installing ? ' is-installing' : ''}`}
+      onClick={handleSelfUpdate}
+      disabled={installing}
+      aria-label="Update Sinos CLI"
+    >
+      {installing ? (
+        <svg
+          className={`update-ring${installPhase === 'speed_test' ? ' spin' : ''}`}
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+        >
+          <circle className="update-ring-track" cx="12" cy="12" r="9" fill="none" strokeWidth="2.6" />
+          <circle
+            className="update-ring-progress"
+            cx="12"
+            cy="12"
+            r="9"
+            fill="none"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            transform="rotate(-90 12 12)"
+            strokeDasharray={
+              installPhase === 'speed_test'
+                ? `${2 * Math.PI * 9 * 0.25} ${2 * Math.PI * 9}`
+                : 2 * Math.PI * 9
+            }
+            strokeDashoffset={
+              installPhase === 'speed_test'
+                ? 0
+                : 2 * Math.PI * 9 * (1 - installPct / 100)
+            }
+          />
+        </svg>
+      ) : (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      )}
+    </button>
+  ) : null;
 
   return (
     <div className="panel panel-left explorer-panel" data-icon-theme={state.iconTheme}>
@@ -801,57 +846,15 @@ export function Explorer() {
         <div className="brand">
           <img src="/sinos-icon.svg" alt="" className="brand-icon" />
           <span>{t('app.title')}</span>
-          {hasUpdate && (
-            <button
-              className={`icon-btn xs update-check-btn update-available${installing ? ' is-installing' : ''}`}
-              onClick={handleSelfUpdate}
-              disabled={installing}
-              aria-label="Update Sinos CLI"
-            >
-              {installing ? (
-                <svg
-                  className={`update-ring${installPhase === 'speed_test' ? ' spin' : ''}`}
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                >
-                  <circle className="update-ring-track" cx="12" cy="12" r="9" fill="none" strokeWidth="2.6" />
-                  <circle
-                    className="update-ring-progress"
-                    cx="12"
-                    cy="12"
-                    r="9"
-                    fill="none"
-                    strokeWidth="2.6"
-                    strokeLinecap="round"
-                    transform="rotate(-90 12 12)"
-                    strokeDasharray={
-                      installPhase === 'speed_test'
-                        ? `${2 * Math.PI * 9 * 0.25} ${2 * Math.PI * 9}`
-                        : 2 * Math.PI * 9
-                    }
-                    strokeDashoffset={
-                      installPhase === 'speed_test'
-                        ? 0
-                        : 2 * Math.PI * 9 * (1 - installPct / 100)
-                    }
-                  />
-                </svg>
-              ) : (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7 10 12 15 17 10"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-              )}
-            </button>
-          )}
         </div>
         
         ,
         brandSlot
       )}
 
+      {/* History scrolls as one sheet with the actions above it; the workspace
+          tree keeps its own scroller so its header stays put. */}
+      <div className="explorer-scroll" data-tab={activeTab} ref={scrollRef}>
       <div className="explorer-tabs">
         <button className="explorer-new-session" onClick={() => window.dispatchEvent(new Event('coffee-new-session'))}>
           {/* Lucide square-pen; license in /icons/LICENSE-lucide.txt. */}
@@ -885,6 +888,9 @@ export function Explorer() {
       </button>
       <button type="button" className="explorer-new-session explorer-usage" aria-pressed={!!state.usageOpen} onClick={() => dispatch({ type: 'SET_USAGE_OPEN', open: true })}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3v18h18M8 16v-5M13 16V5M18 16V9" /></svg><span>{t('usage.title')}</span>
+      </button>
+      <button type="button" className="explorer-new-session explorer-usage" aria-pressed={!!state.automationsOpen} onClick={() => dispatch({ type: 'SET_AUTOMATIONS_OPEN', open: true })}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /></svg><span>{t('automation.title')}</span>
       </button>
       {(activeTab === 'workspace' && activeSession?.tool && !CWD_AGNOSTIC_TOOLS.has(activeSession.tool)) && (
         <span className={`workspace-dir-btn${searchingWorkspace ? ' is-searching' : ''}`} role="search" aria-label={t('explorer.filter_files')}>
@@ -967,6 +973,7 @@ export function Explorer() {
           </ScrollPanel>
         )}
       </div>
+      </div>
 
 
 
@@ -976,7 +983,7 @@ export function Explorer() {
           <button type="button" aria-label={t('editor.close_error')} onClick={() => setOperationError(null)}>×</button>
         </div>
       )}
-      <ChannelConnectionSummary />
+      <ChannelConnectionSummary update={updateButton} />
 
       {/* Right-click context menu */}
       {ctxMenu && <ContextMenu menu={ctxMenu} onClose={closeCtxMenu} onError={reportError} />}

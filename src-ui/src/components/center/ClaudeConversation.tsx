@@ -1,29 +1,39 @@
 import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { startErrorText } from '../../lib/start-error';
+import { useWorktreePending } from '../../lib/worktree-pending';
 import { diffLines } from 'diff';
 import { useAppLanguage, useAppState } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
-import type { ClaudeTranslate } from '../../lib/claude-i18n';
+import { formatElapsed, formatTokens } from '../../lib/claude-i18n';
+import { TurnSummary } from './TurnSummary';
 import { orchestrationSearchLabel, orchestrationToolLabel } from '../../lib/orchestration-label';
 import { clipboardWrite } from '../../lib/clipboard';
 import { directoryFailure, directoryFailureMessage } from '../../lib/session-directory';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { tokenizeFile, getShikiTheme, type LineTokens } from '../../lib/shiki';
 import { useDataAttr } from '../../lib/use-data-attr';
-import { controlClaude, loadClaudeHistory, respondClaude, retainClaudeSession, useClaudeSession } from '../../lib/claude-session';
-import { object, list, text, number, resultText, type ClaudeMessage, type ClaudeRequest } from '../../lib/claude-protocol';
+import { continueClaudeInNewConversation, controlClaude, loadClaudeHistory, respondClaude, retainClaudeSession, settleClaudeColdReturn, useClaudeSession } from '../../lib/claude-session';
+import { object, list, text, resultText, type ClaudeMessage, type ClaudeRequest } from '../../lib/claude-protocol';
 import { useConversationVirtualizer } from './conversation-virtualizer';
 import { ConversationVisible } from './conversation-visibility';
 import { DeferredConversationContent } from './DeferredConversationContent';
 import { MarkdownContent } from './MarkdownContent';
-import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
+import { WelcomeGreeting, WelcomeRestoring, WelcomeSessionMeta } from './WelcomeGreeting';
 import { ConversationDirectory } from '../../lib/conversation-links';
 import { useConversationMenu } from '../../lib/use-conversation-menu';
-import { CollapsibleUserMessage, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem } from './ConversationControls';
+import { CollapsibleUserMessage, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem, ColdReturnCard, Chevron } from './ConversationControls';
 import { commands } from '../../tauri';
 import CLAWD_SVG from '../../icons-inline/clawd.svg?raw';
 import CLAUDE_WORKING_MARK from '../../icons-inline/claude-working-mark.webp';
+import { turnTitle } from '../../lib/turn-title';
+import { IS_MACOS } from '../../lib/platform';
 import CLAUDE_WELCOME from '../../icons-inline/claude-welcome.webm';
+import CLAUDE_WELCOME_HEVC from '../../icons-inline/claude-welcome.mov';
+// The laptop clip keeps its transparency in an alpha channel, which each engine reads from a different codec:
+// Chromium from VP9 WebM, macOS WebKit from HEVC QuickTime. Claude Desktop ships the same pair. Only macOS WebKit
+// takes the HEVC clip: Linux WebKitGTK cannot count on an HEVC decoder, and Chromium's identifier may read HeadlessChrome.
+const CLAUDE_WELCOME_CLIP = IS_MACOS && !/(Chrome|Chromium|Edg)\//.test(navigator.userAgent) ? CLAUDE_WELCOME_HEVC : CLAUDE_WELCOME;
 import CLAUDE_WAVING from '../../icons-inline/claude-waving.gif';
 import CLAUDE_JUMPING from '../../icons-inline/claude-jumping.gif';
 import CLAUDE_WALKING from '../../icons-inline/claude-walking.gif';
@@ -33,17 +43,18 @@ import CLAUDE_CLOUD from '../../icons-inline/claude-cloud.gif';
 import './ConversationView.css';
 import './Gambit.css';
 import './ClaudeConversation.css';
+import { pasteImageIntoAnswer } from '../../lib/answer-image-paste';
+import { ScrollLatestIcon } from './ScrollLatestIcon';
 
 function useClock(active: boolean, ms = 1000) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), ms); return () => clearInterval(timer); }, [active, ms]);
   return now;
 }
-function count(value: number) { return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(Math.round(value)); }
-function elapsed(ms: number, t: ClaudeTranslate) { const seconds = Math.max(0, Math.round(ms / 1000)); return seconds >= 60 ? t('claude.time.minutes', { minutes: Math.floor(seconds / 60), seconds: seconds % 60 }) : t('claude.time.seconds', { seconds }); }
+const count = formatTokens, elapsed = formatElapsed;
 
 const CLAUDE_WELCOME_ICONS = [
-  { id: 'laptop', src: CLAUDE_WELCOME },
+  { id: 'laptop', src: CLAUDE_WELCOME_CLIP },
   { id: 'waving', src: CLAUDE_WAVING },
   { id: 'jumping', src: CLAUDE_JUMPING },
   { id: 'walking', src: CLAUDE_WALKING },
@@ -93,7 +104,7 @@ function ThinkingTokens({ value }: { value?: number }) {
   return value === undefined || display === undefined ? null : <span className="claude-thinking-tokens"> · {t('claude.tokens', { count: count(display) })}</span>;
 }
 
-function ClaudeThinking({ message, expanded, onToggle, tokens }: { message: ClaudeMessage; expanded: boolean; onToggle: (open: boolean) => void; tokens?: number }) {
+export function ClaudeThinking({ message, expanded, onToggle, tokens }: { message: ClaudeMessage; expanded: boolean; onToggle: (open: boolean) => void; tokens?: number }) {
   const t = useT();
   const label = <>{message.partial ? t('conversation.thinking') : message.startedAt && message.endedAt ? t('claude.thought_for', { duration: elapsed(message.endedAt - message.startedAt, t) }) : t('claude.status.thinking')}{message.partial && <ThinkingTokens value={tokens} />}</>;
   if (!message.content.trim()) return <div className="claude-reasoning">{label}</div>;
@@ -102,14 +113,39 @@ function ClaudeThinking({ message, expanded, onToggle, tokens }: { message: Clau
   </details>;
 }
 
-function Working({ status, startedAt }: { status: string; startedAt?: number }) {
+/** Text that changes the way Claude Desktop's status line does: the old face rises 3px and
+ *  fades while the new one rises in from 3px below, and the width follows, over 180ms. */
+function MorphText({ text, faceClassName }: { text: string; faceClassName?: string }) {
+  const [faces, setFaces] = useState<{ shown: string; leaving?: string; key: number }>({ shown: text, key: 0 });
+  if (faces.shown !== text) setFaces(prev => ({ shown: text, leaving: prev.shown, key: prev.key + 1 }));
+  const box = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    // Measure the new face at its natural width, then move from the old width to it.
+    const from = node.style.width;
+    node.style.width = 'auto';
+    const to = `${node.getBoundingClientRect().width}px`;
+    if (!from || from === to) { node.style.width = to; return; }
+    node.style.width = from;
+    void node.offsetWidth;
+    node.style.width = to;
+  }, [faces.shown]);
+  return <span ref={box} className="claude-morph">
+    {faces.leaving !== undefined && <span key={`out-${faces.key}`} className="claude-morph-face is-leaving" aria-hidden="true" onAnimationEnd={() => setFaces(prev => prev.key === faces.key ? { ...prev, leaving: undefined } : prev)}><span className={faceClassName}>{faces.leaving}</span></span>}
+    <span key={`in-${faces.key}`} className={`claude-morph-face${faces.key ? ' is-entering' : ''}`}><span className={faceClassName}>{faces.shown}</span></span>
+  </span>;
+}
+
+function Working({ status, startedAt, title }: { status: string; startedAt?: number; title?: string }) {
   const t = useT();
   const now = useClock(true);
   const words = [t('claude.status.thinking'), t('claude.status.brewing'), t('claude.status.considering'), t('claude.status.working'), t('claude.status.crafting'), t('claude.status.pondering')];
   const age = now - (startedAt ?? now);
   const wordIndex = age < 2000 ? 0 : age < 5000 ? 1 : 2 + Math.floor((age - 5000) / 5000);
-  const word = status === 'stopping' ? t('codex.stopping') : status === 'compacting' ? t('claude.status.compacting') : status === 'tool' ? t('claude.status.working') : status === 'starting' ? t('claude.status.connecting') : words[wordIndex % words.length];
-  return <div className="claude-working" role="status"><span className="claude-working-mark" aria-hidden="true"><img src={CLAUDE_WORKING_MARK} alt="" /></span><span className="claude-working-word">{word}…</span>{startedAt && <span className="claude-elapsed">{elapsed(age, t)}</span>}</div>;
+  // Claude Code's own description of the current step titles the turn; the rotating words fill in until it gives one.
+  const word = status === 'stopping' ? t('codex.stopping') : status === 'compacting' ? t('claude.status.compacting') : status === 'starting' ? t('claude.status.connecting') : title ?? (status === 'tool' ? t('claude.status.working') : words[wordIndex % words.length]);
+  return <div className="claude-working" role="status"><span className="claude-working-mark" aria-hidden="true"><img src={CLAUDE_WORKING_MARK} alt="" /></span><MorphText faceClassName="claude-working-word" text={`${word}…`} />{startedAt && <span className="claude-elapsed">{elapsed(age, t)}</span>}</div>;
 }
 
 function Code({ content, path, className = '' }: { content: string; path: string; className?: string }) {
@@ -123,41 +159,80 @@ function Code({ content, path, className = '' }: { content: string; path: string
   return <pre className={`claude-code ${className}`}><code>{tokens ? tokens.map((line, i) => <div className="claude-code-line" key={i}>{line.map((token, j) => <span key={j} style={{ color: token.color }}>{token.content}</span>)}</div>) : content}</code></pre>;
 }
 
-function ToolActions({ content, expanded, onToggle }: { content: string; expanded: boolean; onToggle?: () => void }) {
+const RESIZE_ICON = (expanded: boolean) => expanded ? 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7' : 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7';
+
+/** Copy plus, for a long block, the same expand / collapse toggle the bottom tab offers, so either end works. */
+function ToolCopy({ content, expanded = false, onToggle }: { content: string; expanded?: boolean; onToggle?: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   return <div className="claude-tool-actions">
     <MessageCopyButton copied={copied} onCopy={() => { void clipboardWrite(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }} />
     {onToggle && <button type="button" className="claude-tool-resize" aria-label={t(expanded ? 'claude.collapse' : 'claude.expand')} aria-expanded={expanded} onClick={onToggle}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d={expanded ? 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7' : 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'} />
-      </svg>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={RESIZE_ICON(expanded)} /></svg>
     </button>}
   </div>;
 }
 
-function ToolContent({ content, path, plain = false, previewHeight = 95 }: { content: string; path: string; plain?: boolean; previewHeight?: number }) {
+/** The expand / collapse tab hanging from a block's lower right edge, so collapsing never needs a scroll back up. */
+function ExpandTab({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  const t = useT();
+  return <button type="button" className="claude-expand-tab" aria-expanded={expanded} onClick={onToggle}>
+    <span>{t(expanded ? 'claude.collapse' : 'claude.expand_tab')}</span>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={RESIZE_ICON(expanded)} /></svg>
+  </button>;
+}
+
+function useOverflow(previewHeight: number, deps: unknown[]) {
   const ref = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
   const [overflow, setOverflow] = useState(false);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
-    const update = () => setOverflow(node.scrollHeight > previewHeight + 1);
+    const update = () => setOverflow((node.firstElementChild?.scrollHeight ?? node.scrollHeight) > previewHeight + 1);
     update();
     const observer = new ResizeObserver(update); observer.observe(node);
     if (node.firstElementChild) observer.observe(node.firstElementChild);
     return () => observer.disconnect();
-  }, [content, previewHeight]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewHeight, ...deps]);
+  return [ref, overflow] as const;
+}
+
+function ToolBody({ content, path, plain, previewHeight, expanded, bodyRef, onToggle }: { content: string; path: string; plain: boolean; previewHeight: number; expanded: boolean; bodyRef: RefObject<HTMLDivElement | null>; onToggle?: () => void }) {
   return <div className="claude-tool-content">
-    <ToolActions content={content} expanded={expanded} onToggle={overflow ? () => setExpanded(value => !value) : undefined} />
-    <div className="claude-tool-content-scroll" ref={ref} style={{ maxHeight: expanded ? 600 : previewHeight }}>
+    <ToolCopy content={content} expanded={expanded} onToggle={onToggle} />
+    <div className="claude-tool-content-scroll" ref={bodyRef} style={{ maxHeight: expanded ? 'none' : previewHeight }}>
       <DeferredConversationContent>{plain ? <pre className="claude-code">{content}</pre> : <Code content={content} path={path} />}</DeferredConversationContent>
     </div>
   </div>;
 }
 
 type DiffRow = { old?: string; next?: string; oldLine?: number; nextLine?: number; changed: boolean };
+function ToolContent({ content, path, plain = false, previewHeight = 95 }: { content: string; path: string; plain?: boolean; previewHeight?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [ref, overflow] = useOverflow(previewHeight, [content]);
+  return <div className={`claude-expandable${overflow ? ' has-tab' : ''}`}>
+    <ToolBody content={content} path={path} plain={plain} previewHeight={previewHeight} expanded={expanded} bodyRef={ref} onToggle={overflow ? () => setExpanded(value => !value) : undefined} />
+    {overflow && <ExpandTab expanded={expanded} onToggle={() => setExpanded(value => !value)} />}
+  </div>;
+}
+
+/** Bash input and output share one frame, so one tab under it opens both. */
+function BashIO({ command, output, failed }: { command: string; output?: string; failed: string }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  const [inRef, inOverflow] = useOverflow(180, [command]);
+  const [outRef, outOverflow] = useOverflow(180, [output]);
+  const overflow = inOverflow || (output !== undefined && outOverflow);
+  const toggle = () => setExpanded(value => !value);
+  return <div className={`claude-expandable${overflow ? ' has-tab' : ''}`}>
+    <div className="claude-io">
+      <div className="claude-io-row"><span>{t('claude.input')}</span><ToolBody content={command} path="command.sh" plain={false} previewHeight={180} expanded={expanded} bodyRef={inRef} onToggle={inOverflow ? toggle : undefined} /></div>
+      {output !== undefined && <div className={`claude-io-row ${failed}`}><span>{t('claude.output')}</span><ToolBody content={output} path="output.txt" plain previewHeight={180} expanded={expanded} bodyRef={outRef} onToggle={outOverflow ? toggle : undefined} /></div>}
+    </div>
+    {overflow && <ExpandTab expanded={expanded} onToggle={() => setExpanded(value => !value)} />}
+  </div>;
+}
 
 function EditDiff({ before, after, path }: { before: string; after: string; path: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -176,10 +251,11 @@ function EditDiff({ before, after, path }: { before: string; after: string; path
     }
     return out;
   }, [before, after]);
-  return <div className={`claude-diff ${expanded ? 'is-expanded' : ''}`}>
-    <ToolActions content={after} expanded={expanded} onToggle={rows.length > 6 || before.length + after.length > 800 ? () => setExpanded(value => !value) : undefined} />
+  const long = rows.length > 6 || before.length + after.length > 800;
+  return <div className={`claude-expandable${long ? ' has-tab' : ''}`}><div className={`claude-diff ${expanded ? 'is-expanded' : ''}`}>
+    <ToolCopy content={after} expanded={expanded} onToggle={long ? () => setExpanded(value => !value) : undefined} />
     <div className="claude-diff-scroll"><DeferredConversationContent><EditDiffRows rows={rows} before={before} after={after} path={path} /></DeferredConversationContent></div>
-  </div>;
+  </div>{long && <ExpandTab expanded={expanded} onToggle={() => setExpanded(value => !value)} />}</div>;
 }
 
 function EditDiffRows({ rows, before, after, path }: { rows: DiffRow[]; before: string; after: string; path: string }) {
@@ -213,15 +289,12 @@ export const ClaudeTool = memo(function ClaudeTool({ message }: { message: Claud
     <div className="claude-tool-heading">
       <button onClick={() => setBodyOpen(v => !v)} aria-expanded={showBody}><strong>{search?.title ?? orchestrationToolLabel(name, t) ?? name}</strong></button>
       {path ? <button className="claude-file-path" onClick={() => void commands.showInFolder(path)}>{description}</button> : <span>{description}</span>}
-      {!bash && !edit && !write && <button className="claude-chevron" aria-label={t('claude.tool_details')} onClick={() => setBodyOpen(v => !v)}>{bodyOpen ? '⌄' : '›'}</button>}
+      {!bash && !edit && !write && <button className="claude-chevron" aria-label={t('claude.tool_details')} onClick={() => setBodyOpen(v => !v)}><Chevron open={bodyOpen} /></button>}
     </div>
     {edit && <div className="claude-tool-subtitle">{removed || added ? [removed ? t('claude.lines_removed', { count: removed }) : '', added ? t('claude.lines_added', { count: added }) : ''].filter(Boolean).join(' · ') : t('claude.modified')}</div>}
     {write && typeof input.content === 'string' && <div className="claude-tool-subtitle">{t('claude.lines', { count: input.content.split('\n').length })}</div>}
     {showBody && <div className="claude-tool-body">
-      {edit ? <EditDiff before={before} after={after} path={path} /> : write ? message.toolStatus === 'running' && input.content === undefined ? <span className="claude-tool-pending">{t('diff.loading')}</span> : <ToolContent content={text(input.content)} path={path} /> : bash ? <div className="claude-io">
-        <div className="claude-io-row"><span>{t('claude.input')}</span><ToolContent content={text(input.command)} path="command.sh" previewHeight={180} /></div>
-        {message.output !== undefined && <div className={`claude-io-row ${message.toolStatus === 'failed' && !message.interrupted ? 'is-error' : ''}`}><span>{t('claude.output')}</span><ToolContent content={output || t('claude.no_output')} path="output.txt" plain previewHeight={180} /></div>}
-      </div> : <><ToolContent content={JSON.stringify(input, null, 2)} path="input.json" />{message.output !== undefined && <ToolContent content={output || t('claude.no_output')} path="output.txt" plain />}</>}
+      {edit ? <EditDiff before={before} after={after} path={path} /> : write ? message.toolStatus === 'running' && input.content === undefined ? <span className="claude-tool-pending">{t('diff.loading')}</span> : <ToolContent content={text(input.content)} path={path} /> : bash ? <BashIO command={text(input.command)} output={message.output !== undefined ? output || t('claude.no_output') : undefined} failed={message.toolStatus === 'failed' && !message.interrupted ? 'is-error' : ''} /> : <><ToolContent content={JSON.stringify(input, null, 2)} path="input.json" />{message.output !== undefined && <ToolContent content={output || t('claude.no_output')} path="output.txt" plain />}</>}
       {edit || write ? message.toolStatus === 'failed' && <pre className={message.interrupted ? 'claude-interrupted' : 'claude-tool-error'}>{output}</pre> : null}
     </div>}
   </section>;
@@ -249,7 +322,7 @@ function Question({ id, pending }: { id: string; pending: ClaudeRequest }) {
     <strong>{question ? t('claude.question') : tool === 'ExitPlanMode' ? t('claude.plan_ready') : t('claude.allow_tool', { tool: tool || text(pending.request.subtype) })}</strong>
     {question ? questions.map((q, i) => {
       const key = text(q.question), values = answers[key] ?? [];
-      return <fieldset key={i}><legend>{key}</legend>{list(q.options).map((v, j) => { const option = object(v), label = text(option.label); return <label key={j}><input type={q.multiSelect ? 'checkbox' : 'radio'} name={key} checked={values.includes(label)} onChange={() => setAnswers(a => ({ ...a, [key]: q.multiSelect ? values.includes(label) ? values.filter(v => v !== label) : [...values, label] : [label] }))} /><span>{label}{!!option.description && <small>{text(option.description)}</small>}</span></label>; })}<input className="claude-custom-answer" placeholder={t('interaction.custom_placeholder')} value={custom[key] ?? ''} onChange={e => setCustom(a => ({ ...a, [key]: e.target.value }))} onKeyDown={e => {
+      return <fieldset key={i}><legend>{key}</legend>{list(q.options).map((v, j) => { const option = object(v), label = text(option.label); return <label key={j}><input type={q.multiSelect ? 'checkbox' : 'radio'} name={key} checked={values.includes(label)} onChange={() => setAnswers(a => ({ ...a, [key]: q.multiSelect ? values.includes(label) ? values.filter(v => v !== label) : [...values, label] : [label] }))} /><span>{label}{!!option.description && <small>{text(option.description)}</small>}</span></label>; })}<input className="claude-custom-answer" placeholder={t('interaction.custom_placeholder')} value={custom[key] ?? ''} onChange={e => setCustom(a => ({ ...a, [key]: e.target.value }))} onPaste={e => pasteImageIntoAnswer(e, value => setCustom(a => ({ ...a, [key]: value })))} onKeyDown={e => {
         if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         e.preventDefault();
         if (!e.repeat) approve();
@@ -267,6 +340,16 @@ function MeasuredRow({ id, measure, children }: { id: string; measure: (id: stri
   return <div ref={ref} className="claude-measured-row">{children}</div>;
 }
 
+function ClaudeColdReturn({ id, idleMinutes, tokens }: { id: string; idleMinutes: number; tokens: number }) {
+  const { state, dispatch } = useAppState();
+  const safelyIdle = useClaudeSession(id, s => !s.busy && !s.requests.length && !s.backgroundTasks.length);
+  // Both ends of a coordinator/worker link keep their session identity.
+  const linkedToWorkers = state.terminals.some(tab => tab.parentId && (tab.id === id || tab.parentId === id));
+  return <ColdReturnCard idleMinutes={idleMinutes} tokens={tokens} detailKey="claude.cold_return.detail"
+    onNew={linkedToWorkers || !safelyIdle ? undefined : () => { const newId = crypto.randomUUID(); if (continueClaudeInNewConversation(id, newId)) dispatch({ type: 'RESTART_TERMINAL', id, newId, fresh: true }); }}
+    onFull={() => { void settleClaudeColdReturn(id, 'full'); }} onNever={() => { void settleClaudeColdReturn(id, 'never'); }}
+    onCancel={() => { void settleClaudeColdReturn(id, 'cancel').then(draft => dispatch({ type: 'SET_GAMBIT_DRAFT', id, draft })); }} />;
+}
 export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVisible = isActive, bgUrl, bgType, hasBg }: {
   sessionId: string; cwd: string | null; resumeToken?: string; isActive: boolean; isVisible?: boolean; bgUrl?: string; bgType?: string; hasBg?: boolean;
 }) {
@@ -275,9 +358,12 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
   const { dispatch } = useAppState();
   const s = useClaudeSession(sessionId);
   const initialToken = useRef(resumeToken);
+  // Captured at mount like initialToken; state, not a ref, because the welcome screen renders from it.
+  const [resumed] = useState(() => !!resumeToken);
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationMenu = useConversationMenu(scrollRef, sessionId, isActive);
   const pinned = useRef(true);
+  const pointerHeld = useRef(false);
   const lastScrollTop = useRef(0);
   const prependAnchor = useRef<{ firstId: string; messageId: string; offset: number; top: number; height: number; applied: boolean } | null>(null);
   const [copied, setCopied] = useState('');
@@ -290,11 +376,11 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
   useEffect(() => retainClaudeSession(sessionId, cwd, initialToken.current), [sessionId, cwd]);
   useEffect(() => { dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: s.requests.length ? 'wait_input' : s.busy ? 'working' : 'idle' }); }, [sessionId, s.busy, s.requests.length, dispatch]);
   useEffect(() => { if (s.nativeId) dispatch({ type: 'SET_SESSION_TOKEN', id: sessionId, token: s.nativeId }); }, [sessionId, s.nativeId, dispatch]);
-  useEffect(() => { const scroll = scrollRef.current; if (!scroll) return; return bindAutoHideScrollbar(scroll, { wide: true }); }, []);
+  useEffect(() => { if (s.title) dispatch({ type: 'SET_TAB_TITLE', id: sessionId, title: s.title }); }, [sessionId, s.title, dispatch]);
   const syncScroll = useCallback(() => {
     const scroll = scrollRef.current;
     if (!scroll || !isVisible || !scroll.clientHeight) return;
-    if (scroll.scrollTop < lastScrollTop.current && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight >= 2) pinned.current = false;
+    if (pointerHeld.current && scroll.scrollTop < lastScrollTop.current && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight >= 2) pinned.current = false;
     const anchor = prependAnchor.current;
     if (anchor?.applied) {
       // Measurements above the viewport can settle over several virtual-list frames.
@@ -329,6 +415,12 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
   }, [isActive, s.busy, s.requests.length, sessionId]);
   const pauseFollow = useCallback(() => { prependAnchor.current = null; pinned.current = false; setScrolled(true); }, []);
+  useEffect(() => { const scroll = scrollRef.current; if (!scroll) return; return bindAutoHideScrollbar(scroll, { wide: true, onDragStart: pauseFollow }); }, [pauseFollow]);
+  useEffect(() => {
+    const release = () => { pointerHeld.current = false; };
+    document.addEventListener('pointerup', release); document.addEventListener('pointercancel', release);
+    return () => { document.removeEventListener('pointerup', release); document.removeEventListener('pointercancel', release); };
+  }, []);
   const jumpToTurn = (item: ConversationNavigationItem) => {
     pauseFollow();
     virtual.scrollToIndex(item.messageIndex, 'instant');
@@ -344,8 +436,13 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
     if (!scroll || !scroll.clientHeight) return;
     if (scroll.scrollTop !== lastScrollTop.current) prependAnchor.current = null;
     const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
-    if (scroll.scrollTop < lastScrollTop.current && distance >= 2) pinned.current = false;
-    else if (scroll.scrollTop > lastScrollTop.current && distance < 2) pinned.current = true;
+    if (scroll.scrollTop < lastScrollTop.current && distance >= 2) {
+      // Wheel, touch, keys and the scrollbar pause follow before they move; a held
+      // pointer is a text selection. Anything else is the engine restoring an older
+      // position (macOS WebKit does this after programmatic jumps), so stay at the end.
+      if (pointerHeld.current) pinned.current = false;
+      else if (pinned.current) scroll.scrollTop = scroll.scrollHeight;
+    } else if (scroll.scrollTop > lastScrollTop.current && distance < 2) pinned.current = true;
     lastScrollTop.current = scroll.scrollTop;
     setScrolled(!pinned.current);
   }, []);
@@ -360,43 +457,46 @@ export function ClaudeConversation({ sessionId, cwd, resumeToken, isActive, isVi
     void loadClaudeHistory(sessionId);
   };
   const copy = (message: ClaudeMessage) => { void clipboardWrite(message.content).then(() => { setCopied(message.id); setTimeout(() => setCopied(''), 1500); }); };
-  const used = number(s.usage.input_tokens) + number(s.usage.output_tokens) + number(s.usage.cache_read_input_tokens) + number(s.usage.cache_creation_input_tokens);
   const directoryIssue = !s.ready ? directoryFailure(s.error) : undefined;
   const directoryError = directoryFailureMessage(s.error, t);
   const empty = !directoryIssue && !s.messages.length && !s.busy && !s.requests.length && (!s.ready || !s.error);
+  const restoring = resumed && !s.ready && !s.error;
+  const creatingWorktree = useWorktreePending(sessionId, s.ready || !!s.error);
+  const restoringMark = <span className="claude-working-mark" aria-hidden="true"><img src={CLAUDE_WORKING_MARK} alt="" /></span>;
   const model = s.models.find(m => m.value === s.model) ?? s.models.find(m => m.resolvedModel === s.model);
-  const summary = !empty && !s.busy && s.endedAt && <div className="claude-turn-summary">{t('claude.worked_for', { duration: elapsed(s.endedAt - (s.startedAt ?? s.endedAt), t) })}{used > 0 && <> · {t('claude.tokens', { count: count(used) })}</>}{s.totalCost !== undefined && s.totalCost > 0 && <> · ~${s.totalCost.toFixed(4)}</>}</div>;
   return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
-    <div className="claude-scroll" ref={scrollRef} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onScroll={onScroll} onWheelCapture={event => { if (event.deltaY < 0 && !event.ctrlKey) pauseFollow(); }} onTouchMoveCapture={pauseFollow} onKeyDownCapture={event => { if ((['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) && !(event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]')) pauseFollow(); }}>
+    <div className="claude-scroll" ref={scrollRef} onPointerDownCapture={event => { if (event.button === 0) pointerHeld.current = true; }} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onScroll={onScroll} onWheelCapture={event => { if (event.deltaY < 0 && !event.ctrlKey) pauseFollow(); }} onTouchMoveCapture={pauseFollow} onKeyDownCapture={event => { if ((['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) && !(event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]')) pauseFollow(); }}>
       <div className={`claude-thread${empty ? ' is-empty' : ''}`}>
-        {s.historyCursor > 0 && <button className="claude-expand" disabled={s.loadingHistory} onClick={loadEarlier}>{t(s.loadingHistory ? 'diff.loading' : 'claude.history_earlier')}</button>}
+        {s.historyCursor > 0 && <button className="claude-expand" disabled={s.loadingHistory || !s.ready} onClick={loadEarlier}>{t(s.loadingHistory ? 'diff.loading' : 'claude.history_earlier')}</button>}
         <div style={{ height: virtual.topSpacer }} aria-hidden="true" />
         {s.messages.slice(virtual.start, virtual.end).map((m, i) => <MeasuredRow key={m.renderKey ?? m.id} id={virtual.measurementKeys[virtual.start + i]} measure={virtual.measureRow}>
           {new Date(m.timestamp).toDateString() !== new Date(s.messages[virtual.start + i - 1]?.timestamp ?? 0).toDateString() && <div className="claude-date">{new Date(m.timestamp).toLocaleDateString(language, { weekday: 'short', month: 'short', day: 'numeric' })}</div>}
           <article data-message-id={m.id} className={`claude-row claude-row--${m.role} ${m.toolStatus ? `claude-row--${m.interrupted ? 'interrupted' : m.toolStatus}` : ''} ${m.parentId ? 'claude-row--nested' : ''}`}>
             {m.role === 'user' ? <><time>{new Date(m.timestamp).toLocaleTimeString(language, { hour: 'numeric', minute: '2-digit' })}</time><CollapsibleUserMessage sentAt={m.timestamp} expanded={!!expandedMessages[m.id]} onToggle={() => setExpandedMessages(old => ({ ...old, [m.id]: !old[m.id] }))}><MarkdownContent content={m.content} /></CollapsibleUserMessage></> : m.role === 'tool' ? <ClaudeTool message={m} /> : m.role === 'reasoning' ? <ClaudeThinking message={m} expanded={thinkingExpansion[m.id] ?? expandedThinking} tokens={s.thinkingTokens} onToggle={open => setThinkingExpansion(previous => (previous[m.id] ?? expandedThinking) === open ? previous : { ...previous, [m.id]: open })} /> : <><time>{new Date(m.timestamp).toLocaleTimeString(language, { hour: 'numeric', minute: '2-digit' })}</time><MarkdownContent content={m.content} /></>}
             {(m.role === 'user' || m.role === 'assistant') && !m.partial && <MessageCopyButton copied={copied === m.id} onCopy={() => copy(m)} />}
-            {virtual.start + i === s.messages.length - 1 && summary}
+            {m.turnStats && !(s.busy && virtual.start + i === s.messages.length - 1) && <TurnSummary stats={m.turnStats} sessionKey={s.nativeId} messageId={m.id} />}
           </article>
         </MeasuredRow>)}
         <div style={{ height: virtual.bottomSpacer }} aria-hidden="true" />
         {s.requests.map(p => <Question key={p.id} id={sessionId} pending={p} />)}
-        {s.ready && s.busy && !s.requests.length && <Working status={s.interruptRequested ? 'stopping' : s.status} startedAt={s.startedAt} />}
+        {s.coldReturn && <ClaudeColdReturn id={sessionId} idleMinutes={s.coldReturn.idleMinutes} tokens={s.coldReturn.tokens} />}
+        {restoring && s.messages.length > 0 && <div className="claude-working" role="status">{restoringMark}<span className="claude-working-word">{t('conversation.restoring')}</span></div>}
+        {s.ready && s.busy && !s.requests.length && <Working status={s.interruptRequested ? 'stopping' : s.status} startedAt={s.startedAt} title={turnTitle(s.messages, s.startedAt)} />}
         {s.interrupted && !s.busy && !s.error && <div className="claude-interrupted" role="status">{t('claude.interrupted')}</div>}
         {directoryIssue && <div className="claude-session-error" role="alert">{directoryError}</div>}
-        {s.error && (s.ready || s.errorKey === 'claude.error.settings_readback' || s.errorKey === 'claude.error.restart') && <div className="claude-session-error" role="alert">{s.errorKey ? t(s.errorKey, { detail: s.error }) : s.error}</div>}
+        {s.error && (s.ready || !directoryIssue || s.errorKey === 'claude.error.settings_readback' || s.errorKey === 'claude.error.restart') && <div className="claude-session-error" role="alert">{s.errorKey ? t(s.errorKey, { detail: s.error }) : startErrorText(s.error, 'Claude Code', t)}</div>}
         {empty && <div className="claude-empty">
           <ClaudeWelcomeIcon isActive={isVisible} />
           <WelcomeGreeting />
+          {(creatingWorktree || restoring) && <WelcomeRestoring labelClassName="claude-working-word" mark={restoringMark} label={creatingWorktree ? t('gambit.worktree_creating') : undefined} />}
           <WelcomeSessionMeta cwd={cwd} model={model?.resolvedModel || s.model} />
         </div>}
-        {!s.messages.length && summary}
       </div>
     </div>
     {navigationItems.length > 1 && isActive && <ConversationNavigation items={navigationItems} scrollRef={scrollRef} onJump={jumpToTurn} />}
-    {scrolled && <button className="gambit-send claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { prependAnchor.current = null; pinned.current = true; syncScroll(); setScrolled(false); }}>
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v11M3 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    {scrolled && <button className="claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { prependAnchor.current = null; pinned.current = true; syncScroll(); setScrolled(false); }}>
+      <ScrollLatestIcon working={s.ready && s.busy && !s.requests.length ? <span className="claude-working-mark" aria-hidden="true"><img src={CLAUDE_WORKING_MARK} alt="" /></span> : undefined} />
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" title={directoryError || s.error} onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('claude.reconnect')}</button>}
     {conversationMenu.menu}

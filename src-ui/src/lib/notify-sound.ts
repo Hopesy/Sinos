@@ -21,6 +21,8 @@
 // User controls (Settings ▸ Sound, localStorage `cc-*` keys, both default ON):
 //   cc-sound-done  — chime when a turn completes
 //   cc-sound-wait  — chime on permission / input prompts
+// A file chosen there replaces a kind's chime. Windows plays it natively too;
+// elsewhere it is decoded here. Whatever cannot play falls back to the chime.
 // (A "only when window unfocused" toggle was removed — it silently muted all
 // chimes for single-window users, who are always focused on their one tab.)
 
@@ -33,6 +35,7 @@ import {
 import { commands, isTauri } from '../tauri';
 import { IS_WINDOWS } from './platform';
 import type { OrchestrationTask } from './orchestration';
+import { promptSubmitted } from './notify-prompts';
 
 export type NotifyKind = 'done' | 'wait';
 
@@ -66,7 +69,7 @@ function cancelPendingDone(sessionId: string) {
 // screen status can likewise animate while restoring a session. Seeing idle
 // is not enough to distinguish those cycles from a completed turn, so notifications
 // stay muted until the user submits input. This is local UI state, not a hook.
-const guardedPromptSubmitted = new Set<string>();
+const guardedPromptSubmitted = promptSubmitted;
 
 /** Arm guarded notifications after a real terminal/Gambit submission. */
 export function markNotifySoundPromptSubmitted(sessionId: string, tool: ToolType) {
@@ -117,6 +120,7 @@ function note(ac: AudioContext, freq: number, start: number, dur: number, peak: 
 /** Play one of the two notification chimes. Exported so Settings can offer
  *  a "preview" button per kind. */
 export function playNotifySound(kind: NotifyKind) {
+  const turn = ++latestSound;
   if (IS_WINDOWS && isTauri) {
     commands.playNotifySound(kind).catch(error => {
       console.warn('[notify-sound] Native playback failed:', error);
@@ -124,7 +128,38 @@ export function playNotifySound(kind: NotifyKind) {
     });
     return;
   }
+  if (isTauri) {
+    const chime = () => { if (turn === latestSound) { stopChosenSound(); playWebAudioSound(kind); } };
+    void playChosenSound(kind, turn).then(played => { if (!played) chime(); }, chime);
+    return;
+  }
   playWebAudioSound(kind);
+}
+
+const LONGEST_SOUND_SECONDS = 10;
+let chosenSound: AudioBufferSourceNode | null = null;
+/** The newest sound. A file that finishes decoding after a newer one began stays silent. */
+let latestSound = 0;
+
+function stopChosenSound() {
+  chosenSound?.stop();
+  chosenSound = null;
+}
+
+async function playChosenSound(kind: NotifyKind, turn: number): Promise<boolean> {
+  const bytes = await commands.notifySoundRead(kind), ac = audioCtx();
+  if (!ac || !bytes.byteLength) return false;
+  const source = ac.createBufferSource();
+  source.buffer = await ac.decodeAudioData(bytes);
+  if (turn !== latestSound) return true;
+  source.connect(ac.destination);
+  stopChosenSound();
+  chosenSound = source;
+  // The decoded audio can be far larger than the file; let it go once it has played.
+  source.onended = () => { if (chosenSound === source) chosenSound = null; };
+  source.start();
+  source.stop(ac.currentTime + LONGEST_SOUND_SECONDS);
+  return true;
 }
 
 function playWebAudioSound(kind: NotifyKind) {
@@ -141,6 +176,15 @@ function playWebAudioSound(kind: NotifyKind) {
     note(ac, 1760.0, t0, 0.14, 0.10);
     note(ac, 1318.5, t0 + 0.09, 0.22, 0.08);
   }
+}
+
+/** With the window in the background, flash its taskbar button: until focused when an
+ *  agent waits for approval, once when a turn completes. Independent of the sound toggles. */
+function requestAttention(kind: NotifyKind) {
+  if (!isTauri || document.hasFocus()) return;
+  void import('@tauri-apps/api/window').then(({ getCurrentWindow, UserAttentionType }) =>
+    getCurrentWindow().requestUserAttention(kind === 'wait' ? UserAttentionType.Critical : UserAttentionType.Informational))
+    .catch(error => console.warn('[notify-sound] Attention request failed:', error));
 }
 
 function enabled(key: string): boolean {
@@ -221,6 +265,7 @@ export function initNotifySound(
       cancelPendingDone(terminal.id);
       onNotify?.(terminal.id, 'wait');
       if (enabled('cc-sound-wait')) playNotifySound('wait');
+      requestAttention('wait');
       continue;
     }
 
@@ -234,6 +279,7 @@ export function initNotifySound(
       if (prevStatus.get(sessionId) !== 'idle') return;
       onNotify?.(sessionId, 'done');
       if (enabled('cc-sound-done')) playNotifySound('done');
+      requestAttention('done');
     }, DONE_SETTLE_MS);
     pendingDoneTimers.set(sessionId, timer);
   }

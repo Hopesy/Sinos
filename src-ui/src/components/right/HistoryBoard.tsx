@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useSyncExternalStore, useId, useCallback } from 'react';
+import { resolveWorktree, worktreeFromPath } from '../../lib/worktree';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, useId, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { InlineSvgIcon } from '../InlineSvgIcon';
 import { useT } from '../../i18n/useT';
@@ -18,6 +19,7 @@ import {
 } from '../../lib/history-cache';
 import { subscribeHidden, getHiddenSnapshot, hideSession } from '../../lib/hidden-sessions';
 import { subscribePinned, getPinnedSnapshot } from '../../lib/pinned-sessions';
+import { getProjectFolders, subscribeProjectFolders } from '../../lib/project-folders';
 import { subscribeRenamed, getRenamedSnapshot, setCustomName } from '../../lib/renamed-sessions';
 import { SessionContextMenu, type SessionCtxMenuState } from './SessionContextMenu';
 import { useTextContextMenu } from '../../lib/use-text-context-menu';
@@ -35,6 +37,8 @@ import CLAUDE_DATA_URL from '../../icons-inline/claude.svg?inline';
 import CODEX_SVG from '../../icons-inline/codex.svg?raw';
 import MIMOCODE_DATA_URL from '../../icons-inline/mimocode.png?inline';
 import HERMES_DATA_URL from '../../icons-inline/hermes.png?inline';
+// Sinos Agent uses the same product icon as the desktop application.
+import SINOS_AGENT_DATA_URL from '../../icons-inline/sinos-agent.png?inline';
 import OPENCODE_DATA_URL from '../../icons-inline/opencode.png?inline';
 // Kimi Code (PNG squircle) — fixed-color brand mark, ?inline data URI.
 import KIMICODE_DATA_URL from '../../icons-inline/kimicode.png?inline';
@@ -84,6 +88,7 @@ const TOOL_ICON_SRC: Record<string, string> = {
   crush:       CRUSH_DATA_URL,
   muse:        MUSE_DATA_URL,
   dsh:         DSH_DATA_URL,
+  'coffee-agent': SINOS_AGENT_DATA_URL,
 };
 
 const TOOL_ICON_SVG: Record<string, string> = {
@@ -112,6 +117,16 @@ const getToolIcon = (tool: string) => {
 };
 
 const getToolName = (tool: string) => getToolDisplayName(tool);
+/** The AI tools among the launchpad favourites, in their order; the terminal keeps no sessions. */
+function favoriteTools(): string[] {
+  try {
+    const pins: unknown = JSON.parse(localStorage.getItem('coffee_pinned_items') ?? '[]');
+    return Array.isArray(pins) ? pins.filter((id): id is string => typeof id === 'string' && id.startsWith('agent:') && id !== 'agent:terminal').map(id => id.slice('agent:'.length)) : [];
+  } catch { return []; }
+}
+
+// Sessions a project shows before its Show more control, and how many each click adds.
+const PROJECT_PREVIEW = 5, PROJECT_STEP = 10;
 
 // Project folder basename (e.g. "EchoBird" from "E:\EchoBird", "coffee"
 // from "~/projects/coffee") — the icon already conveys the tool, so the
@@ -230,11 +245,71 @@ export function HistoryBoard() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchResultsRef = useRef<HTMLDivElement>(null);
   const searchId = useId();
-  const [layout, setLayout] = useState<'list' | 'projects'>(() => {
-    try { return localStorage.getItem('cc-history-layout') === 'projects' ? 'projects' : 'list'; } catch { return 'list'; }
+  const [layout, setLayout] = useState<'list' | 'projects' | 'tool'>(() => {
+    try {
+      const saved = localStorage.getItem('cc-history-layout');
+      // The Tools view needs its tool; without one it falls back to the full list.
+      return saved === 'projects' || (saved === 'tool' && localStorage.getItem('cc-history-tool')) ? saved : 'list';
+    } catch { return 'list'; }
   });
+  // The one tool whose sessions the "tool" view lists.
+  const [toolFilter, setToolFilter] = useState(() => { try { return localStorage.getItem('cc-history-tool') ?? ''; } catch { return ''; } });
+  useEffect(() => { try { localStorage.setItem('cc-history-tool', toolFilter); } catch { /* Storage unavailable. */ } }, [toolFilter]);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  // How many sessions each project shows beyond its preview, so one busy folder cannot push the others away.
+  const [projectExtras, setProjectExtras] = useState<Map<string, number>>(new Map());
   useEffect(() => { try { localStorage.setItem('cc-history-layout', layout); } catch { /* Storage unavailable. */ } }, [layout]);
+  const [layoutMenu, setLayoutMenu] = useState<{ top: number; right: number; tools: string[] } | null>(null);
+  const [toolMenu, setToolMenu] = useState<{ kind: 'tools' | 'icons' | 'scope'; rowTop: number; top: number; left: number } | null>(null);
+  // Each row's tool icon; filtered to one tool, the heading already names it, so it can be turned off.
+  const [showIcons, setShowIcons] = useState(() => { try { return localStorage.getItem('cc-history-icons') !== 'hidden'; } catch { return true; } });
+  // Projects come from every session's folder, or only from the folders added on the launchpad.
+  const [projectScope, setProjectScope] = useState<'all' | 'added'>(() => { try { return localStorage.getItem('cc-history-project-scope') === 'added' ? 'added' : 'all'; } catch { return 'all'; } });
+  const chooseScope = (scope: 'all' | 'added') => { setProjectScope(scope); setPreview(null); try { localStorage.setItem('cc-history-project-scope', scope); } catch { /* Best-effort operation; failure is non-fatal. */ } };
+  const chooseIcons = (show: boolean) => { setShowIcons(show); try { localStorage.setItem('cc-history-icons', show ? 'shown' : 'hidden'); } catch { /* Best-effort operation; failure is non-fatal. */ } };
+  const layoutBtnRef = useRef<HTMLButtonElement>(null);
+  const layoutMenuRef = useRef<HTMLDivElement>(null);
+  const toolMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (!layoutMenu) setToolMenu(null); }, [layoutMenu]);
+  // The tools open beside the menu with their first row level with "Tools"; they flip left at the screen edge.
+  const openToolMenu = (row: HTMLElement, kind: 'tools' | 'icons' | 'scope' = 'tools') => {
+    const item = row.getBoundingClientRect(), menu = layoutMenuRef.current?.getBoundingClientRect();
+    // No favourite AI tool: nothing to choose, so no empty submenu.
+    if (!menu) return;
+    setToolMenu(current => current && current.kind === kind && current.rowTop === item.top ? current : { kind, rowTop: item.top, top: item.top, left: menu.right + 4 });
+  };
+  // Placement depends on the rendered submenu: its padding and its width in this language.
+  useLayoutEffect(() => {
+    const node = toolMenuRef.current, menu = layoutMenuRef.current?.getBoundingClientRect();
+    if (!toolMenu || !node || !menu) return;
+    const box = node.getBoundingClientRect(), first = node.firstElementChild?.getBoundingClientRect();
+    const top = Math.round(toolMenu.top + toolMenu.rowTop - (first?.top ?? box.top));
+    const left = box.right > window.innerWidth - 8 ? Math.max(8, menu.left - 4 - box.width) : toolMenu.left;
+    if (top !== toolMenu.top || left !== toolMenu.left) setToolMenu({ ...toolMenu, top, left });
+  }, [toolMenu]);
+  useEffect(() => {
+    if (!layoutMenu) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (layoutMenuRef.current?.contains(target) || toolMenuRef.current?.contains(target) || layoutBtnRef.current?.contains(target)) return;
+      setLayoutMenu(null);
+    };
+    const closeKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLayoutMenu(null); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', closeKey);
+    const closeAll = () => setLayoutMenu(null);
+    window.addEventListener('resize', closeAll);
+    // The menu is fixed-position, so scrolling the sidebar would leave it detached from its button.
+    // Scoped to the sidebar: a window-level capture would also catch streaming terminal output.
+    const sidebar = layoutBtnRef.current?.closest('.panel-left');
+    sidebar?.addEventListener('scroll', closeAll, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', closeKey);
+      window.removeEventListener('resize', closeAll);
+      sidebar?.removeEventListener('scroll', closeAll, true);
+    };
+  }, [layoutMenu]);
   useEffect(() => {
     const dialog = searchDialogRef.current;
     if (!dialog) return;
@@ -253,13 +328,32 @@ export function HistoryBoard() {
     { id: 'mock-3', name: 'refactor components', tool: 'qwen', cwd: '~/projects/coffee', session_token: 'tk3', saved_at: new Date(nowMs - 86400000 * 2).toISOString() },
   ], [cachedSessions, nowMs]);
   const liveSessions = useMemo(() => state.terminals.filter(session => session.tool && !nativeSessions.some(saved => saved.tool === session.tool && saved.session_token && saved.session_token === session.resumeToken)), [state.terminals, nativeSessions]);
-  const baseSessions: SavedSession[] = useMemo(() => sortByMtime([...nativeSessions, ...liveSessions.map(session => ({
+  const baseSessions: SavedSession[] = useMemo(() => {
+    const sorted = sortByMtime([...nativeSessions.map(saved => {
+    // The disk cache refreshes lazily, so an open session's recent activity outranks its stale file mtime.
+    const open = saved.session_token ? state.terminals.find(tab => tab.tool === saved.tool && tab.resumeToken === saved.session_token) : undefined;
+    if (!open?.activeAt) return saved;
+    const numeric = Number(saved.saved_at);
+    const mtime = Date.parse(saved.saved_at) || (numeric < 1e11 ? numeric * 1000 : numeric) || 0;
+    return open.activeAt > mtime ? { ...saved, saved_at: new Date(open.activeAt).toISOString() } : saved;
+  }), ...liveSessions.map(session => ({
     id: `live:${session.id}`, name: session.toolTitle || getToolDisplayName(session.tool!), tool: session.tool!,
-    cwd: session.folderPath ?? '', session_token: session.resumeToken ?? null, saved_at: new Date(session.startedAt ?? nowMs).toISOString(),
+    cwd: session.folderPath ?? '', session_token: session.resumeToken ?? null, saved_at: new Date(session.activeAt ?? session.startedAt ?? nowMs).toISOString(),
   })), ...agentConversations.map(conversation => ({
     id: conversation.id, name: conversation.title, tool: 'coffee-agent', cwd: '', session_token: null,
     saved_at: new Date(conversation.updatedAt).toISOString(), turn_count: conversation.messageCount,
-  }))]), [nativeSessions, liveSessions, agentConversations, nowMs]);
+  }))]);
+    // Sessions that are running right now float to the top, in tab order. Ranking them by
+    // mtime/activeAt made concurrent sessions swap places on every status flip.
+    const tabIndex = (session: SavedSession) => state.terminals.findIndex(tab => session.id === `live:${tab.id}`
+      || (!!session.session_token && tab.tool === session.tool && tab.resumeToken === session.session_token));
+    const busy = (session: SavedSession) => {
+      const tab = state.terminals[tabIndex(session)];
+      return tab?.agentStatus === 'working' || tab?.agentStatus === 'wait_input';
+    };
+    const running = sorted.filter(busy).sort((a, b) => tabIndex(a) - tabIndex(b));
+    return running.length ? [...running, ...sorted.filter(session => !busy(session))] : sorted;
+  }, [nativeSessions, liveSessions, agentConversations, nowMs, state.terminals]);
 
   const availableSessions = useMemo(() => {
     const list = baseSessions.filter(session => !hidden.has(`${session.tool ?? ''}:${session.id}`)
@@ -271,11 +365,16 @@ export function HistoryBoard() {
     if (!pinned.size) return list;
     return list.sort((a, b) => Number(pinned.has(`${b.tool ?? ''}:${b.id}`)) - Number(pinned.has(`${a.tool ?? ''}:${a.id}`)));
   }, [baseSessions, hidden, pinned, orchestration.tasks, state.terminals]);
+  const projectFolders = useSyncExternalStore(subscribeProjectFolders, getProjectFolders, getProjectFolders);
   const projects = useMemo(() => {
     const groups = new Map<string, { key: string; name: string; cwd: string; sessions: SavedSession[] }>();
+    // "Added folders only" keeps the launchpad's folders, even before they have a session; sessions elsewhere stay in
+    // the list view and search. Sessions without a folder keep their tool's group either way.
+    const added = projectScope === 'added' ? new Map(projectFolders.map(folder => ['cwd:' + normCwd(folder.trim()), folder.trim()] as const)) : null;
     for (const session of availableSessions) {
       const cwd = session.tool === 'openclaw' ? '' : (session.cwd ?? '').trim();
       const key = cwd ? 'cwd:' + normCwd(cwd) : 'tool:' + session.tool;
+      if (added && cwd && !added.has(key)) continue;
       let group = groups.get(key);
       if (!group) {
         group = { key, name: session.tool === 'coffee-agent' ? 'Sinos Agent' : projectName(cwd, session.tool), cwd, sessions: [] };
@@ -283,6 +382,7 @@ export function HistoryBoard() {
       }
       group.sessions.push(session);
     }
+    if (added) for (const [key, cwd] of added) if (cwd && !groups.has(key)) groups.set(key, { key, name: projectName(cwd, ''), cwd, sessions: [] });
     const all = [...groups.values()];
     const names = new Map<string, number>();
     for (const group of all) names.set(group.name, (names.get(group.name) ?? 0) + 1);
@@ -293,13 +393,32 @@ export function HistoryBoard() {
       }
     }
     return all;
-  }, [availableSessions]);
-  const rows = useMemo(() => layout === 'list'
-    ? availableSessions.map(session => ({ kind: 'session' as const, session, grouped: false }))
-    : projects.flatMap(group => [
-      { kind: 'project' as const, group },
-      ...(collapsedProjects.has(group.key) ? [] : group.sessions.map(session => ({ kind: 'session' as const, session, grouped: true }))),
-    ] as Array<{ kind: 'project'; group: typeof group } | { kind: 'session'; session: SavedSession; grouped: boolean }>), [layout, availableSessions, projects, collapsedProjects]);
+  }, [availableSessions, projectScope, projectFolders]);
+  const openSessions = useMemo(() => new Set(state.terminals.flatMap(tab => tab.resumeToken ? [`${tab.tool}:${tab.resumeToken}`] : [])), [state.terminals]);
+  // Pi names neither its terminal nor its desktop session on its own, so an open Pi tab takes
+  // the name this list shows for its conversation once the session appears in history.
+  useEffect(() => {
+    for (const tab of state.terminals) {
+      // A folder title Pi set before its titles were filtered (`π - <folder>`) does not count as a name.
+      if (tab.tool !== 'pi' || !tab.resumeToken || (tab.toolTitle?.trim() && !tab.toolTitle.startsWith('π - ')) || tab.pinnedTitle?.trim()) continue;
+      const saved = nativeSessions.find(session => session.tool === 'pi' && session.session_token === tab.resumeToken);
+      const name = saved && (renamed[`pi:${saved.id}`] ?? saved.name)?.trim();
+      if (name) dispatch({ type: 'SET_TAB_TITLE', id: tab.id, title: name });
+    }
+  }, [state.terminals, nativeSessions, renamed, dispatch]);
+  const rows = useMemo(() => layout !== 'projects'
+    ? availableSessions.filter(session => layout === 'list' || session.tool === toolFilter).map(session => ({ kind: 'session' as const, session, grouped: false }))
+    : projects.flatMap((group): Array<{ kind: 'project'; group: typeof group } | { kind: 'session'; session: SavedSession; grouped: boolean } | { kind: 'more'; group: typeof group; remaining: number; expanded: boolean }> => {
+      const header = { kind: 'project' as const, group };
+      if (collapsedProjects.has(group.key)) return [header];
+      const limit = PROJECT_PREVIEW + (projectExtras.get(group.key) ?? 0);
+      // An open session keeps its live status on screen wherever it falls in the list.
+      const shown = group.sessions.filter((session, index) => index < limit || session.id.startsWith('live:') || openSessions.has(`${session.tool}:${session.session_token}`));
+      const remaining = group.sessions.length - shown.length;
+      // A group that shrank to the preview size has nothing left to fold.
+      const expanded = limit > PROJECT_PREVIEW && group.sessions.length > PROJECT_PREVIEW;
+      return [header, ...shown.map(session => ({ kind: 'session' as const, session, grouped: true })), ...(remaining > 0 || expanded ? [{ kind: 'more' as const, group, remaining, expanded }] : [])];
+    }), [layout, toolFilter, availableSessions, projects, collapsedProjects, projectExtras, openSessions]);
 
   // Search works across titles, tools and full project paths, independently of the sidebar view.
   const matchesQuery = useCallback((session: SavedSession, query: string) => {
@@ -325,7 +444,7 @@ export function HistoryBoard() {
     const liveFolder = liveSessionFolders.get(`${session.tool}:${session.session_token}`);
     return { folder: liveFolder ?? (session.git_context ? session.cwd : ''), context: session.git_context };
   };
-  const gitTargets = filteredRows.map(row => row.kind === 'project' ? { folder: row.group.cwd } : sessionGitTarget(row.session));
+  const gitTargets = filteredRows.flatMap(row => row.kind === 'more' ? [] : [row.kind === 'project' ? { folder: row.group.cwd } : sessionGitTarget(row.session)]);
   const gitStatuses = useProjectGitStatuses(gitTargets);
   const searchResults = searchOpen ? matchedSessions.slice(0, searchCount) : [];
   const selectedSearchIndex = Math.min(searchSelection, Math.max(0, searchResults.length - 1));
@@ -390,10 +509,15 @@ export function HistoryBoard() {
     const targetId = crypto.randomUUID();
     let mode: 'terminal' | 'conversation' = 'conversation';
     try { if (localStorage.getItem(`coffee:${saved.tool}-launch-mode`) === 'terminal') mode = 'terminal'; } catch { /* optional preference */ }
+    // A conversation that ran in a Coffee worktree goes back into it, with its branch and merge button.
+    const candidate = saved.worktree_cwd ? worktreeFromPath(saved.worktree_cwd) : undefined;
+    // Folder names do not encode the branch namespace; ask Git for the actual branch.
+    const worktree = candidate && isTauri ? await resolveWorktree(candidate).catch(() => candidate) : candidate;
     dispatch({
       type: 'ADD_TERMINAL',
       split,
-      session: { id: targetId, tool: saved.tool as ToolType, folderPath: saved.cwd, resumeToken: saved.session_token, claudeMode: saved.tool === 'claude' ? mode : undefined, codexMode: saved.tool === 'codex' ? mode : undefined }
+      // The tab opens under the conversation's history title; a tool that names it later replaces it.
+      session: { id: targetId, tool: saved.tool as ToolType, folderPath: worktree ? saved.worktree_cwd! : saved.cwd, ...(worktree ? { worktree, worktreeOrigin: saved.cwd } : {}), resumeToken: saved.session_token, toolTitle: saved.name?.trim() || undefined, pinnedTitle: renamed[`${saved.tool ?? ''}:${saved.id}`]?.trim() || undefined, claudeMode: saved.tool === 'claude' ? mode : undefined, codexMode: saved.tool === 'codex' ? mode : undefined, opencodeMode: saved.tool === 'opencode' ? mode : undefined, piMode: saved.tool === 'pi' ? mode : undefined }
     });
   };
 
@@ -458,7 +582,8 @@ export function HistoryBoard() {
       if (!independent && !parent && !parentToken) throw new Error(t('orchestration.history_unavailable'));
       const parentId = parent?.id ?? task.parentId;
       const snapshot = await commands.orchestrationRestoreWorker(task.id, parentId, task.sessionId);
-      const restored: TerminalSession = { id: task.sessionId, tool: task.tool, folderPath: task.cwd, resumeToken: task.nativeId, toolTitle: task.title, strictCwd: true, claudeMode: task.tool === 'claude' ? 'conversation' : undefined, codexMode: task.tool === 'codex' ? 'conversation' : undefined };
+      const worktree = snapshot.tasks.find(item => item.id === task.id)?.worktree;
+      const restored: TerminalSession = { id: task.sessionId, tool: task.tool, folderPath: task.cwd, ...(worktree ? { worktree, worktreeOrigin: worktree.root } : {}), resumeToken: task.nativeId, toolTitle: task.title, strictCwd: true, claudeMode: task.tool === 'claude' ? 'conversation' : undefined, codexMode: task.tool === 'codex' ? 'conversation' : undefined, opencodeMode: task.tool === 'opencode' ? 'conversation' : undefined, piMode: task.tool === 'pi' ? 'conversation' : undefined };
       dispatch({ type: 'RESTORE_WORKER_SESSION', parent: independent ? undefined : parent ?? { id: parentId, tool: task.parentTool as ToolType, folderPath: savedParent.cwd || task.cwd, resumeToken: parentToken ?? undefined, toolTitle: savedParent.name, strictCwd: true, claudeMode: 'conversation' }, child: restored });
       receiveOrchestration(snapshot);
     } catch (error) { setAgentError(String(error)); }
@@ -538,9 +663,9 @@ export function HistoryBoard() {
           >
             <div className="history-card-content">
               <div className="history-card-title-row">
-                <span className="history-card-tool-icon" aria-hidden="true">
-                  {session.tool !== 'coffee-agent' && getToolIcon(session.tool)}
-                </span>
+                {showIcons && <span className="history-card-tool-icon" aria-hidden="true">
+                  {getToolIcon(session.tool)}
+                </span>}
                 {isRenaming ? (
                   <input
                     className="history-card-rename-input"
@@ -632,10 +757,76 @@ export function HistoryBoard() {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
         <span>{t('history.search')}</span>
       </button>
-      <button type="button" className="history-layout-toggle" aria-label={t(layout === 'list' ? 'history.projects' : 'history.list')} aria-pressed={layout === 'projects'} onClick={() => { setPreview(null); setLayout(layout === 'list' ? 'projects' : 'list'); setVisibleCount(PAGE); }}>
-        <span>{t(layout === 'list' ? 'history.list' : 'history.projects')}</span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{layout === 'list' ? <><path d="M3 7h6l2 3h10v10H3z" /><path d="M7 3h6l2 3h6" /></> : <><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></>}</svg>
-      </button>
+      <div className="history-layout-toggle">
+        <span>{layout === 'tool' ? getToolName(toolFilter) : t(layout === 'list' ? 'history.list' : 'history.projects')}</span>
+        <button type="button" ref={layoutBtnRef} className={`history-layout-menu-btn${layoutMenu ? ' open' : ''}`} aria-label={t('history.layout')} aria-haspopup="menu" aria-expanded={!!layoutMenu} onClick={() => {
+          if (layoutMenu) { setLayoutMenu(null); return; }
+          const r = layoutBtnRef.current?.getBoundingClientRect();
+          // A tool chosen earlier stays listed even after it leaves the favourites.
+          const favorites = favoriteTools(), tools = toolFilter && !favorites.includes(toolFilter) ? [...favorites, toolFilter] : favorites;
+          if (r) setLayoutMenu({ right: Math.max(0, window.innerWidth - r.right), top: r.bottom + 4, tools });
+        }}>
+          {/* Lucide list-filter; license in /icons/LICENSE-lucide.txt. */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M7 12h10M10 18h4" /></svg>
+        </button>
+      </div>
+      {layoutMenu && createPortal(
+        <div className="ctx-menu history-layout-menu" role="menu" ref={layoutMenuRef} style={{ position: 'fixed', top: layoutMenu.top, right: layoutMenu.right }}>
+          {/* The session list opens its apps beside the row: all apps, or one app's sessions. */}
+          <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={toolMenu?.kind === 'tools'} className={`ctx-menu-item history-layout-tools${toolMenu?.kind === 'tools' ? ' is-open' : ''}`} onMouseEnter={event => openToolMenu(event.currentTarget)} onClick={event => openToolMenu(event.currentTarget)} onKeyDown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); openToolMenu(event.currentTarget); } }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></svg>
+            <span>{t('history.list')}</span>
+            <svg className="history-layout-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+          {/* Projects open their scope beside the row: every session's folder, or only the launchpad's. */}
+          <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={toolMenu?.kind === 'scope'} className={`ctx-menu-item history-layout-tools${toolMenu?.kind === 'scope' ? ' is-open' : ''}`} onMouseEnter={event => openToolMenu(event.currentTarget, 'scope')} onClick={event => openToolMenu(event.currentTarget, 'scope')} onKeyDown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); openToolMenu(event.currentTarget, 'scope'); } }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7h6l2 3h10v10H3z" /></svg>
+            <span>{t('history.projects')}</span>
+            <svg className="history-layout-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+          <div className="ctx-menu-divider" role="separator" />
+          <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={toolMenu?.kind === 'icons'} className={`ctx-menu-item history-layout-tools${toolMenu?.kind === 'icons' ? ' is-open' : ''}`} onMouseEnter={event => openToolMenu(event.currentTarget, 'icons')} onClick={event => openToolMenu(event.currentTarget, 'icons')} onKeyDown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); openToolMenu(event.currentTarget, 'icons'); } }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21" /></svg>
+            <span>{t('history.icons')}</span>
+            <svg className="history-layout-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+        </div>,
+        document.body,
+      )}
+      {layoutMenu && toolMenu && createPortal(
+        <div className="ctx-menu history-layout-menu" role="menu" aria-label={t(toolMenu.kind === 'icons' ? 'history.icons' : toolMenu.kind === 'scope' ? 'history.projects' : 'history.list')} ref={toolMenuRef} style={{ position: 'fixed', top: toolMenu.top, left: toolMenu.left }}>
+          {toolMenu.kind === 'scope' ? (['all', 'added'] as const).map(scope => (
+            <button type="button" key={scope} role="menuitemradio" aria-checked={layout === 'projects' && projectScope === scope} className="ctx-menu-item" onClick={() => { setLayoutMenu(null); chooseScope(scope); if (layout !== 'projects') { setLayout('projects'); setVisibleCount(PAGE); } }}>
+              <span className="history-layout-tool-name">{t(scope === 'all' ? 'history.scope_all' : 'history.scope_added')}</span>
+              <svg className="history-layout-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ visibility: layout === 'projects' && projectScope === scope ? 'visible' : 'hidden' }}><path d="M20 6 9 17l-5-5" /></svg>
+            </button>
+          )) : toolMenu.kind === 'icons' ? ([true, false] as const).map(show => (
+            <button type="button" key={String(show)} role="menuitemradio" aria-checked={showIcons === show} className="ctx-menu-item" onClick={() => { setLayoutMenu(null); chooseIcons(show); }}>
+              <span className="history-layout-tool-name">{t(show ? 'history.icons_show' : 'history.icons_hide')}</span>
+              <svg className="history-layout-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ visibility: showIcons === show ? 'visible' : 'hidden' }}><path d="M20 6 9 17l-5-5" /></svg>
+            </button>
+          )) : [
+            <button type="button" key="all" role="menuitemradio" aria-checked={layout === 'list'} className="ctx-menu-item" onClick={() => {
+              setLayoutMenu(null);
+              if (layout === 'list') return;
+              setPreview(null); setLayout('list'); setVisibleCount(PAGE);
+            }}>
+              <span className="history-layout-tool-name">{t('history.all_apps')}</span>
+              <svg className="history-layout-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ visibility: layout === 'list' ? 'visible' : 'hidden' }}><path d="M20 6 9 17l-5-5" /></svg>
+            </button>,
+            ...layoutMenu.tools.map(tool => (
+            <button type="button" key={tool} data-tool={tool} role="menuitemradio" aria-checked={layout === 'tool' && toolFilter === tool} className="ctx-menu-item" onClick={() => {
+              setLayoutMenu(null); setPreview(null);
+              setLayout('tool'); setToolFilter(tool); setVisibleCount(PAGE);
+            }}>
+              <span className="history-layout-tool-icon" aria-hidden="true">{getToolIcon(tool)}</span>
+              <span className="history-layout-tool-name">{getToolName(tool)}</span>
+              <svg className="history-layout-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ visibility: layout === 'tool' && toolFilter === tool ? 'visible' : 'hidden' }}><path d="M20 6 9 17l-5-5" /></svg>
+            </button>
+          ))]}
+        </div>,
+        document.body,
+      )}
       {agentError && <p className="agent-feedback error" role="alert">{agentError}</p>}
       <div className="task-list history-session-list" style={{ marginTop: '0', paddingBottom: '20px' }}>
       {isLoading && Array.from({ length: 6 }).map((_, i) => (
@@ -645,7 +836,18 @@ export function HistoryBoard() {
           </div>
         </div>
       ))}
-      {!isLoading && filteredRows.map(row => row.kind === 'session' ? renderSession(row.session, row.grouped) : (
+      {!isLoading && filteredRows.map(row => row.kind === 'session' ? renderSession(row.session, row.grouped) : row.kind === 'more' ? (
+        <div key={`more:${row.group.key}`} className="history-project-more-row">
+          {row.remaining > 0 && <button type="button" className="history-project-more" onClick={() => {
+            setPreview(null);
+            setProjectExtras(current => new Map(current).set(row.group.key, (current.get(row.group.key) ?? 0) + PROJECT_STEP));
+          }}>{t('history.show_more')}</button>}
+          {row.expanded && <button type="button" className="history-project-more" onClick={() => {
+            setPreview(null);
+            setProjectExtras(current => { const next = new Map(current); next.delete(row.group.key); return next; });
+          }}>{t('history.show_less')}</button>}
+        </div>
+      ) : (
         <button type="button" key={row.group.key} className="history-project-row" aria-expanded={!collapsedProjects.has(row.group.key)} onClick={() => {
           setPreview(null);
           setCollapsedProjects(current => { const next = new Set(current); if (next.has(row.group.key)) next.delete(row.group.key); else next.add(row.group.key); return next; });
@@ -676,9 +878,9 @@ export function HistoryBoard() {
         </>
       )}
 
-      {!isLoading && availableSessions.length === 0 && (
+      {!isLoading && (layout === 'projects' && projectScope === 'added' ? projects.length === 0 : availableSessions.length === 0) && (
         <div className="task-empty">
-          <div className="task-empty-text">{t('menu.no_recent') || 'No recent sessions'}</div>
+          <div className="task-empty-text">{layout === 'projects' && projectScope === 'added' ? t('history.no_projects') : t('menu.no_recent') || 'No recent sessions'}</div>
         </div>
       )}
     </div>

@@ -1,7 +1,7 @@
 import { codexOtherItem, codexRowId, codexStatus, codexToolFailed, codexTurnItem, type CodexStatus } from './codex-rollout';
 import { chatContent, type ChatAttachment } from './chat-content';
 
-export type ChatRole = 'user' | 'assistant' | 'reasoning' | 'tool';
+export type ChatRole = 'user' | 'assistant' | 'reasoning' | 'tool' | 'notice';
 
 export interface ChatMessage {
   id: string;

@@ -125,7 +125,7 @@ const storageKey = 'cc-history-cache-v1';
 }
 
 // Corrupt JSON and malformed records fall back to the normal initial load.
-for (const saved of ['{bad json', '{}', 'null', '[null]', '[{}]', JSON.stringify([{ ...session, id: 1 }])]) {
+for (const saved of ['{bad json', '{}', 'null', '[null]', '[{}]', JSON.stringify([{ ...session, id: 1 }]), JSON.stringify([{ ...session, worktree_cwd: 42 }])]) {
   const { api, requests } = harness(new Map([[storageKey, saved]]));
   assert.equal(api.getHistorySnapshot().status, 'idle', `invalid cache was accepted: ${saved}`);
   api.prefetchHistory();
@@ -184,6 +184,7 @@ for (const saved of ['{bad json', '{}', 'null', '[null]', '[{}]', JSON.stringify
     file_path: '/moved/one.jsonl', created_at: '1788600000000',
     session_token: 'replacement', tool: 'claude', name: 'a\x01b',
     cwd: '/another', turn_count: 2, git_context: { branch: 'main', pull_requests: ['https://github.com/example/repo/pull/42'] },
+    worktree_cwd: '/another/.claude/worktrees/coffee-feature-123',
   })) {
     const before = api.getHistorySnapshot();
     current = { ...current, [field]: value };
@@ -196,6 +197,22 @@ for (const saved of ['{bad json', '{}', 'null', '[null]', '[{}]', JSON.stringify
   api.refreshHistory(); await advance(2000);
   requests.at(-1).reject(new Error('temporary read failure')); await tick();
   assert.equal(api.getHistorySnapshot(), beforeFailure, 'failed refresh retains visible data');
+}
+
+// An older persisted snapshot gains a worktree route even when the transcript
+// itself has not changed; later deletion also clears that route from storage.
+{
+  const storage = new Map([[storageKey, JSON.stringify([session])]]);
+  const { api, requests, advance } = harness(storage);
+  const worktree = '/project/.claude/worktrees/coffee-feature-123';
+  api.prefetchHistory();
+  requests[0].resolve([{ ...session, worktree_cwd: worktree }]); await tick();
+  assert.equal(api.getHistorySnapshot().sessions[0].worktree_cwd, worktree);
+  assert.equal(JSON.parse(storage.get(storageKey))[0].worktree_cwd, worktree);
+  api.refreshHistory(); await advance(2000);
+  requests.at(-1).resolve([session]); await tick();
+  assert.equal(api.getHistorySnapshot().sessions[0].worktree_cwd, undefined);
+  assert.equal(JSON.parse(storage.get(storageKey))[0].worktree_cwd, undefined);
 }
 
 // A failed initial request still drains a queued refresh and reaches ready.

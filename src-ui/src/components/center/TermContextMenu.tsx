@@ -8,6 +8,8 @@ export interface TermContextMenuState {
   hasSelection: boolean;
   text?: string;
   hasImage?: boolean;
+  /** Captured on the same gesture as the text/TUI selection. */
+  link?: import('../../lib/conversation-links').ConversationLink | null;
   /** A TUI-owned selection (e.g. Codex mouse mode) must copy inside that TUI. */
   copySelection?: () => Promise<void>;
 }
@@ -54,9 +56,10 @@ export function TermContextMenu({ menu, onClose, onCopy, onPaste, onSelectAll, l
       onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
     >
       {link && <>
-        <button type="button" className="term-ctx-item" onClick={link.onOpen}>{t('conversation.open_link')}</button>
+        {/* Output paths are revealed without executing the named program. */}
+        {!link.local && <button type="button" className="term-ctx-item" onClick={link.onOpen}>{t('conversation.open_link')}</button>}
         {link.local && <button type="button" className="term-ctx-item" onClick={link.onReveal}>{t('menu.show_in_folder')}</button>}
-        <button type="button" className="term-ctx-item" onClick={link.onCopy}>{t('conversation.copy_link')}</button>
+        <button type="button" className="term-ctx-item" onClick={link.onCopy}>{t(link.local ? 'conversation.copy_path' : 'conversation.copy_link')}</button>
         <div className="term-ctx-sep" />
       </>}
       <button

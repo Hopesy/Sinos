@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { trimLink } from './terminal-theme';
 
 // Preserve the existing URL-only policy and stop before adjacent CJK prose.
 // The addon joins soft-wrapped lines and maps Unicode cells back to columns.
@@ -9,6 +10,7 @@ export function installTerminalLinks(term: Terminal, openUrl: (url: string) => P
   const activate = (event: MouseEvent, uri: string) => {
     // Selecting text or opening the context menu must not launch a browser.
     if (event.button !== 0 || term.hasSelection()) return;
+    uri = trimLink(uri);
     try {
       const url = new URL(uri);
       if (!['http:', 'https:', 'file:'].includes(url.protocol)) return;

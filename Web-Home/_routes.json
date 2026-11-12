@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "include": [
+    "/",
+    "/download/*",
+    "/version.json",
+    "/sitemap.xml",
+    "/lang-packs/*",
+    "/robots.txt"
+  ],
+  "exclude": []
+}

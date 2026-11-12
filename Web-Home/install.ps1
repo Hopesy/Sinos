@@ -1,6 +1,6 @@
 # Sinos CLI - Windows Installer / Updater
-# Usage:   irm https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.ps1 | iex
-# License: AGPL-3.0-or-later (https://github.com/Hopesy/sinos/blob/main/LICENSE)
+# Usage:   irm https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.ps1 | iex
+# License: AGPL-3.0-or-later (https://github.com/Hopesy/Sinos/blob/main/LICENSE)
 
 $ErrorActionPreference = "Stop"
 
@@ -15,7 +15,7 @@ Write-Host "  Fetching latest version..." -ForegroundColor Gray
 $latestVer = $null
 $downloadUrl = $null
 try {
-    $release = Invoke-RestMethod "https://api.github.com/repos/Hopesy/sinos/releases/latest" `
+    $release = Invoke-RestMethod "https://api.github.com/repos/Hopesy/Sinos/releases/latest" `
         -Headers @{ "User-Agent" = "SinosCLI-Install" } -TimeoutSec 15
     $winAsset = $release.assets | Where-Object { $_.name -like "*Windows_x64-setup.exe" -or $_.name -like "*x64-setup.exe" } | Select-Object -First 1
     if ($winAsset) {

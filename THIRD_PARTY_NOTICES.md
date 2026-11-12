@@ -67,6 +67,33 @@ demand. It is licensed under Apache-2.0. The complete license is in
 
 Source: https://github.com/vercel-labs/agent-browser
 
+## JetBrains Mono
+
+The desktop interface bundles JetBrains Mono.
+
+Copyright 2020 The JetBrains Mono Project Authors
+(https://github.com/JetBrains/JetBrainsMono).
+
+Licensed under the SIL Open Font License, Version 1.1. The full license is
+bundled at `fonts/OFL-JetBrainsMono.txt` in the frontend assets; the source copy
+is `src-ui/public/fonts/OFL-JetBrainsMono.txt`.
+
+## Speech transport adapters
+
+Speech adapters under `src/voice_input/echo/` were imported through Coffee CLI
+from the EchoBird project. Their source provenance is preserved. Using a speech
+provider requires that provider's authorization and remains subject to its
+service terms.
+
+## Model pricing catalogue
+
+Bundled model-price metadata is derived from the public models.dev catalogue:
+https://models.dev/api.json
+
+The refresh script preserves the catalogue source in both bundled copies.
+Displayed list-price estimates may differ from provider, relay or subscription
+charges. Model and provider names belong to their respective owners.
+
 ## Service names
 
 Weixin, WeChat, and Telegram are trademarks of their respective owners. Their

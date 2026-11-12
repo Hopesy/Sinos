@@ -35,7 +35,7 @@
   gap: 8px;
   height: 100%;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: var(--type-body);
   font-weight: 500;
   color: var(--text-2);
   background: transparent;
@@ -122,6 +122,24 @@
   position: relative;
   flex-shrink: 0;
 }
+
+.chrome-tab-add {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.chrome-tab-add:hover { background: var(--bg-hover); color: var(--text-1); }
+.chrome-tab-add:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .tab-close-btn {
   position: absolute;
@@ -281,7 +299,7 @@ body.gambit-docked .has-session-split .conversation-navigation { bottom: 16px; }
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--text-1);
-  font: 500 13px var(--font-nav);
+  font: 500 var(--type-body) var(--font-nav);
 }
 .session-split-drop-target span { padding: 5px 10px; border-radius: var(--radius-md); background: var(--bg-panel); }
 body.session-split-dragging { cursor: grabbing; user-select: none; }
@@ -303,7 +321,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   border-radius: 0;
   border: none;
   padding: 0;
-  font-size: 14px;
+  font-size: var(--type-body);
   font-family: var(--font-display, 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
   font-weight: 700;
   font-feature-settings: 'tnum' 1, 'lnum' 1;
@@ -399,7 +417,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 }
 
 .launchpad-inner {
-  max-width: 628px;
+  max-width: 760px;
   width: 100%;
   padding: 32px;
 }
@@ -426,7 +444,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 }
 .detect-help-trigger {
   position: relative;
-  font-size: 11px;
+  font-size: var(--type-caption);
   line-height: 1.4;
   color: var(--text-2);
   cursor: help;
@@ -449,7 +467,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   color: var(--text-1);
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--type-caption);
   font-weight: 500;
   line-height: 1.5;
   white-space: pre-line;
@@ -468,7 +486,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .detect-help { gap: 14px; }
 .switch-model-trigger {
   position: relative;
-  font-size: 11px;
+  font-size: var(--type-caption);
   line-height: 1.4;
   color: var(--text-2);
   cursor: pointer;
@@ -491,7 +509,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   color: var(--text-1);
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--type-caption);
   font-weight: 500;
   line-height: 1.5;
   white-space: pre-line;
@@ -555,25 +573,26 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: clamp(6px, 0.9vw, 12px);
-  height: 80px;
+  gap: clamp(8px, 1.1vw, 16px);
+  height: 96px;
   cursor: pointer;
   position: relative;
   transition: background-color 0.2s;
   min-width: 0;
 }
 
-.launchpad-config { display:flex; align-items:center; justify-content:center; flex:0 0 36px; width:36px; height:36px; margin-left:auto; padding:6px; border:0; border-radius:var(--shape-radius-btn,5px); background:transparent; color:var(--text-2); }
-.launchpad-config:hover { background:var(--bg-hover); }
-.launchpad-config svg { display:block; flex-shrink:0; }
+.launchpad-folder { display:flex; align-items:center; justify-content:center; flex:0 0 auto; margin-left:auto; padding:4px; border:0; background:transparent; color:var(--text-2); cursor:pointer; }
+.launchpad-folder:hover:not(:disabled) { color:var(--text-1); }
+.launchpad-folder:disabled { cursor:default; }
+.launchpad-folder svg { display:block; flex-shrink:0; }
 .launchpad-mode-tabs { position:absolute; right:0; bottom:0; display:flex; height:18px; overflow:hidden; border-top-left-radius:var(--radius-md); }
-.launchpad-mode-tabs button { display:flex; align-items:center; justify-content:center; width:70px; height:18px; padding:0 8px; border:0; border-radius:0; background:var(--bg-hover); color:var(--text-2); font:12px/1 var(--font); white-space:nowrap; cursor:pointer; }
+.launchpad-mode-tabs button { display:flex; align-items:center; justify-content:center; width:70px; height:18px; padding:0 8px; border:0; border-radius:0; background:var(--bg-hover); color:var(--text-2); font:var(--type-caption)/1 var(--font); white-space:nowrap; cursor:pointer; }
 .launchpad-mode-tabs button:first-child { padding-left:10px; padding-right:6px; }
 .launchpad-mode-tabs button:last-child { padding-left:6px; padding-right:10px; }
 .launchpad-mode-tabs button:hover { color:var(--text-1); }
 .launchpad-mode-tabs button.is-selected { background:var(--accent); color:var(--bg-app); }
 .launchpad-mode-tabs button:disabled { cursor:default; }
-.launchpad-mode-tabs button:focus-visible, .launchpad-config:focus-visible { outline:1px solid var(--accent); outline-offset:-2px; }
+.launchpad-mode-tabs button:focus-visible, .launchpad-folder:focus-visible { outline:1px solid var(--accent); outline-offset:-2px; }
 
 /* Recent-folders dropdown (opened from a tool card).
    Same opaque-bg recipe as .term-ctx-menu so it reads solid across every
@@ -603,7 +622,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   background: transparent;
   border-radius: var(--radius-sm, 5px);
   color: var(--text-1);
-  font-size: 12.5px;
+  font-size: var(--type-label);
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
@@ -614,7 +633,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .folder-menu-name { flex-shrink: 0; font-weight: 600; }
 .folder-menu-path {
   color: var(--text-3, var(--text-2));
-  font-size: 11px;
+  font-size: var(--type-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
@@ -661,8 +680,8 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
      sizes stay uniform regardless of the source asset's internal
      viewBox utilization (brand SVGs had wildly different content-to-
      viewBox ratios before). Tune here if the grid density changes. */
-  width: clamp(32px, 3.2vw, 44px);
-  height: clamp(32px, 3.2vw, 44px);
+  width: clamp(36px, 3.6vw, 52px);
+  height: clamp(36px, 3.6vw, 52px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -698,16 +717,52 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   white-space: nowrap;
 }
 
-/* Agent name: ellipsize when the card is squeezed instead of overflowing
-   onto the settings button. The terminal card's inline-flex name (with the
-   remote-link icon) only clips — flex items can't ellipsize — which is
-   fine for its short CJK label. */
-.launchpad-card-info > span:first-child {
+/* Name line: the name ellipsizes first, its update or remote chip stays whole. */
+.launchpad-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.launchpad-card-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A long localized update label shrinks with an ellipsis rather than pushing the name out. */
+.launchpad-card-title .cli-update-control { position: static; display: flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.launchpad-card-name { flex: 0 1 auto; }
+/* Same chip as the update label, neutral: an entry point, not a notice. */
+.launchpad-card .launchpad-chip {
+  flex-shrink: 0;
+  height: 18px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: var(--shape-radius-btn, 4px);
+  background: transparent;
+  color: var(--text-3);
+  font: 500 var(--type-caption)/1.3 var(--font-nav, var(--font));
+  white-space: nowrap;
+  cursor: pointer;
+}
+.launchpad-card .launchpad-chip:hover { background: var(--bg-hover); color: var(--text-1); }
+.launchpad-card .launchpad-chip:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
-/* (folder button is now a transparent overlay — no per-shape overrides needed) */
+/* Second line: the tool's last project folder, or a hint before its first use.
+   A long path keeps its end (the folder name) and elides its start. */
+.launchpad-card .launchpad-card-path {
+  overflow: hidden;
+  font-size: var(--type-label);
+  font-weight: 400;
+  line-height: 16px;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+}
+.launchpad-card .launchpad-card-path.is-path {
+  direction: rtl;
+  text-align: left;
+}
+.launchpad-card-path bdi { unicode-bidi: isolate; }
 
 .empty-icon {
   color: var(--text-3);
@@ -747,7 +802,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .library-section-title {
   margin-top: 28px;
   margin-bottom: 10px;
-  font-size: 12px;
+  font-size: var(--type-label);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -799,7 +854,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
      content width — otherwise text-overflow:ellipsis is a no-op
      and long names push the grid column past its 1fr share. */
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--type-body);
   font-weight: 500;
   color: var(--text-1);
   overflow: hidden;
@@ -881,7 +936,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   border-radius: var(--radius-md);
   color: var(--text-1);
   font-family: var(--font-primary);
-  font-size: 13px;
+  font-size: var(--type-body);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), 0 12px 32px rgba(0, 0, 0, 0.30);
   overflow: hidden;
 }
@@ -928,7 +983,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 }
 
 .tool-config-field-label {
-  font-size: 12px;
+  font-size: var(--type-label);
   font-weight: 600;
   color: var(--text-2);
   text-transform: uppercase;
@@ -943,7 +998,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   border-radius: var(--radius-sm);
   color: var(--text-1);
   font-family: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
-  font-size: 14px;
+  font-size: var(--type-body);
   outline: none;
   resize: vertical;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -966,6 +1021,8 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .tool-command-presets .settings-font-current { display:none; }
 .tool-command-presets:disabled { opacity:.5; cursor:not-allowed; }
 
+.tool-config-error { margin: 0; padding: 0 20px 12px; color: var(--danger, #da8076); font-size: var(--type-label); line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+
 .tool-config-buttons {
   display: flex;
   gap: 8px;
@@ -975,7 +1032,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 
 .tool-config-btn {
   padding: 8px 16px;
-  font-size: 13px;
+  font-size: var(--type-body);
   font-family: inherit;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -993,7 +1050,8 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   color: var(--text-1);
 }
 .tool-config-btn-subtle:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text-1) 11%, transparent);
 }
 
 .tool-config-btn-primary {
@@ -1010,24 +1068,6 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 }
 
 /* ─── Terminal Card Subtle Remote Hint ─── */
-
-.remote-link-hint {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
-  color: var(--text-3);
-  opacity: 0.18;
-  cursor: pointer;
-  background: transparent;
-  border: none;
-  transition: opacity 0.15s;
-}
-
-.remote-link-hint:hover {
-  opacity: 0.7;
-}
 
 /* ─── Remote Terminal Connection Form ─── */
 
@@ -1071,7 +1111,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   background: rgba(255, 255, 255, 0.04);
   border-radius: var(--radius-pill);
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: var(--type-label);
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.08);
   transition: all 0.2s;
@@ -1082,7 +1122,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
   background: rgba(255, 255, 255, 0.08);
 }
 .remote-pill-proto {
-  font-size: 10px;
+  font-size: var(--type-caption);
   font-weight: 700;
   opacity: 0.7;
   margin-right: 6px;
@@ -1174,7 +1214,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .remote-proto-btn {
   flex: 1;
   padding: 7px 0;
-  font-size: 12.5px;
+  font-size: var(--type-label);
   font-weight: 600;
   color: var(--text-2);
   background: transparent;
@@ -1202,7 +1242,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 }
 
 .remote-form-row label {
-  font-size: 12px;
+  font-size: var(--type-label);
   font-weight: 600;
   color: var(--text-2);
   text-transform: uppercase;
@@ -1218,7 +1258,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .remote-input {
   width: 100%;
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: var(--type-body);
   font-family: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
   color: var(--text-1);
   background: var(--bg-card);
@@ -1258,7 +1298,7 @@ body.session-split-dragging { cursor: grabbing; user-select: none; }
 .remote-connect-btn {
   width: 100%;
   padding: 12px;
-  font-size: 14px;
+  font-size: var(--type-body);
   font-weight: 600;
   color: var(--bg-app);
   background: var(--accent);

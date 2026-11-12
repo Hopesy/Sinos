@@ -25,7 +25,7 @@ const compiled = await build({
       import { vi } from './src/i18n/vi';
       export const dictionaries = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, pt, ru, vi };
       export { useT } from './src/i18n/useT';
-      export { AgentPages, ChannelConnectionSummary, AgentHelpModal } from './src/components/agent/AgentPages';
+      export { AgentPages, AgentSettings, ChannelConnectionSummary, AgentHelpModal } from './src/components/agent/AgentPages';
       export { formatAgentActivity, formatAgentError, formatAgentMessage } from './src/lib/agent-client';
     `,
     resolveDir: root,
@@ -55,7 +55,7 @@ const module = { exports: {} };
 const context = {
   module, exports: module.exports,
   __agentTestLanguage: 'en', __agentTestState: { agentPageActive: 'config' },
-  document: { body: {} },
+  document: { body: {} }, navigator: { platform: 'Win32' },
   require: name => name === 'react' ? {
     ...React,
     useSyncExternalStore: (subscribe, getSnapshot) => React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot),
@@ -76,8 +76,10 @@ for (const [language, dictionary] of Object.entries(api.dictionaries)) {
   }
   context.__agentTestLanguage = language;
   context.__agentTestState.currentLang = language;
-  context.__agentTestState.agentPageActive = 'config';
-  const settings = renderToStaticMarkup(React.createElement(api.AgentPages, { page: 'config' }));
+  context.__agentTestState.settingsOpen = true;
+  context.__agentTestState.settingsSection = 'agent';
+  // Coffee Agent's configuration is the settings page's Agent section.
+  const settings = renderToStaticMarkup(React.createElement(api.AgentSettings));
   for (const key of ['agent.settings.intro', 'agent.settings.help', 'agent.model.title', 'agent.model.provider', 'agent.modes.title', 'agent.delegation.title', 'agent.modes.sentinel.title', 'agent.modes.project_manager.title', 'agent.modes.expert_config.title', 'agent.channels.title']) {
     assert.ok(settings.includes(escaped(dictionary[key])), `${language}: settings did not render ${key}`);
   }
@@ -121,10 +123,9 @@ for (const language of ['en', 'zh-CN', 'ja']) {
   assert.equal(api.formatAgentError('Error: Agent 正在处理上一条消息', translate), api.dictionaries[language]['agent.error.busy']);
   assert.equal(api.formatAgentError('请先在 Agent 配置中填写服务地址', translate), api.dictionaries[language]['agent.error.url_required']);
   assert.equal(api.formatAgentError('请先在 Agent 配置中填写模型 ID', translate), api.dictionaries[language]['agent.error.model_required']);
-  assert.equal(api.formatAgentError('Error: 请先在 Agent 配置中填写 API 密钥', translate), api.dictionaries[language]['agent.error.api_key_required']);
   assert.equal(api.formatAgentError('HTTP 401: Invalid API key', translate), 'HTTP 401: Invalid API key');
   assert.equal(api.formatAgentMessage('Agent 请求已取消；已经提交的终端任务可能继续运行。', translate), api.dictionaries[language]['agent.chat.cancelled']);
-  assert.equal(api.formatAgentMessage('Agent 请求未完成：请先在 Agent 配置中填写 API 密钥', translate), translate('agent.chat.incomplete', { error: translate('agent.error.api_key_required') }));
+  assert.equal(api.formatAgentMessage('Agent 请求未完成：请先在 Agent 配置中填写模型 ID', translate), translate('agent.chat.incomplete', { error: translate('agent.error.model_required') }));
   assert.equal(api.formatAgentMessage('Read E:\\MyProject and report in Chinese.', translate), 'Read E:\\MyProject and report in Chinese.');
 }
 console.log(`OK: Sinos Agent rendering, ${keys.length} translation keys in 11 languages, placeholders, help links, and live activity language changes`);

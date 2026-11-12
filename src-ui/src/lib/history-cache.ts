@@ -44,6 +44,7 @@ function readPersistedHistory(): SavedSession[] | null {
       && (s.session_token === null || typeof s.session_token === 'string')
       && (s.created_at === undefined || s.created_at === null || typeof s.created_at === 'string')
       && (s.file_path === undefined || s.file_path === null || typeof s.file_path === 'string')
+      && (s.worktree_cwd == null || typeof s.worktree_cwd === 'string')
       && (s.turn_count === undefined || s.turn_count === null || typeof s.turn_count === 'number')
       && (s.git_context == null || (typeof s.git_context === 'object'
         && (s.git_context.branch === null || typeof s.git_context.branch === 'string')
@@ -70,7 +71,7 @@ const listeners = new Set<() => void>();
 function sessionsSignature(list: SavedSession[]): string {
   return JSON.stringify(list.map(s => [
     s.id, s.name, s.tool, s.cwd, s.session_token, s.saved_at,
-    s.created_at, s.file_path, s.turn_count, s.git_context,
+    s.created_at, s.file_path, s.turn_count, s.git_context, s.worktree_cwd,
   ]));
 }
 let lastSig = persistedSessions === null ? '' : sessionsSignature(persistedSessions);

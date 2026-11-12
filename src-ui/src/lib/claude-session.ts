@@ -3,7 +3,7 @@ import { directoryFailure } from './session-directory';
 import { recordSessionReply, recordSessionQuestion } from './session-replies';
 import { readLaunchControls, setSessionControls, clearSessionControls } from './session-controls';
 import { invoke, type ToolConfigEntry } from '../tauri';
-import { emptyClaudeState, reduceClaudeEvent, object, list, text, type ClaudeState, type ClaudeModel, type ClaudeCommand, type Json } from './claude-protocol';
+import { emptyClaudeState, finishTurn, reduceClaudeEvent, object, list, text, type ClaudeState, type ClaudeModel, type ClaudeCommand, type Json, coldReturn } from './claude-protocol';
 
 interface Client {
   state: ClaudeState;
@@ -42,6 +42,8 @@ function listen() {
     if (!c || c.generation !== payload.generation) return;
     if (payload.event.type === 'coffee_exit') clearSessionControls(payload.id, c.generation);
     if (c.connecting && !c.state.ready && payload.event.type === 'coffee_exit') { c.startupExit = text(payload.event.detail) || 'Claude process exited'; return; }
+    // The title Claude generated for a new conversation from its first prompt.
+    if (payload.event.type === 'coffee_title') { c.state = { ...c.state, title: text(payload.event.title) }; publish(c, true); return; }
     const wasBusy = c.state.busy;
     const previousRequests = new Set(c.state.requests.map(request => request.id));
     c.state = reduceClaudeEvent(c.state, payload.event);
@@ -62,6 +64,14 @@ export function getClaudeConnection(id: string) {
   return c && c.owners > 0 ? { generation: c.generation, state: c.state, ready: c.state.ready && !c.connecting && !c.restarting, inputBusy: c.state.busy || !!c.restarting } : undefined;
 }
 
+/** The Ultracode switch as the user set it. The CLI's own `ultracode` is only true while the model and workflows
+ *  allow it, so a switch that is on but not available reads back false; like Claude desktop, keep showing what was
+ *  asked for and let the CLI's `ultracodeRequested` say so. */
+function requestedUltracode(applied: Json, effective: Json): boolean {
+  if (typeof applied.ultracodeRequested === 'boolean') return applied.ultracodeRequested;
+  return typeof applied.ultracode === 'boolean' ? applied.ultracode : effective.ultracode === true;
+}
+
 async function readSettings(id: string, c: Client) {
   const generation = c.generation;
   requireCurrent(id, c, generation);
@@ -69,7 +79,29 @@ async function readSettings(id: string, c: Client) {
   requireCurrent(id, c, generation);
   const applied = object(settings.applied), effective = object(settings.effective);
   const selected = text(applied.model) || text(effective.model) || c.state.models[0]?.resolvedModel || 'default';
-  c.state = { ...c.state, model: selected, effort: text(applied.effort) || text(applied.effortLevel) || text(effective.effortLevel), ultracode: typeof applied.ultracode === 'boolean' ? applied.ultracode : effective.ultracode === true, thinking: effective.alwaysThinkingEnabled !== false };
+  c.state = { ...c.state, model: selected, effort: text(applied.effort) || text(applied.effortLevel) || text(effective.effortLevel), ultracode: requestedUltracode(applied, effective), thinking: effective.alwaysThinkingEnabled !== false };
+}
+
+// Tabs restarted as a new conversation: which session they continue, and the prompt waiting to be sent.
+const continuations = new Map<string, { continueFrom: Json; held?: ClaudeState['coldReturn'] }>();
+const COLD_RETURN_NEVER = 'coffee:claude-cold-return-never';
+
+function restoreHistoryPage(state: ClaudeState, data: string): ClaudeState {
+  for (const line of data.split(/\r?\n/)) {
+    try { const row = object(JSON.parse(line)); state = reduceClaudeEvent(state, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ }
+  }
+  // The page's last turn ends with it; a turn still running gets its totals from its result instead.
+  return state.busy ? state : finishTurn(state);
+}
+
+async function previewClaudeHistory(id: string, c: Client, cwd: string | null, resumeToken: string) {
+  const generation = c.generation;
+  try {
+    const page = await invoke<{ data: string; cursor: number }>('claude_session_preview', { cwd, resumeToken });
+    if (!current(id, c, generation) || c.startupExit || c.state.messages.length) return;
+    c.state = { ...restoreHistoryPage(c.state, page.data), historyCursor: page.cursor };
+    publish(c, true);
+  } catch { /* the start reply carries the same page */ }
 }
 
 async function initializeClaude(id: string, c: Client, cwd: string | null, resumeToken?: string, ready = true) {
@@ -78,15 +110,17 @@ async function initializeClaude(id: string, c: Client, cwd: string | null, resum
   requireCurrent(id, c, generation);
   clearSessionControls(id, c.generation);
   const controls = readLaunchControls('claude');
-  const result = await invoke<{ sessionId: string; initialization: Json; history: { data: string; cursor: number }; bypassAvailable?: boolean }>('claude_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null });
+  // Show recent history while the native process restores its full transcript.
+  const preview = resumeToken && !c.state.messages.length ? previewClaudeHistory(id, c, cwd, resumeToken) : undefined;
+  const result = await invoke<{ sessionId: string; initialization: Json; history: { data: string; cursor: number }; bypassAvailable?: boolean }>('claude_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null, continueFrom: continuations.get(id)?.continueFrom ?? null });
   if (!current(id, c, generation)) {
     await invoke('claude_session_close', { id, generation }).catch(() => {});
     requireCurrent(id, c, generation);
   }
+  await preview;
+  requireCurrent(id, c, generation);
   const restoreHistory = !c.state.messages.length;
-  if (restoreHistory) for (const line of result.history.data.split(/\r?\n/)) {
-    try { const row = object(JSON.parse(line)); c.state = reduceClaudeEvent(c.state, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ }
-  }
+  if (restoreHistory) c.state = restoreHistoryPage(c.state, result.history.data);
   const init = result.initialization;
   c.state = { ...c.state, nativeId: result.sessionId, historyCursor: restoreHistory ? result.history.cursor : c.state.historyCursor, models: list(init.models) as ClaudeModel[], commands: list(init.commands) as ClaudeCommand[], permissionMode: text(init.current_permission_mode) || 'default', bypassAvailable: result.bypassAvailable === true };
   await readSettings(id, c);
@@ -108,7 +142,25 @@ export function retainClaudeSession(id: string, cwd: string | null, resumeToken?
     c.starting = (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!current(id, c)) return;
-        try { await initializeClaude(id, c, cwd, resumeToken); return; }
+        try {
+          await initializeClaude(id, c, cwd, resumeToken);
+          if (!c.owners) return;
+          const continuation = continuations.get(id);
+          if (continuation) {
+            continuations.delete(id);
+            const held = continuation.held, generation = c.generation;
+            // The card owns the draft until this one automatic attempt. A cancellation or
+            // explicit send during startup removes it and must prevent forwarding.
+            if (held && c.state.coldReturn === held) {
+              c.state = { ...c.state, coldReturn: undefined }; publish(c, true);
+              const sent = await sendClaudeMessage(id, held.prompt);
+              if (!sent && current(id, c, generation) && !c.state.coldReturn) {
+                c.state = { ...c.state, coldReturn: held }; publish(c, true);
+              }
+            }
+          }
+          return;
+        }
         catch (error) {
           if (!current(id, c)) return;
           if (directoryFailure(error) || attempt === 2) {
@@ -135,30 +187,63 @@ export function retainClaudeSession(id: string, cwd: string | null, resumeToken?
       void invoke('claude_session_close', { id, generation: c.generation }).catch(() => {});
       clearTimeout(c.publishTimer);
       clearSessionControls(id, c.generation);
+      continuations.delete(id);
     }, 300);
   };
 }
 
+/** A person's send: returning to a long idle conversation asks first, because resuming it rewrites the whole context. */
+export async function sendClaudeInteractive(id: string, prompt: string): Promise<boolean> {
+  const c = client(id);
+  if (c.state.coldReturn) return false;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(COLD_RETURN_NEVER) === '1'; } catch { /* optional preference */ }
+  const cold = dismissed || prompt.startsWith('/') ? null : coldReturn(c.state, Date.now());
+  if (!cold) return sendClaudeMessage(id, prompt);
+  c.state = { ...c.state, suggestion: undefined, coldReturn: { ...cold, prompt } }; publish(c, true);
+  return true;
+}
+/** Settles the held prompt in this conversation; returns it so `cancel` can put it back in the composer. */
+export async function settleClaudeColdReturn(id: string, choice: 'full' | 'never' | 'cancel'): Promise<string> {
+  const c = client(id), held = c.state.coldReturn, prompt = held?.prompt ?? '';
+  c.state = { ...c.state, coldReturn: undefined }; publish(c, true);
+  if (choice === 'never') { try { localStorage.setItem(COLD_RETURN_NEVER, '1'); } catch { /* optional preference */ } }
+  // A session that cannot take it keeps the card, so the words are not lost.
+  if (choice !== 'cancel' && prompt && !await sendClaudeMessage(id, prompt)) { c.state = { ...c.state, coldReturn: held }; publish(c, true); }
+  return prompt;
+}
+/** Prepares a new conversation with a pointer to this one, forwarding a prompt only when the cold-return card held it. */
+export function continueClaudeInNewConversation(id: string, newId: string): boolean {
+  const c = client(id), held = c.state.coldReturn;
+  if (!c.state.ready || c.state.busy || c.restarting || !c.state.nativeId || !c.state.messages.length || c.state.requests.length || c.state.backgroundTasks.length) return false;
+  const messages = c.state.messages, lastPrompt = messages.findLast(m => m.role === 'user'), reply = messages.findLast(m => m.role === 'assistant');
+  continuations.set(newId, { held, continueFrom: { token: c.state.nativeId, prompt: lastPrompt?.content ?? '', reply: reply?.content ?? '' } });
+  if (held) { const next = client(newId); next.state = { ...next.state, coldReturn: held }; publish(next, true); }
+  c.state = { ...c.state, coldReturn: undefined };
+  return true;
+}
 export async function sendClaudeMessage(id: string, prompt: string, orchestrationDelivery?: string): Promise<boolean> {
   const c = client(id);
   if (!c.state.ready || c.restarting) return false;
   const snapshot = c.state;
   const pendingId = `pending:${crypto.randomUUID()}`, now = Date.now();
-  c.state = { ...c.state, busy: true, interrupted: false, pendingTurns: c.state.pendingTurns + 1, status: c.state.busy ? c.state.status : 'working', error: undefined, errorKey: undefined, startedAt: c.state.busy ? c.state.startedAt : now, endedAt: undefined,
+  c.state = { ...c.state, busy: true, suggestion: undefined, interrupted: false, pendingTurns: c.state.pendingTurns + 1, sentSinceResult: c.state.sentSinceResult + 1, status: c.state.busy ? c.state.status : 'working', error: undefined, errorKey: undefined, startedAt: c.state.busy ? c.state.startedAt : now, endedAt: undefined,
     messages: orchestrationDelivery ? c.state.messages : [...c.state.messages, { id: pendingId, renderKey: pendingId, role: 'user', content: prompt, timestamp: now }] };
   publish(c, true);
   try { await invoke('claude_session_send', { id, generation: c.generation, text: prompt, orchestrationDelivery }); return true; }
-  catch (error) { c.state = { ...c.state, busy: snapshot.busy, pendingTurns: Math.max(0, c.state.pendingTurns - 1), status: snapshot.status, messages: c.state.messages.filter(m => m.id !== pendingId), ...(orchestrationDelivery ? {} : { error: String(error), errorKey: undefined }) }; publish(c, true); return false; }
+  catch (error) { c.state = { ...c.state, busy: snapshot.busy, suggestion: snapshot.suggestion, pendingTurns: Math.max(0, c.state.pendingTurns - 1), sentSinceResult: Math.max(0, c.state.sentSinceResult - 1), status: snapshot.status, messages: c.state.messages.filter(m => m.id !== pendingId), ...(orchestrationDelivery ? {} : { error: String(error), errorKey: undefined }) }; publish(c, true); return false; }
 }
 
 export async function loadClaudeHistory(id: string): Promise<void> {
   const c = client(id);
-  if (!c.state.historyCursor || c.state.loadingHistory) return;
+  // Older pages are read through the live session; a previewed tab waits until it has connected.
+  if (!c.state.ready || !c.state.historyCursor || c.state.loadingHistory) return;
   c.state = { ...c.state, loadingHistory: true }; publish(c, true);
   try {
     const page = await invoke<{ data: string; cursor: number }>('claude_session_history', { id, generation: c.generation, before: c.state.historyCursor });
     let older = { ...emptyClaudeState(), orphanToolResults: c.state.orphanToolResults };
     for (const line of page.data.split(/\r?\n/)) { try { const row = object(JSON.parse(line)); older = reduceClaudeEvent(older, row, Date.parse(text(row.timestamp)) || Date.now(), true); } catch { /* partial native row */ } }
+    older = finishTurn(older);
     const ids = new Set(older.messages.map(m => m.id));
     const messages = [...older.messages, ...c.state.messages.filter(m => !ids.has(m.id))];
     c.state = { ...c.state, messages, orphanToolResults: older.orphanToolResults, historyCursor: page.cursor };
@@ -198,7 +283,7 @@ export async function controlClaude(id: string, request: Json): Promise<Json> {
       const applied = object(settings.applied);
       if (typeof applied.model === 'string') patch.model = applied.model;
       if (typeof applied.effort === 'string') patch.effort = applied.effort;
-      if (typeof applied.ultracode === 'boolean') patch.ultracode = applied.ultracode;
+      if (typeof applied.ultracodeRequested === 'boolean' || typeof applied.ultracode === 'boolean') patch.ultracode = requestedUltracode(applied, {});
     }
     c.state = { ...c.state, ...patch }; publish(c, true); return result;
   } catch (error) {
@@ -215,7 +300,7 @@ function forceStop(id: string, c: Client, generation: string) {
   c.restarting = true;
   const previous = c.state;
   const ended = reduceClaudeEvent(c.state, { type: 'result', subtype: 'error_during_execution', usage: c.state.usage as Json, modelUsage: c.state.modelUsage as Json });
-  c.state = { ...ended, busy: false, pendingTurns: 0, ready: false, status: 'starting' };
+  c.state = { ...ended, busy: false, pendingTurns: 0, sentSinceResult: 0, ready: false, status: 'starting' };
   c.generation = crypto.randomUUID();
   publish(c, true);
   c.starting = (async () => {

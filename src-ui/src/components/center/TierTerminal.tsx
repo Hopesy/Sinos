@@ -32,6 +32,7 @@ import { parseClaudeTerminalTitle } from '../../lib/claude-terminal-title';
 import { parseCodexTerminalTitle } from '../../lib/codex-terminal-title';
 import { parseOmpTerminalTitle } from '../../lib/omp-terminal-title';
 import { parseGrokTerminalTitle } from '../../lib/grok-terminal-title';
+import { parsePiTerminalTitle } from '../../lib/pi-terminal-title';
 import { parseOpenCodeTerminalTitle } from '../../lib/opencode-terminal-title';
 import { markNotifySoundPromptSubmitted } from '../../lib/notify-sound';
 import { markSentinelExit, markSentinelWorking } from '../../lib/agent-sentinel';
@@ -41,6 +42,7 @@ import { createTerminalSizeSync, DEFAULT_TERMINAL_GRID } from '../../lib/termina
 import { UI_SCALE_CHANGED } from '../../lib/ui-scale';
 import { IS_WINDOWS } from '../../lib/platform';
 import { commands } from '../../tauri';
+import { conversationLink, findPaths, pathLinkAt, type ConversationLink } from '../../lib/conversation-links';
 import { registerTerminalObserver, getTerminalObserver } from '../../lib/terminal-observer';
 import { readLaunchControls, setSessionControls, clearSessionControls } from '../../lib/session-controls';
 import { createTerminalEnterEncoder } from '../../lib/terminal-enter';
@@ -49,309 +51,20 @@ import { supportsAgentStatus, useAppDispatch, useAppStateRef, type AgentStatus, 
 import { parseAdditionalAgentTitle, supportsAdditionalAgentStatus } from '../../lib/terminal-agent-status';
 import { useT } from '../../i18n/useT';
 import { getToolDisplayName } from '../../lib/tool-info';
-import { THEME_COLORS } from '../../lib/personalization';
 import { useDataAttr } from '../../lib/use-data-attr';
 import { TermContextMenu, type TermContextMenuState } from './TermContextMenu';
 import { selectedSurfaceText, useTerminalContextMenu } from './useTerminalContextMenu';
 import { createCodexTerminalSelection } from '../../lib/codex-terminal-selection';
 import '@xterm/xterm/css/xterm.css';
 import './TierTerminal.css';
-
-// Installer scripts are fetched at runtime from CF (hot-updatable, no release needed).
-// Falls back to GitHub raw if CF is unreachable.
-// ─── Terminal Color Schemes ──────────────────────────────────────────────────
-// Full ANSI palettes for readability on different wallpapers.
-// "default" = use built-in warm theme, no override.
-
-// Each scheme overrides ONLY the terminal foreground color. The 16 ANSI
-// palette stays whatever the active theme provides, so switching schemes only
-// re-tints the text — no full theme swap, no style shift. Raw-shell cursors
-// follow the selected foreground; agent cursors use the same high-contrast
-// accent while output is idle. The chip's own swatch in the picker reuses the
-// same fg value.
-export interface TermColorScheme {
-  id: string;
-  fg: string;
-}
-
-export const TERM_COLOR_SCHEMES: TermColorScheme[] = [
-  { id: 'red',    fg: '#ff5252' },
-  { id: 'orange', fg: '#ff8a00' },
-  { id: 'yellow', fg: '#ffd740' },
-  { id: 'green',  fg: '#69f0ae' },
-  { id: 'cyan',   fg: '#18ffff' },
-  { id: 'blue',   fg: '#448aff' },
-  { id: 'pink',   fg: '#ff4081' },
-  { id: 'purple', fg: '#b388ff' },
-];
-
-// Mirror of `--bg-terminal` from global.css. Kept in JS so the terminal can
-// pick the right background synchronously on theme prop change — reading the
-// CSS variable lags by one switch (child effects fire before App.tsx writes
-// `data-theme`). All families follow "terminal bg == bg-app" for a continuous
-// surface. The background + selection accent come straight from THEME_COLORS
-// (the same table the appearance grid paints), so a palette can never drift
-// between the swatch the user picked and the terminal they get. Each family
-// carries a night and a day value; `isDark` selects the half on screen — which
-// also keeps OSC 11 (Claude Code's /theme auto) honest in every palette.
-function themePair(themeName: string) {
-  return THEME_COLORS.find(c => c.code === themeName);
-}
-
-// Collapse any mix of CRLF / bare CR into plain LF before handing text to
-// xterm.paste. Windows puts CRLF into the clipboard and most TUIs on the
-// other side of the PTY treat the CR as an "Enter" (submit) keystroke —
-// so a 5-line paste becomes 5 submissions plus 5 visible blank lines.
-// Normalizing here gives every paste path a single line-ending contract
-// regardless of where the clipboard text originally came from
-// (Notepad / browser / another terminal / macOS / Linux).
-function normalizePasteNewlines(text: string): string {
-  return text.replace(/\r\n?/g, '\n');
-}
-
-// Derive a slightly-darker, alpha-blended selection background from the
-// scheme's fg (or the warm coffee fallback). Multiplying RGB by 0.8 first
-// gives the "比主题色深点" feel before xterm composites it over the bg.
-// Alpha stays deliberately high: at 0.3-0.4 the highlight was effectively
-// invisible against dark backgrounds, so users concluded drag selection
-// was broken when it was actually working (issue #92).
-function deriveSelectionBg(hex: string, isDark: boolean): string {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return isDark ? 'rgba(196,149,106,0.55)' : 'rgba(196,149,106,0.45)';
-  const n = parseInt(m[1], 16);
-  const r = Math.round(((n >> 16) & 0xff) * 0.8);
-  const g = Math.round(((n >> 8) & 0xff) * 0.8);
-  const b = Math.round((n & 0xff) * 0.8);
-  return `rgba(${r},${g},${b},${isDark ? 0.55 : 0.45})`;
-}
-
-// AI-agent TUIs paint their own prompt caret; raw-shell tabs use xterm's caret
-// as their only input-position marker.
-// Build the xterm fontFamily stack. `userFont` (from Settings) is prepended
-// so it wins for the glyphs it has; the bundled CascadiaMono + Nerd Fonts +
-// platform monospace faces follow, and the CJK cascade backstops Chinese/
-// Japanese/Korean (so picking a Latin-only font never re-breaks CJK).
-// Embedded CascadiaMono guarantees consistent box-drawing; the per-glyph
-// cascade skips names absent on the host so the right OS face always wins.
-export function buildFontFamily(userFont?: string): string {
-  const ua = navigator.userAgent.toLowerCase();
-  const isLinux = ua.includes('linux');
-  const isMac = ua.includes('mac');
-  const NERD = "'CaskaydiaCove Nerd Font', 'JetBrainsMono Nerd Font', 'MesloLGS NF', 'FiraCode Nerd Font', 'Hack Nerd Font'";
-  const CJK = "'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Apple SD Gothic Neo', 'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic', 'Noto Sans CJK SC', 'Noto Sans CJK TC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', 'WenQuanYi Micro Hei'";
-  const base = isLinux
-    ? `CascadiaMono, ${NERD}, 'Ubuntu Mono', 'Noto Sans Mono', 'DejaVu Sans Mono', 'Liberation Mono', ${CJK}, monospace`
-    : isMac
-      ? `CascadiaMono, ${NERD}, ui-monospace, Menlo, Monaco, 'Courier New', ${CJK}, monospace`
-      : `CascadiaMono, ${NERD}, 'Cascadia Mono', Consolas, 'Courier New', ${CJK}, monospace`;
-  return userFont ? `"${userFont}", ${base}` : base;
-}
-
-function buildXtermTheme(
-  themeName: string,
-  hasBg: boolean | undefined,
-  schemeId?: string,
-  rawShell = false,
-  cursorVisible = true,
-  isDark = true,
-) {
-  const scheme = schemeId ? TERM_COLOR_SCHEMES.find(s => s.id === schemeId) : undefined;
-  const pair = themePair(themeName);
-  const bgOpaque = (isDark ? pair?.swatch : pair?.daySwatch) ?? (isDark ? '#0a0a0a' : '#eeece6');
-  const bg = hasBg ? 'rgba(0,0,0,0)' : bgOpaque;
-
-  // Build the default warm palette first (full 16 ANSI colors), then let
-  // the scheme — if any — re-tint only the foreground and cursor.
-  const defaultFg = isDark ? '#e8e4de' : '#2d2c2a';
-  const fg = scheme?.fg ?? defaultFg;
-  // Selection priority: terminal-color-scheme chip (if set) → app theme accent
-  // → coffee. So picking sakura/indigo/mint etc. recolors the highlight even
-  // without choosing a per-terminal fg chip.
-  const selectionAccent = scheme?.fg ?? (isDark ? pair?.ring : pair?.dayRing) ?? '#c4956a';
-  const selectionBackground = deriveSelectionBg(selectionAccent, isDark);
-
-  const base = isDark ? {
-    selectionBackground,
-    black: '#0c0c0c', red: '#e07070', green: '#7ec77e', yellow: '#d4a846',
-    blue: '#78a8d4', magenta: '#b07cc6', cyan: '#5fc4c0', white: '#e8e4de',
-    brightBlack: '#6b6762',
-  } : {
-    selectionBackground,
-    black: '#2d2c2a', red: '#cc3333', green: '#2d7a2d', yellow: '#8a6000',
-    blue: '#2952a3', magenta: '#7a3d8a', cyan: '#1a6b6b', white: '#f4f3ee',
-    brightBlack: '#5a5854',
-  };
-
-  const cursorColor = rawShell ? fg : selectionAccent;
-
-  return {
-    ...base,
-    background: bg,
-    foreground: fg,
-    // Agent TUIs send their actual composer position through the terminal
-    // cursor protocol. Keep that cursor visible after output settles. While a
-    // frame is still arriving, the cursor is temporarily painted in the
-    // terminal background so the TUI's intermediate repair cursor cannot flash
-    // at its temporary anchor position (see suspendAgentCursor below).
-    cursor: cursorVisible ? cursorColor : bg,
-    // Keep the previous release's block-cursor contrast in both states. The
-    // temporary suppression changes only the cursor fill; changing this
-    // accent as well made the visible caret return with a different color.
-    cursorAccent: bgOpaque,
-  };
-}
-
-
+// The back-to-latest button shares the conversation views' style.
+import './ClaudeConversation.css';
+import { TERM_COLOR_SCHEMES, themePair, normalizePasteNewlines, LINK_RE, trimLink, lineCells, buildFontFamily, buildXtermTheme } from '../../lib/terminal-theme';
+import { attachWebglRenderer, detachWebglRenderer, suspendWebglRenderer } from '../../lib/terminal-webgl';
+export { TERM_COLOR_SCHEMES, buildFontFamily };
+export type { TermColorScheme } from '../../lib/terminal-theme';
 // Sessions being detached to a new window — skip kill on unmount
 export const detachedSessions = new Set<string>();
-
-// ── Shared WebGL renderer budget ─────────────────────────────────────────────
-// Chromium/WebView2 caps *active* WebGL contexts at ~16 per renderer process.
-// With one terminal per tab/pane, a long session blows past that and the
-// browser force-loses the OLDEST context. We mirror VS Code's terminal (whose
-// team maintains xterm.js) with two process-wide guards:
-//   • `webglDisabled` latch — once ANY terminal fails to acquire, or loses, its
-//     GL context, every terminal that hasn't already attached (this one, if it
-//     just failed, + all future ones) renders via the DOM renderer instead.
-//     Terminals that already hold a live context keep it — the latch only
-//     stops new competition for a slot that isn't coming back. xterm
-//     auto-falls back to DOM when no render addon is loaded, so this degrades
-//     gracefully instead of stranding a tab on a dead renderer.
-//   • one cached GPU probe — the probe opens a throwaway GL context, so running
-//     it per-terminal wasted a context slot every time.
-let webglDisabled = false;
-let gpuIsHardware: boolean | null = null;
-
-function detectHardwareWebgl(): boolean {
-  try {
-    const testCanvas = document.createElement('canvas');
-    const gl = testCanvas.getContext('webgl') || testCanvas.getContext('experimental-webgl');
-    if (!gl) {
-      console.log('[TierTerminal] WebGL unavailable → DOM renderer');
-      return false;
-    }
-    const debugExt = (gl as WebGLRenderingContext).getExtension('WEBGL_debug_renderer_info');
-    if (!debugExt) {
-      // Privacy-hardened builds hide the renderer string; assume real hardware.
-      // (Defaulting to DOM here used to spike CPU on locked-down machines.)
-      console.log('[TierTerminal] GPU info hidden → WebGL (assuming hardware acceleration)');
-      return true;
-    }
-    const renderer = (gl as WebGLRenderingContext).getParameter(debugExt.UNMASKED_RENDERER_WEBGL) as string;
-    const isSoftware = /llvmpipe|softpipe|swrast|swiftshader|software|microsoft basic render|mesa offscreen/i.test(renderer);
-    console.log(`[TierTerminal] GPU: ${renderer} → ${isSoftware ? 'DOM' : 'WebGL'} (software=${isSoftware})`);
-    return !isSoftware;
-  } catch {
-    console.warn('[TierTerminal] WebGL probe failed → DOM renderer');
-    return false;
-  }
-}
-
-function probeWebglOnce(): boolean {
-  if (gpuIsHardware === null) gpuIsHardware = detectHardwareWebgl();
-  return gpuIsHardware;
-}
-
-// Max context-loss recoveries per terminal before we conclude WebGL is
-// unstable for this process and latch to the DOM renderer process-wide.
-// Mirrors Tabby's MAX_WEBGL_RECOVERY_ATTEMPTS = 3. A single loss (typically
-// Chromium reclaiming one of its ~16 active contexts) is recoverable — we
-// dispose + re-attach on next visibility. Only repeated loss on the SAME
-// terminal trips the process-wide latch.
-const MAX_WEBGL_RECOVERY_ATTEMPTS = 3;
-
-// Retain only the two most recently hidden renderers. Switching between a few
-// tabs reuses their contexts/atlases without reserving a context for every tab.
-const MAX_HIDDEN_WEBGL_RENDERERS = 2;
-const hiddenWebglRenderers = new Set<{ current: WebglAddon | null }>();
-
-// Attach the WebGL renderer to `term`, respecting the shared context budget.
-// Idempotent per terminal (guards on `webglRef`); a no-op once the latch is
-// tripped or on a software GPU. Safe to call on first reveal AND on tab
-// re-activation — a tab that is never shown never spends a context, and a
-// least-recently hidden tabs release their contexts (see suspendWebglRenderer)
-// so the active-context slots stay available for visible tabs. DOM fallback loses
-// customGlyphs / rescaleOverlappingGlyphs, so box-drawing may misalign on
-// degraded terminals.
-function attachWebglRenderer(
-  term: Terminal,
-  webglRef: { current: WebglAddon | null },
-  attemptsRef: { current: number },
-): void {
-  hiddenWebglRenderers.delete(webglRef);
-  if (webglDisabled || webglRef.current) return;
-  if (!probeWebglOnce()) return; // software GPU → DOM renderer is cheaper
-  try {
-    const webgl = new WebglAddon();
-    webgl.onContextLoss(() => {
-      if (webglRef.current !== webgl) return;
-      hiddenWebglRenderers.delete(webglRef);
-      // Browser force-loses a context when the ~16 active-context cap is hit
-      // or the GPU driver resets. Drop THIS terminal's renderer. Don't latch
-      // process-wide on a single loss — re-attach is attempted on next
-      // visibility (the tab is usually backgrounded when this fires, so the
-      // re-attach lands on the next switch-back). Only after
-      // MAX_WEBGL_RECOVERY_ATTEMPTS losses on the SAME terminal do we conclude
-      // WebGL is unstable for this process and latch globally. Terminals that
-      // already hold a live context (attached before this loss) are left alone
-      // — revoking a still-working context would be more destructive than the
-      // problem this is solving.
-      try { webgl.dispose(); } catch { /* already gone */ }
-      webglRef.current = null;
-      attemptsRef.current += 1;
-      if (attemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS) {
-        webglDisabled = true;
-        console.warn(
-          `[TierTerminal] WebGL context lost ${attemptsRef.current}× on one terminal → latching DOM renderer process-wide`,
-        );
-      }
-    });
-    term.loadAddon(webgl);
-    webglRef.current = webgl;
-    // Force an initial paint of the freshly-attached GL canvas. xterm's
-    // setRenderer() already calls _fullRefresh(), but that render is
-    // rAF-deferred and — when the attach lands on a tab that's ALREADY
-    // visible (the switch-back path, where the IO/activation effect fires
-    // after fit()) — the deferred render can race the canvasHidden mask's
-    // onRender reveal, or land after the mask already fell back to its
-    // 150 ms timeout. The new GL canvas then shows blank/stale until a
-    // window resize forces ResizeObserver → fit() → re-render (issue #74,
-    // "切换窗口卡住，重新拖动界面才正常"). An explicit refresh() re-marks
-    // every row dirty and re-schedules, guaranteeing a painted GL frame
-    // shortly after attach regardless of when the caller runs it.
-    try {
-      if (term.rows > 0) term.refresh(0, term.rows - 1);
-    } catch { /* renderer not ready yet — first write surfaces it */ }
-  } catch (err) {
-    // No context available even now → give up on WebGL process-wide.
-    webglDisabled = true;
-    console.error('[TierTerminal] WebGL attach failed → DOM renderer', err);
-  }
-}
-
-// Release this terminal's WebGL context WITHOUT tripping the recovery budget
-// or the process-wide latch — used on cache eviction or unmount. Frees one of the
-// ~16 active-context slots so new tabs don't get force-degraded to DOM. xterm
-// falls back to its DOM renderer; buffer state is preserved, so re-attach on
-// next visibility picks up where it left off. No-op when already detached.
-function detachWebglRenderer(
-  webglRef: { current: WebglAddon | null },
-): void {
-  hiddenWebglRenderers.delete(webglRef);
-  if (!webglRef.current) return;
-  const webgl = webglRef.current;
-  webglRef.current = null;
-  try { webgl.dispose(); } catch { /* already gone */ }
-}
-
-function suspendWebglRenderer(webglRef: { current: WebglAddon | null }): void {
-  if (!webglRef.current || hiddenWebglRenderers.has(webglRef)) return;
-  hiddenWebglRenderers.add(webglRef);
-  if (hiddenWebglRenderers.size > MAX_HIDDEN_WEBGL_RENDERERS) {
-    const oldest = hiddenWebglRenderers.values().next().value;
-    if (oldest) detachWebglRenderer(oldest);
-  }
-}
 
 interface TierTerminalProps {
   sessionId: string;
@@ -474,6 +187,8 @@ function TierTerminalImpl({
   // (pre-paint, via useLayoutEffect) so the solid terminal background shows
   // through instead, then unmask once xterm paints its first fresh frame.
   const [canvasHidden, setCanvasHidden] = useState(false);
+  // The viewport sits above the newest output (normal buffer only: full-screen TUIs scroll themselves).
+  const [scrolledUp, setScrolledUp] = useState(false);
 
   // ── Terminal context menu ────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<TermContextMenuState | null>(null);
@@ -488,7 +203,24 @@ function TierTerminalImpl({
   const { contextMenuHandlers, copyMenuSelection, closeMenu: closeCtxMenu } = useTerminalContextMenu(
     () => xtermRef.current?.getSelection() || selectedSurfaceText(wrapRef.current), setCtxMenu,
     () => codexSelectionRef.current?.read(),
+    (x, y) => linkAtPointer(x, y),
   );
+  const folderPathRef = useRef(folderPath);
+  folderPathRef.current = folderPath;
+  /** The URL or file path under a right click, read from the buffer cell at that point. */
+  const linkAtPointer = (clientX: number, clientY: number): ConversationLink | null => {
+    const term = xtermRef.current, screen = termRef.current?.querySelector('.xterm-screen');
+    if (!term || !screen) return null;
+    const box = screen.getBoundingClientRect();
+    const col = Math.floor((clientX - box.left) / (box.width / term.cols)), row = Math.floor((clientY - box.top) / (box.height / term.rows));
+    const line = term.buffer.active.getLine(term.buffer.active.viewportY + row);
+    if (!line || col < 0 || col >= term.cols) return null;
+    const { text, cols } = lineCells(line);
+    const index = cols.findIndex(value => value >= col);
+    if (index < 0) return null;
+    const url = [...text.matchAll(LINK_RE)].find(match => index >= match.index && index < match.index + match[0].length);
+    return url ? { target: trimLink(url[0]), local: false } : pathLinkAt(text, index, folderPathRef.current ?? null);
+  };
 
   const t = useT();
 
@@ -765,9 +497,10 @@ function TierTerminalImpl({
       xtermRef.current?.focus();
     });
 
-    // Wait for CascadiaMono to load before opening the terminal so xterm
+    // Wait for the bundled fonts to load before opening the terminal so xterm
     // measures cell metrics with the correct font (avoids box-drawing misalignment).
     const fontReady = Promise.all([
+      document.fonts.load('14px JetBrainsMono'),
       document.fonts.load('14px CascadiaMono'),
       termFont ? document.fonts.load(`14px "${termFont}"`) : Promise.resolve(),
     ]).catch(() => {});
@@ -1309,6 +1042,29 @@ function TierTerminalImpl({
     });
 
     installTerminalLinks(term, commands.openUrl);
+    // Bare paths are revealed, never executed. Keep the shared URL provider's
+    // wrapped-line handling while adding upstream's local-file affordance.
+    term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const line = term.buffer.active.getLine(bufferLineNumber - 1);
+        if (!line) { callback([]); return; }
+        const { text, cols } = lineCells(line);
+        const links: import('@xterm/xterm').ILink[] = [];
+        for (const path of findPaths(text)) {
+          const link = conversationLink(path.text, folderPathRef.current ?? null);
+          if (!link?.local) continue;
+          links.push({
+            range: {
+              start: { x: (cols[path.start] ?? path.start) + 1, y: bufferLineNumber },
+              end: { x: (cols[path.end - 1] ?? path.end - 1) + 1, y: bufferLineNumber },
+            },
+            text: path.text,
+            activate: () => { void commands.showInFolder(link.target).catch(() => {}); },
+          });
+        }
+        callback(links);
+      },
+    });
 
     xtermRef.current = term;
     // Register with the output scheduler before any PTY output can arrive —
@@ -1319,6 +1075,13 @@ function TierTerminalImpl({
     unlisteners.push(registerTerminalObserver(sessionId, term));
     const controlsGeneration = getTerminalObserver(sessionId)!.generation;
     unlisteners.push(() => clearSessionControls(sessionId, controlsGeneration));
+    // Same back-to-latest button as the conversation views. Output arriving while scrolled up keeps the
+    // viewport in place, so new lines are rechecked too; an unchanged value does not re-render.
+    // Checked once per parsed write rather than per line, so streaming output stays off React's path;
+    // resize covers reflow, and a fresh terminal starts at the bottom.
+    const syncScrolledUp = () => { const buffer = term.buffer.active; setScrolledUp(buffer.type === 'normal' && buffer.viewportY < buffer.baseY); };
+    setScrolledUp(false);
+    for (const listener of [term.onScroll(syncScrolledUp), term.onWriteParsed(syncScrolledUp), term.onResize(syncScrolledUp), term.buffer.onBufferChange(syncScrolledUp)]) unlisteners.push(() => listener.dispose());
     unlisteners.push(registerTerminalControl(sessionId, term, statusConfirmed => {
       markNotifySoundPromptSubmitted(sessionId, tool);
       if (!statusConfirmed) markAgentSubmission();
@@ -1525,6 +1288,12 @@ function TierTerminalImpl({
           // not establish state. Recheck the screen after a known mark leaves.
           nativeStatus = null;
           scheduleScreenIdle();
+        }
+        if (tool === 'pi') {
+          // An unnamed session's title is just the folder; the tab keeps its history name.
+          const name = parsePiTerminalTitle(title);
+          if (!name) return;
+          displayTitle = name;
         }
       }
       if (displayTitle !== lastTabTitle) {
@@ -2320,12 +2089,21 @@ function TierTerminalImpl({
             skips them (issue #95 — see TierTerminal.css). */}
         <div ref={termRef} className={`tier-xterm${keepXtermCursor ? ' raw-shell' : ''}`} />
       </div>
+      {scrolledUp && <button type="button" className="claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { xtermRef.current?.scrollToBottom(); xtermRef.current?.focus(); setScrolledUp(false); }}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v11M3 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>}
 
       {/* Terminal right-click context menu */}
       {ctxMenu && (
         <TermContextMenu
           menu={ctxMenu}
           onClose={closeCtxMenu}
+          link={ctxMenu.link ? {
+            local: ctxMenu.link.local,
+            onOpen: () => { void commands.openUrl(ctxMenu.link!.target).catch(() => {}); closeCtxMenu(); },
+            onCopy: () => { void clipboardWrite(ctxMenu.link!.target); closeCtxMenu(); },
+            onReveal: () => { void commands.showInFolder(ctxMenu.link!.target).catch(() => {}); closeCtxMenu(); },
+          } : undefined}
           onCopy={() => copyMenuSelection(ctxMenu)}
           onPaste={() => {
             closeCtxMenu();
@@ -2376,7 +2154,9 @@ function TierTerminalImpl({
                   <mask id={`splashMask-${sessionId}`}>
                     <path fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
                       d="M8 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M12 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M16 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4">
-                      {/* Linux gate — see Explorer.tsx brand-icon for full rationale. */}
+                      {/* WebKit2GTK re-rasters a SMIL path morph inside a mask on every frame, so Linux keeps
+                          the steam still. The loop repaints the page each frame elsewhere too, which is
+                          acceptable only because the splash shows just while a terminal starts. */}
                       {!__IS_LINUX__ && (
                         <animate attributeName="d" dur="3s" repeatCount="indefinite"
                           values="M8 0c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M12 0c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M16 0c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4;M8 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M12 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4M16 -8c0 2 -2 2 -2 4s2 2 2 4s-2 2 -2 4s2 2 2 4"/>

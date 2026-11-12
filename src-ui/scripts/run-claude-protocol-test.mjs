@@ -4,7 +4,8 @@ import { runInNewContext } from 'node:vm';
 import { fileURLToPath } from 'node:url';
 const result = await build({ entryPoints: [fileURLToPath(new URL('../src/lib/claude-protocol.ts', import.meta.url))], bundle: true, platform: 'node', format: 'cjs', write: false });
 const module = { exports: {} }; runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, console, Date });
-const { emptyClaudeState, reduceClaudeEvent } = module.exports;
+const { emptyClaudeState, reduceClaudeEvent, coldReturn, claudeCacheStatus, finishTurn } = module.exports;
+const plain = value => JSON.parse(JSON.stringify(value));
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log(`ok ${name}`); }
 const stream = event => ({ type: 'stream_event', event });
@@ -96,6 +97,10 @@ test('only a locally requested stop downgrades its EDE diagnostic',()=>{
   assert.equal(mixed.error,'API Error: 503 unavailable','real provider errors survive a concurrent stop');
   const unknown=reduceClaudeEvent(state,{type:'result',is_error:true,errors:[]},5000);
   assert.equal(unknown.errorKey,'claude.error.request_failed','an unexplained error is never silently hidden');
+  const midAnswer=reduceClaudeEvent(state,{type:'result',is_error:true,errors:['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null']},5000);
+  assert.equal(midAnswer.error,undefined,'a stop mid-answer (stop_reason=null) is cancelled, not an error');
+  const marked=reduceClaudeEvent(state,{type:'user',uuid:'m1',message:{role:'user',content:'[Request interrupted by user]'}},5000);
+  assert.equal(marked.messages.some(m=>m.role==='user'),false,'the interruption marker is not shown as the user\'s message');
   const otherDiagnostic=reduceClaudeEvent(state,{type:'result',is_error:true,errors:['[ede_diagnostic] unexpected provider failure']},5000);
   assert.equal(otherDiagnostic.error,'[ede_diagnostic] unexpected provider failure','unrecognized diagnostics still surface');
   const exit=reduceClaudeEvent(state,{type:'coffee_exit',code:1,detail:'Process crashed'},5000);
@@ -121,8 +126,14 @@ test('side calls streamed after a finished turn neither show working nor add row
   f.send({type:'system',subtype:'session_state_changed',state:'idle'});
   assert.equal(f.state.busy,false);
   // While a sent prompt awaits its result, an early idle does not end the turn.
-  const pending = reduceClaudeEvent({...f.state,busy:true,pendingTurns:1},{type:'system',subtype:'session_state_changed',state:'idle'});
+  const pending = reduceClaudeEvent({...f.state,busy:true,pendingTurns:1,sentSinceResult:1},{type:'system',subtype:'session_state_changed',state:'idle'});
   assert.equal(pending.busy,true);
+  // A prompt sent mid-turn joins that turn: two sends, one result, then idle ends the turn.
+  const idle={type:'system',subtype:'session_state_changed',state:'idle'};
+  const joined = reduceClaudeEvent({...f.state,busy:true,pendingTurns:2,sentSinceResult:2},{type:'result',subtype:'success'});
+  assert.equal(joined.busy,true,'a result alone cannot tell whether another turn follows');
+  const ended = reduceClaudeEvent(joined,idle);
+  assert.equal(ended.busy,false); assert.equal(ended.pendingTurns,0); assert.equal(ended.status,'idle');
   // CLIs without session state events keep the previous behavior.
   const legacy = reduceClaudeEvent(emptyClaudeState(),stream({type:'message_start',message:{id:'legacy'}}));
   assert.equal(legacy.busy,true);
@@ -137,5 +148,100 @@ test('background tasks outlive the turn and clear when the CLI reports none', ()
   assert.equal(f.state.backgroundTasks.length,0);
   f.send({type:'system',subtype:'background_tasks_changed',tasks:[{task_id:'b2',task_type:'local_agent',description:'Review'}]});
   assert.equal(reduceClaudeEvent(f.state,{type:'coffee_exit',code:0}).backgroundTasks.length,0,'an exited CLI has no running tasks');
+});
+test('restored usage counts toward a cold return without touching the live context meter', () => {
+  const usage = { input_tokens: 2, cache_read_input_tokens: 680000, cache_creation_input_tokens: 0, output_tokens: 10 };
+  let s = reduceClaudeEvent(emptyClaudeState(), { type: 'assistant', uuid: 'a', message: { id: 'm', role: 'assistant', content: [{ type: 'text', text: 'Done' }], usage } }, 1000, true);
+  assert.equal(s.lastContextTokens, 680012);
+  assert.equal(s.contextTokens, 0, 'history leaves the live meter alone');
+  const hour = 3_600_000, ready = { ...s, ready: true };
+  assert.equal(coldReturn(ready, 1000 + hour), null, 'inside the cache lifetime');
+  assert.equal(coldReturn(ready, 1000 + hour * 3).idleMinutes, 180);
+  assert.equal(coldReturn({ ...ready, busy: true }, 1000 + hour * 3), null, 'a running turn keeps its cache warm');
+  assert.equal(coldReturn({ ...ready, lastContextTokens: 99999 }, 1000 + hour * 3), null, 'small contexts are cheap to rewrite');
+  assert.equal(coldReturn({ ...ready, messages: [] }, 1000 + hour * 3), null);
+  s = reduceClaudeEvent(s, { type: 'system', subtype: 'compact_boundary' }, 2000, true);
+  assert.equal(s.lastContextTokens, 0, 'compaction replaces the history');
+});
+test('reported cache lifetimes govern warm status and cold-return warnings', () => {
+  const request = (id, usage, parent) => ({ type: 'assistant', parent_tool_use_id: parent, message: { id, content: [{ type: 'text', text: 'Done' }], usage } });
+  const usage = { input_tokens: 10, cache_creation_input_tokens: 200000, cache_creation: { ephemeral_5m_input_tokens: 200000 } };
+  const at = 1_000_000, minute = 60_000;
+  let s = reduceClaudeEvent({ ...emptyClaudeState(), ready: true }, request('five', usage), at);
+  assert.equal(claudeCacheStatus(s, at + 4 * minute).kind, 'warm');
+  assert.equal(coldReturn(s, at + 5 * minute).tokens, 200010, 'five-minute caches warn without waiting seventy minutes');
+  s = reduceClaudeEvent(s, request('five', usage), at + minute);
+  assert.equal(claudeCacheStatus(s, at + 5 * minute).kind, 'cold', 'repeated blocks cannot extend a request lifetime');
+  const hit = { input_tokens: 5, cache_read_input_tokens: 200000 };
+  s = reduceClaudeEvent(s, request('hit', hit), at + 6 * minute);
+  assert.equal(claudeCacheStatus(s, at + 10 * minute).kind, 'warm', 'cache hits renew the reported lifetime');
+  s = reduceClaudeEvent(s, request('older', usage), at, true);
+  assert.equal(claudeCacheStatus(s, at + 10 * minute).kind, 'warm', 'loading older history cannot replace the latest cache');
+  s = reduceClaudeEvent(s, { type: 'system', subtype: 'compact_boundary' }, at + minute, true);
+  assert.equal(claudeCacheStatus(s, at + 10 * minute).kind, 'warm', 'a boundary in an older page cannot clear a newer cache');
+  s = reduceClaudeEvent(s, request('agent', { ...usage, cache_creation: { ephemeral_1h_input_tokens: 200000 } }, 'tool'), at + 10 * minute);
+  assert.equal(claudeCacheStatus(s, at + 11 * minute).kind, 'cold', 'subagent usage cannot renew the main cache');
+  const hour = { ...usage, cache_creation: { ephemeral_1h_input_tokens: 200000 } };
+  s = reduceClaudeEvent(s, request('hour', hour), at + 12 * minute);
+  assert.equal(coldReturn(s, at + 71 * minute), null);
+  assert.equal(coldReturn(s, at + 72 * minute).idleMinutes, 60);
+  s = reduceClaudeEvent(s, request('legacy-write', { ...hit, cache_creation_input_tokens: 100 }), at + 72 * minute);
+  assert.equal(claudeCacheStatus(s, at + 72 * minute).kind, 'unknown', 'writes without lifetime metadata cannot inherit the earlier lifetime');
+  s = reduceClaudeEvent(s, request('uncached', { input_tokens: 200000 }), at + 73 * minute);
+  assert.equal(claudeCacheStatus(s, at + 74 * minute).kind, 'unknown', 'an uncached request cannot reuse an old lifetime');
+  s = reduceClaudeEvent(s, request('mixed', { ...hour, cache_creation: { ephemeral_1h_input_tokens: 150000, ephemeral_5m_input_tokens: 50000 } }), at + 75 * minute);
+  assert.equal(claudeCacheStatus(s, at + 80 * minute).kind, 'cold', 'mixed lifetimes use the shorter one');
+  s = reduceClaudeEvent(s, { type: 'system', subtype: 'compact_boundary' }, at + 81 * minute);
+  assert.equal(claudeCacheStatus(s, at + 82 * minute).kind, 'unknown');
+  s = reduceClaudeEvent(s, request('before-compaction', hour), at + 80 * minute, true);
+  assert.equal(claudeCacheStatus(s, at + 82 * minute).kind, 'unknown', 'loading pre-compaction history cannot resurrect its cache');
+  assert.equal(s.lastContextTokens, 0);
+  s = reduceClaudeEvent(s, request('after-compaction', hit), at + 83 * minute);
+  assert.equal(claudeCacheStatus(s, at + 84 * minute).kind, 'unknown', 'a read after compaction cannot inherit the replaced cache lifetime');
+});
+
+test('a predicted next prompt is kept only while no prompt has moved past it', () => {
+  let s = emptyClaudeState();
+  s = reduceClaudeEvent(s, { type: 'prompt_suggestion', suggestion: '  next step  ' }, 1000);
+  assert.equal(s.suggestion, 'next step');
+  assert.equal(s.messages.length, 0, 'a suggestion is not a transcript row');
+  s = reduceClaudeEvent({ ...emptyClaudeState(), busy: true }, { type: 'prompt_suggestion', suggestion: 'late' }, 1000);
+  assert.equal(s.suggestion, undefined, 'a guess for a turn already answered by a new prompt is dropped');
+  s = reduceClaudeEvent(emptyClaudeState(), { type: 'prompt_suggestion', suggestion: 'kept' }, 1000);
+  s = reduceClaudeEvent(s, stream({ type: 'message_start', message: { id: 'm1' } }), 1100);
+  assert.equal(s.suggestion, undefined, 'a turn the user did not start still moves past the guess');
+  s = reduceClaudeEvent(emptyClaudeState(), { type: 'prompt_suggestion', suggestion: 'kept' }, 1000);
+  s = reduceClaudeEvent(s, { type: 'coffee_exit', code: 1 }, 1100);
+  assert.equal(s.suggestion, undefined, 'a session that exited offers nothing to send to');
+});
+test('every turn keeps its time, tokens and cost on its last message', () => {
+  const usage = (input, output, read = 0, write = 0, hour = 0) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: write, cache_creation: { ephemeral_1h_input_tokens: hour } });
+  const assistant = (id, block, use) => ({ type: 'assistant', uuid: `${id}-${block}`, message: { id, model: 'claude-x', content: [{ type: 'text', text: `${id} ${block}` }], usage: use } });
+  // Live: two turns in one process; the reported cumulative cost is split between them.
+  let s = { ...emptyClaudeState(), ready: true, busy: true, pendingTurns: 1, messages: [{ id: 'pending:1', role: 'user', content: 'first', timestamp: 1000 }] };
+  s = reduceClaudeEvent(s, { type: 'user', uuid: 'u1', message: { role: 'user', content: 'first' } }, 1100);
+  s = reduceClaudeEvent(s, assistant('m1', 'a', usage(10, 5, 100, 20, 8)), 2000);
+  s = reduceClaudeEvent(s, assistant('m1', 'b', usage(10, 5, 100, 20, 8)), 2100);
+  s = reduceClaudeEvent(s, assistant('m2', 'a', usage(1, 2)), 3000);
+  s = reduceClaudeEvent(s, { type: 'result', duration_ms: 4200, total_cost_usd: 0.5 }, 5200);
+  const first = s.messages.at(-1).turnStats;
+  assert.deepEqual(plain(first), { durationMs: 4200, usage: { input: 11, output: 7, cacheRead: 100, cacheWrite: 20, cacheWrite1h: 8 }, model: 'claude-x', cost: 0.5 }, 'a response repeated per block counts once');
+  s = { ...s, busy: true, pendingTurns: 1, messages: [...s.messages, { id: 'pending:2', role: 'user', content: 'second', timestamp: 6000 }] };
+  s = reduceClaudeEvent(s, { type: 'user', uuid: 'u2', message: { role: 'user', content: 'second' } }, 6100);
+  s = reduceClaudeEvent(s, assistant('m3', 'a', usage(3, 4)), 7000);
+  s = reduceClaudeEvent(s, { type: 'result', duration_ms: 1000, total_cost_usd: 0.75 }, 7100);
+  assert.equal(s.messages.at(-1).turnStats.cost, 0.25, 'each live turn takes what it added to the process total');
+  assert.equal(reduceClaudeEvent(s, { type: 'coffee_exit', code: 0 }, 8000).processCost, 0, 'a new process starts its total again');
+  // History: prompts split turns, turn_duration is used when recorded, and a page ends its last turn.
+  let h = emptyClaudeState();
+  for (const [row, at] of [
+    [{ type: 'user', uuid: 'h1', message: { role: 'user', content: 'old one' } }, 10_000],
+    [assistant('h-m1', 'a', usage(5, 5)), 11_000], [{ type: 'system', subtype: 'turn_duration', durationMs: 2500 }, 12_000],
+    [{ type: 'user', uuid: 'h2', message: { role: 'user', content: 'old two' } }, 20_000],
+    [assistant('h-m2', 'a', usage(7, 3)), 21_000], [assistant('h-m2', 'b', usage(7, 3)), 26_000],
+  ]) h = reduceClaudeEvent(h, row, at, true);
+  h = finishTurn(h);
+  const stats = h.messages.filter(m => m.turnStats).map(m => [m.id, m.turnStats.durationMs, m.turnStats.usage.input, m.turnStats.cost]);
+  assert.deepEqual(plain(stats), [['h-m1:0:text', 2500, 5, null], ['h-m2:0:text', 6000, 7, null]], 'history has tokens and time but no reported cost');
 });
 console.log(`${passed} Claude protocol checks passed`);

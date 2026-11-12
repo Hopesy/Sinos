@@ -13,22 +13,26 @@
 // is unchanged; only the presentation moved.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { useAppState, useAppDispatch, HOTKEY_SCHEMES, type HotkeyScheme, type TitlebarToggleDisplay, type ThemeColor, type ThemeMode, type ThemeShape, type IconTheme } from '../../store/app-state';
+import { SegmentedTabs } from './SegmentedTabs';
+import { AgentSettings } from '../agent/AgentPages';
+import { useAppState, useAppDispatch, HOTKEY_SCHEMES, type HotkeyScheme, type ThemeColor, type ThemeMode, type ThemeShape, type IconTheme } from '../../store/app-state';
 import { playNotifySound } from '../../lib/notify-sound';
 import { useT } from '../../i18n/useT';
 import { IS_MACOS, IS_WINDOWS } from '../../lib/platform';
 import { TERM_COLOR_SCHEMES } from '../center/TierTerminal';
-import { commands, type FontInfo } from '../../tauri';
+import { commands, isTauri, type FontInfo } from '../../tauri';
 import { FontPicker } from './FontPicker';
+import { VoiceSettings } from './VoiceSettings';
 import { SettingsSlider } from './SettingsSlider';
 import { setUiScale, useUiScale } from '../../lib/ui-scale';
-import { THEME_COLORS, THEME_MODES, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, TASK_VIEW_MODES, isMaskTintTheme } from '../../lib/personalization';
+import { THEME_COLORS, THEME_MODES, THEME_SHAPES, ICON_ART_THEMES, LANGUAGES, isMaskTintTheme } from '../../lib/personalization';
 import { RelaySettings } from './RelaySettings';
 import { CloseBehaviorSettings } from './CloseBehaviorSettings';
 import { DesktopNotificationSettings } from './DesktopNotificationSettings';
 import './SettingsModal.css';
 
-type Section = 'general' | 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'language' | 'feedback';
+type Section = 'general' | 'appearance' | 'wallpaper' | 'terminal' | 'remote' | 'gambit' | 'sound' | 'voice' | 'language' | 'agent' | 'feedback';
+const SECTION_IDS: Section[] = ['general', 'appearance', 'wallpaper', 'terminal', 'remote', 'gambit', 'sound', 'voice', 'language', 'agent', 'feedback'];
 
 // Trailing "opens outside the app" affordance on the feedback cards.
 const ExternalLinkArrow = () => (
@@ -40,35 +44,25 @@ const ExternalLinkArrow = () => (
 // Read a `cc-*` boolean localStorage preference. Module-level
 // so the SettingsModal sound toggles can seed their useState initializers.
 // Both sound prefs default to ON (absent = true).
+/** A long sound file name, cut in the middle so its ending stays readable. */
+function shortFileName(name: string): string {
+  const characters = Array.from(name);
+  return characters.length > 28 ? `${characters.slice(0, 16).join('')}…${characters.slice(-10).join('')}` : name;
+}
+
 function readSoundPref(key: string): boolean {
   try {
     return localStorage.getItem(key) !== 'false';
   } catch { return true; }
 }
 
-// Per-mode preview glyphs for the Tasks section (checklist vs sticky note).
-const TASK_VIEW_ICONS: Record<'list' | 'note' | 'prompt', ReactNode> = {
-  list: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 6h11" /><path d="M9 12h11" /><path d="M9 18h11" />
-      <path d="m3 6 1 1 2-2" /><path d="m3 12 1 1 2-2" /><circle cx="4" cy="18" r="1" />
-    </svg>
-  ),
-  note: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10l6-6V5a2 2 0 0 0-2-2Z" />
-      <path d="M15 21v-5a1 1 0 0 1 1-1h5" />
-    </svg>
-  ),
-  prompt: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 11V5a2 2 0 0 1 2-2h6l9 9-8 8-9-9Z" />
-      <circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
-    </svg>
-  ),
-};
 
 const ICONS: Record<Section, ReactNode> = {
+  agent: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+    </svg>
+  ),
   appearance: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /><circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
@@ -104,6 +98,11 @@ const ICONS: Record<Section, ReactNode> = {
       <circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" />
     </svg>
   ),
+  voice: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M19 10v1a7 7 0 0 1-14 0v-1" /><path d="M12 18v4" />
+    </svg>
+  ),
   language: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" />
@@ -129,7 +128,11 @@ export function SettingsModal() {
   const { state } = useAppState();
   const dispatch = useAppDispatch();
   const t = useT();
-  const [section, setSection] = useState<Section>('general');
+  // Held in app state so other places can open a section (Sinos Agent's channel status opens 'agent').
+  // Wallpaper, sound and shortcuts were sections of their own; a request for one opens the section that holds it now.
+  const requested = state.settingsSection === 'wallpaper' ? 'appearance' : state.settingsSection === 'sound' || state.settingsSection === 'gambit' ? 'general' : state.settingsSection;
+  const section: Section = SECTION_IDS.includes(requested as Section) ? requested as Section : 'general';
+  const setSection = (next: Section) => dispatch({ type: 'SET_SETTINGS_SECTION', section: next });
   const uiScale = useUiScale();
   const scalePercent = uiScale.requestedPercent ?? uiScale.percent;
   const [dragPercent, setDragPercent] = useState<number | null>(null);
@@ -155,6 +158,13 @@ export function SettingsModal() {
   // `if (!open) return null` early-return — hooks can't run conditionally.
   const [soundDone, setSoundDone] = useState(() => readSoundPref('cc-sound-done'));
   const [soundWait, setSoundWait] = useState(() => readSoundPref('cc-sound-wait'));
+  const [soundFiles, setSoundFiles] = useState<{ done: string | null; wait: string | null }>({ done: null, wait: null });
+  const [soundFailed, setSoundFailed] = useState<'done' | 'wait' | null>(null);
+  useEffect(() => {
+    setSoundFailed(null);
+    if (section !== 'general' || !state.settingsOpen || !isTauri) return;
+    commands.notifySoundFiles().then(setSoundFiles, err => console.warn('[Settings] sound files unavailable:', err));
+  }, [section, state.settingsOpen]);
 
   const open = state.settingsOpen;
   const close = () => { finishScaleDrag(); dispatch({ type: 'SET_SETTINGS_OPEN', open: false }); };
@@ -187,7 +197,11 @@ export function SettingsModal() {
     if (shellCaps === null) commands.detectShells().then(setShellCaps).catch(() => {});
   }, [open, section, fonts, shellCaps]);
 
-  if (!open) return null;
+  // Stays mounted after close until the fade-out finishes, then unmounts.
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => { if (open) setMounted(true); }, [open]);
+
+  if (!open && !mounted) return null;
 
   // ── Handlers (identical to the former left-panel ThemeMenu/Lang wiring) ──
   const setTheme = (th: ThemeColor) => dispatch({ type: 'SET_THEME', theme: th });
@@ -247,7 +261,6 @@ export function SettingsModal() {
     dispatch({ type: 'SET_DEFAULT_SHELL', shell });
   };
   const setOpacity = (n: number) => dispatch({ type: 'SET_WALLPAPER_OPACITY', opacity: n });
-  const setTaskView = (mode: 'list' | 'note' | 'prompt') => dispatch({ type: 'SET_TASK_VIEW_MODE', mode });
   const setEnterToSend = (value: boolean) => {
     dispatch({ type: 'SET_GAMBIT_ENTER_TO_SEND', value });
     try { localStorage.setItem('cc-gambit-enter-send', String(value)); } catch { /* Best-effort operation; failure is non-fatal. */ }
@@ -256,10 +269,6 @@ export function SettingsModal() {
     dispatch({ type: 'SET_HOTKEY_SCHEME', value });
     try { localStorage.setItem('cc-hotkey-scheme', value); } catch { /* Best-effort operation; failure is non-fatal. */ }
   };
-  const setTitlebarToggleDisplay = (value: TitlebarToggleDisplay) => {
-    dispatch({ type: 'SET_TITLEBAR_TOGGLE_DISPLAY', value });
-    try { localStorage.setItem('cc-titlebar-toggle-display', value); } catch { /* Best-effort operation; failure is non-fatal. */ }
-  };
 
   // Sound notification toggles — local state + localStorage only. The
   // notify-sound module reads these keys live on native title state changes,
@@ -267,6 +276,21 @@ export function SettingsModal() {
   const writeSoundPref = (key: string, setter: (v: boolean) => void) => (v: boolean) => {
     setter(v);
     try { localStorage.setItem(key, String(v)); } catch { /* Best-effort operation; failure is non-fatal. */ }
+  };
+  const pickSound = async (kind: 'done' | 'wait') => {
+    setSoundFailed(null);
+    try {
+      const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
+      const selected = await openDialog({ filters: [{ name: 'Audio', extensions: ['mp3', 'wav'] }] });
+      if (selected && typeof selected === 'string') {
+        const name = await commands.notifySoundChoose(kind, selected);
+        setSoundFiles(files => ({ ...files, [kind]: name }));
+      }
+    } catch (err) { console.warn('[Settings] sound picker failed:', err); setSoundFailed(kind); }
+  };
+  const clearSound = (kind: 'done' | 'wait') => {
+    setSoundFailed(null);
+    commands.notifySoundClear(kind).then(() => setSoundFiles(files => ({ ...files, [kind]: null })), err => { console.warn('[Settings] sound removal failed:', err); setSoundFailed(kind); });
   };
   const setSoundDonePref = writeSoundPref('cc-sound-done', setSoundDone);
   const setSoundWaitPref = writeSoundPref('cc-sound-wait', setSoundWait);
@@ -277,26 +301,28 @@ export function SettingsModal() {
   const SECTIONS: { id: Section; label: string }[] = [
     { id: 'general',    label: t('settings.general') },
     { id: 'appearance', label: t('settings.appearance') },
-    { id: 'wallpaper',  label: t('settings.wallpaper') },
     { id: 'terminal',   label: t('settings.terminal') },
     { id: 'remote',     label: t('settings.remote') },
-    { id: 'gambit',     label: t('settings.gambit') },
-    { id: 'sound',      label: t('settings.sound') },
+    { id: 'voice',      label: t('settings.voice') },
     { id: 'language',   label: t('settings.language') },
+    { id: 'agent',      label: 'Sinos Agent' },
     { id: 'feedback',   label: t('settings.feedback') },
   ];
   const currentLabel = SECTIONS.find(s => s.id === section)?.label ?? '';
 
   return (
-    <div className="settings-overlay" onMouseDown={close}>
-      <div
-        className="settings-modal"
-        onMouseDown={e => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-      >
+    // A page over the centre area, like usage and tool settings, not a dialog over the whole window.
+    <div
+      className={open ? 'settings-page' : 'settings-page settings-page--closing'}
+      onAnimationEnd={e => { if (e.target === e.currentTarget && !open) setMounted(false); }}
+    >
+      <div className="settings-modal settings-modal--page" role="region" aria-label={t('settings.title')}>
         <aside className="settings-rail">
-          <div className="settings-rail-title">{t('settings.title')}</div>
+          {/* The page covers the whole window, so its first entry leads back. */}
+          <button type="button" className="settings-rail-back" onClick={close}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            {t('settings.back')}
+          </button>
           {SECTIONS.map(s => (
             <button
               key={s.id}
@@ -313,7 +339,7 @@ export function SettingsModal() {
               <button
                 type="button"
                 className="settings-rail-version-link"
-                onClick={() => commands.openUrl('https://github.com/Hopesy/sinos').catch(() => {})}
+                onClick={() => commands.openUrl('https://github.com/Hopesy/Sinos').catch(() => {})}
               >
                 GitHub
               </button>
@@ -324,14 +350,10 @@ export function SettingsModal() {
         <section className="settings-content">
           <header className="settings-header">
             <span className="settings-header-title">{currentLabel}</span>
-            <button className="settings-close close-button" onClick={close} aria-label="Close">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-              </svg>
-            </button>
           </header>
 
-          <div className="settings-body">
+          <div className={`settings-body${section === 'agent' ? ' settings-body--agent' : ''}`}>
+            {section === 'agent' && <AgentSettings />}
             {section === 'appearance' && (
               <>
                 <div className="settings-section-head">
@@ -434,8 +456,10 @@ export function SettingsModal() {
               </>
             )}
 
-            {section === 'wallpaper' && (
+            {/* The window is roomy now: wallpaper sits under appearance, sounds under general. */}
+            {section === 'appearance' && (
               <>
+                <div className="settings-group-gap" aria-hidden="true" />
                 <div className="settings-section-label">{t('settings.wallpaper')}</div>
                 <div className="settings-wallpaper-actions">
                   <button className="settings-btn" onClick={pickBg}>{t('settings.wallpaper.pick')}</button>
@@ -583,105 +607,6 @@ export function SettingsModal() {
 
             {section === 'remote' && <RelaySettings />}
 
-            {section === 'gambit' && (
-              <>
-                <div className="settings-section-label">{t('settings.send.title')}</div>
-                <div className="settings-key-row">
-                  <button
-                    className={`settings-key-card${state.gambitEnterToSend ? ' active' : ''}`}
-                    onClick={() => setEnterToSend(true)}
-                    aria-pressed={state.gambitEnterToSend}
-                  >
-                    <span className="settings-key-combo"><kbd>Enter</kbd></span>
-                    <span className="settings-key-sub">Shift+Enter {t('settings.send.newline')}</span>
-                  </button>
-                  <button
-                    className={`settings-key-card${!state.gambitEnterToSend ? ' active' : ''}`}
-                    onClick={() => setEnterToSend(false)}
-                    aria-pressed={!state.gambitEnterToSend}
-                  >
-                    <span className="settings-key-combo"><kbd>{modKey}</kbd><span className="settings-key-plus">+</span><kbd>Enter</kbd></span>
-                    <span className="settings-key-sub">Enter {t('settings.send.newline')}</span>
-                  </button>
-                </div>
-
-                <div className="settings-section-label">{t('settings.gambit.hotkey')}</div>
-                <div className="settings-key-row settings-key-row--keys">
-                  {HOTKEY_SCHEMES.map(s => {
-                    const active = state.hotkeyScheme === s.code;
-                    return (
-                      <button
-                        key={s.code}
-                        className={`settings-key-card${active ? ' active' : ''}`}
-                        onClick={() => setHotkeyScheme(s.code)}
-                        aria-pressed={active}
-                      >
-                        {/* Modifier + the three keys (left · Gambit · right, in
-                            that L→R order). Titlebar hints show which is which. */}
-                        <span className="settings-key-combo"><kbd>{s.mod}</kbd><span className="settings-key-plus">+</span><kbd>{s.keys.left.key}</kbd><kbd>{s.keys.gambit.key}</kbd><kbd>{s.keys.right.key}</kbd></span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="settings-section-label">{t('settings.titlebar.toggle')}</div>
-                <div className="settings-key-row">
-                  {([
-                    { code: 'icon-hotkey', labelKey: 'settings.titlebar.toggle.icon-hotkey' },
-                    { code: 'icon', labelKey: 'settings.titlebar.toggle.icon' },
-                    { code: 'hidden', labelKey: 'settings.titlebar.toggle.hidden' },
-                  ] as const).map(m => {
-                    const active = state.titlebarToggleDisplay === m.code;
-                    return (
-                      <button key={m.code} className={`settings-key-card${active ? ' active' : ''}`} onClick={() => setTitlebarToggleDisplay(m.code)} aria-pressed={active}>
-                        <span className="settings-key-combo">{t(m.labelKey)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            {section === 'sound' && (
-              <>
-                {/* Each row: setting label + On/Off cards (same settings-key-card
-                    idiom as the other toggles). The two sound kinds get a
-                    preview button that plays the chime immediately. */}
-                {([
-                  { labelKey: 'settings.sound.done', value: soundDone, set: setSoundDonePref, preview: 'done' as const },
-                  { labelKey: 'settings.sound.wait', value: soundWait, set: setSoundWaitPref, preview: 'wait' as const },
-                ] as const).map(row => (
-                  <div key={row.labelKey} style={{ marginBottom: 18 }}>
-                    <div className="settings-section-label">{t(row.labelKey)}</div>
-                    <div className="settings-key-row">
-                      <button
-                        className={`settings-key-card${row.value ? ' active' : ''}`}
-                        onClick={() => row.set(true)}
-                        aria-pressed={row.value}
-                      >
-                        <span className="settings-key-combo">{t('settings.sound.on')}</span>
-                      </button>
-                      <button
-                        className={`settings-key-card${!row.value ? ' active' : ''}`}
-                        onClick={() => row.set(false)}
-                        aria-pressed={!row.value}
-                      >
-                        <span className="settings-key-combo">{t('settings.sound.off')}</span>
-                      </button>
-                      {row.preview && (
-                        <button
-                          className="settings-key-card"
-                          onClick={() => playNotifySound(row.preview!)}
-                        >
-                          <span className="settings-key-combo">{t('settings.sound.preview')}</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
-
             {section === 'general' && (
               <>
                 <CloseBehaviorSettings />
@@ -705,28 +630,83 @@ export function SettingsModal() {
                   onPreview={setDragPercent}
                 />
                 {uiScale.failed && <div className="settings-scale-error" role="alert">{t('settings.uiScale.error')}</div>}
-                <div className="settings-section-label">{t('settings.tasks.view')}</div>
-                <div className="settings-key-row">
-                  {TASK_VIEW_MODES.map(m => {
-                    const active = state.taskViewMode === m.code;
-                    return (
-                      <button
-                        key={m.code}
-                        className={`settings-key-card settings-taskview-card${active ? ' active' : ''}`}
-                        onClick={() => setTaskView(m.code)}
-                        aria-pressed={active}
-                      >
-                        <span className="settings-key-combo">
-                          <span className="settings-taskview-icon">{TASK_VIEW_ICONS[m.code]}</span>
-                          <span className="settings-taskview-label">{t(m.labelKey)}</span>
-                        </span>
-                        <span className="settings-key-sub">{t(m.subKey)}</span>
-                      </button>
-                    );
-                  })}
+                <div className="settings-section-label">{t('settings.tasks')}</div>
+                <div className="settings-sound-list">
+                  <div className="settings-sound-item">
+                    <div className="settings-sound-row">
+                      <div className="settings-sound-title">{t('settings.pre_input_button')}<div className="settings-choice-hint">{t('settings.pre_input_button.sub')}</div></div>
+                      <button type="button" role="switch" className="settings-switch" aria-checked={state.preInputButton} aria-label={t('settings.pre_input_button')} onClick={() => dispatch({ type: 'SET_PRE_INPUT_BUTTON', value: !state.preInputButton })}><span /></button>
+                    </div>
+                  </div>
                 </div>
               </>
             )}
+
+            {section === 'general' && (
+              <>
+                {/* Shortcuts, one line each like the sounds: what the key does at the left; its choice at the right,
+                    with a line under it saying what the chosen keys do. */}
+                <div className="settings-sound-list">
+                  <div className="settings-sound-row settings-choice-row">
+                    <div className="settings-sound-title">{t('settings.send.title')}</div>
+                    <div className="settings-choice">
+                      <SegmentedTabs compact label={t('settings.send.title')} value={state.gambitEnterToSend ? 'enter' : 'mod'} onChange={value => setEnterToSend(value === 'enter')}
+                        options={[{ value: 'enter', content: <kbd>Enter</kbd> }, { value: 'mod', content: <><kbd>{modKey}</kbd>+<kbd>Enter</kbd></> }]} />
+                      <div className="settings-choice-hint">{state.gambitEnterToSend ? 'Shift+Enter' : 'Enter'} {t('settings.send.newline')}</div>
+                    </div>
+                  </div>
+                  <div className="settings-sound-row settings-choice-row">
+                    <div className="settings-sound-title">{t('settings.gambit.hotkey')}</div>
+                    <div className="settings-choice">
+                      <SegmentedTabs compact label={t('settings.gambit.hotkey')} value={state.hotkeyScheme} onChange={setHotkeyScheme}
+                        options={HOTKEY_SCHEMES.map(h => ({ value: h.code, content: <><kbd>{h.mod}</kbd>+<kbd>{h.keys.left.key}</kbd><kbd>{h.keys.gambit.key}</kbd><kbd>{h.keys.right.key}</kbd></> }))} />
+                      {(() => { const h = HOTKEY_SCHEMES.find(item => item.code === state.hotkeyScheme) ?? HOTKEY_SCHEMES[0]; return <div className="settings-choice-hint">{t('settings.gambit.hotkey_hint', { left: `${h.mod}+${h.keys.left.key}`, gambit: `${h.mod}+${h.keys.gambit.key}`, right: `${h.mod}+${h.keys.right.key}` })}</div>; })()}
+                    </div>
+                  </div>
+                  <div className="settings-sound-row settings-choice-row">
+                    <div className="settings-sound-title">{t('settings.titlebar.toggle')}</div>
+                    <SegmentedTabs compact label={t('settings.titlebar.toggle')} value={state.titlebarToggleDisplay}
+                      onChange={value => dispatch({ type: 'SET_TITLEBAR_TOGGLE_DISPLAY', value })}
+                      options={(['icon-hotkey', 'icon', 'hidden'] as const).map(value => ({ value, content: t(`settings.titlebar.toggle.${value}`) }))} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {section === 'general' && (
+              <>
+                {/* One line per sound: name at the left; the sound in use (× restores the default for a custom
+                    file, Change picks another), Preview and the switch at the right. */}
+                <div className="settings-sound-list">
+                {([
+                  { labelKey: 'settings.sound.done', value: soundDone, set: setSoundDonePref, preview: 'done' as const },
+                  { labelKey: 'settings.sound.wait', value: soundWait, set: setSoundWaitPref, preview: 'wait' as const },
+                ] as const).map(row => (
+                  <div key={row.labelKey} className="settings-sound-item">
+                    <div className="settings-sound-row">
+                      <div className="settings-sound-title">{t(row.labelKey)}</div>
+                      {row.value && <>
+                        <span className="settings-sound-current">
+                          <span className="settings-sound-name">{soundFiles[row.preview] ? shortFileName(soundFiles[row.preview]!) : t('settings.sound.default')}</span>
+                          {soundFiles[row.preview] && <button type="button" className="settings-sound-remove" aria-label={t('settings.sound.remove')} onClick={() => clearSound(row.preview)}>
+                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="m3 3 6 6m0-6-6 6" /></svg>
+                          </button>}
+                          <button type="button" className="settings-sound-link" onClick={() => { void pickSound(row.preview); }}>{t('settings.sound.change')}</button>
+                        </span>
+                        <button type="button" className="settings-sound-play" aria-label={t('settings.sound.preview')} onClick={() => playNotifySound(row.preview)}>
+                          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z" /></svg>
+                        </button>
+                      </>}
+                      <button type="button" role="switch" className="settings-switch" aria-checked={row.value} aria-label={t(row.labelKey)} onClick={() => row.set(!row.value)}><span /></button>
+                    </div>
+                    {soundFailed === row.preview && <div className="settings-sound-failed" role="alert">{t('settings.sound.failed')}</div>}
+                  </div>
+                ))}
+                </div>
+              </>
+            )}
+
+            {section === 'voice' && <VoiceSettings />}
 
             {section === 'language' && (
               <div className="settings-lang-list">
@@ -755,7 +735,7 @@ export function SettingsModal() {
                   <button
                     type="button"
                     className="settings-feedback-card"
-                    onClick={() => commands.openUrl('https://github.com/Hopesy/sinos/issues').catch(() => {})}
+                    onClick={() => commands.openUrl('https://github.com/Hopesy/Sinos/issues').catch(() => {})}
                   >
                     <span className="settings-feedback-card-icon">
                       <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -765,16 +745,6 @@ export function SettingsModal() {
                     <span className="settings-feedback-card-label">GitHub</span>
                     <ExternalLinkArrow />
                   </button>
-                  {state.currentLang === 'zh-CN' && (
-                    <button
-                      type="button"
-                      className="settings-feedback-card"
-                    onClick={() => commands.openUrl('https://github.com/Hopesy/sinos/issues').catch(() => {})}
-                    >
-                      <span className="settings-feedback-card-label">国内访问：GitCode</span>
-                      <ExternalLinkArrow />
-                    </button>
-                  )}
                 </div>
               </>
             )}

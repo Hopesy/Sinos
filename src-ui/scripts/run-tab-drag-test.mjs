@@ -59,7 +59,7 @@ for (const tab of renderedTabs) {
 }
 assert.ok(agentClose, 'Use the actual Agent tab close click handler');
 
-function fixture(order = ['one', 'two', 'agent:config', 'agent:agent']) {
+function fixture(order = ['one', 'two', 'agent:config', 'agent:agent'], titlebarScale = 1) {
   let state = {
     terminals: [{ id: 'one', tool: 'claude', folderPath: 'E:\\one' }, { id: 'two', tool: 'codex', folderPath: 'E:\\two' }],
     agentPages: ['config', 'agent'], tabOrder: order,
@@ -74,6 +74,7 @@ function fixture(order = ['one', 'two', 'agent:config', 'agent:agent']) {
   }));
   const context = {
     dispatch, tabDrag: null, tabDragSuppressClickRef: { current: false },
+    titlebarPxPerClientPx: () => titlebarScale,
     tabsHeaderRef: { current: { querySelectorAll(selector) {
       assert.equal(selector, '.chrome-tab[data-tab-id]');
       return visible().map((id, index) => ({ dataset: { tabId: id }, getBoundingClientRect: () => ({ left: index * 100, width: 100 }) }));
@@ -106,6 +107,15 @@ test('message settings drag left across terminal tabs without changing the focus
   assert.deepEqual(f.visible(), ['agent:config', 'one', 'two', 'agent:agent']);
   assert.equal(f.state.activeTerminalId, 'one'); assert.equal(f.state.agentPageActive, null);
   assert.equal(f.listeners.size, 0); assert.equal(f.dragFrames.at(-1), null);
+});
+
+test('a counter-zoomed titlebar keeps the dragged tab under the pointer', () => {
+  const f = fixture(undefined, 1.5);
+  f.down('agent:config'); f.move(-50);
+  assert.equal(f.dragFrames.at(-1).deltaX, -450);
+  assert.deepEqual(native(f.api.getTabDragStyle('one', 0)), { transform: 'translateX(150px)' });
+  f.up(-50);
+  assert.deepEqual(f.actions, [{ type: 'REORDER_TAB', tabId: 'agent:config', beforeId: 'one' }]);
 });
 
 test('Sinos Agent drags right through terminals and message settings', () => {
@@ -141,7 +151,8 @@ test('a normal settings click remains a click below the drag threshold', () => {
   const f = fixture(); const x = f.centerX('agent:config');
   f.down('agent:config'); f.move(x + 4); f.up(x + 4); f.api.onTabClickGuarded('agent:config');
   assert.deepEqual(f.actions, [{ type: 'OPEN_AGENT_PAGE', page: 'config' }]);
-  assert.equal(f.state.agentPageActive, 'config'); assert.equal(f.listeners.size, 0);
+  // A leftover configuration tab opens the settings page's Agent section.
+  assert.equal(f.state.settingsOpen, true); assert.equal(f.state.settingsSection, 'agent'); assert.equal(f.listeners.size, 0);
 });
 
 test('close buttons do not start dragging and use the real Agent close action', () => {
@@ -173,11 +184,11 @@ test('hidden terminals retain their lifecycle and are excluded from drag geometr
 
 test('close, reopen, new launch and terminal restart preserve remaining mixed order', () => {
   const f = fixture(['agent:config', 'one', 'agent:agent', 'two']);
-  f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'config' });
-  f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' });
+  f.dispatch({ type: 'CLOSE_AGENT_PAGE', page: 'agent' });
+  f.dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' });
   f.dispatch({ type: 'LAUNCH_TERMINAL_TOOL', id: 'three', tool: 'claude', cwd: 'E:\\three' });
   f.dispatch({ type: 'RESTART_TERMINAL', id: 'one', newId: 'one-new' });
-  assert.deepEqual(f.visible(), ['one-new', 'agent:agent', 'two', 'agent:config', 'three']);
+  assert.deepEqual(f.visible(), ['agent:config', 'one-new', 'two', 'agent:agent', 'three']);
   assert.equal(new Set(f.visible()).size, f.visible().length);
 });
 

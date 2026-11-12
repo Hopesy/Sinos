@@ -2,12 +2,16 @@ import { useSyncExternalStore } from 'react';
 import { readLaunchControls, setSessionControls, clearSessionControls } from './session-controls';
 import { directoryFailure } from './session-directory';
 import { recordSessionReply, recordSessionQuestion } from './session-replies';
+import { markPromptSubmitted } from './notify-prompts';
 import { invoke } from '../tauri';
 import { gambitAttachments } from './gambit-attachments';
-import { arr, obj, str, emptyCodexState, reduceCodexEvent, restoreCodexTurns, type CodexState, type CodexModel, type Json } from './codex-protocol';
+import { arr, codexColdReturn, codexSubTasks, num, obj, str, emptyCodexState, reduceCodexEvent, restoreCodexTurns, type CodexState, type CodexModel, type Json } from './codex-protocol';
 
-interface Client { state: CodexState; generation: string; listeners: Set<() => void>; owners: number; starting?: Promise<void>; closeTimer?: ReturnType<typeof setTimeout>; publishTimer?: ReturnType<typeof setTimeout>; sending: boolean; exited?: boolean; connecting?: boolean; startupExit?: string; interruptSent?: string; permissionOverride?: Json; skills?: Json[] }
+interface Client { state: CodexState; generation: string; listeners: Set<() => void>; owners: number; starting?: Promise<void>; closeTimer?: ReturnType<typeof setTimeout>; publishTimer?: ReturnType<typeof setTimeout>; sending: boolean; exited?: boolean; connecting?: boolean; startupExit?: string; interruptSent?: string; permissionOverride?: Json; planPermissions?: Json; skills?: Json[] }
 const clients = new Map<string, Client>();
+// Tabs restarted as a new thread: which thread they continue, and the prompt waiting to be sent.
+const continuations = new Map<string, { continueFrom: Json; held?: CodexState['coldReturn']; planMode?: boolean }>();
+const COLD_RETURN_NEVER = 'coffee:codex-cold-return-never';
 const EMPTY = emptyCodexState();
 const current = (id: string, c: Client, generation = c.generation) => clients.get(id) === c && c.generation === generation;
 let listening: Promise<unknown> | undefined;
@@ -58,18 +62,39 @@ export function retainCodexSession(id: string, cwd: string | null, resumeToken?:
         if (!current(id, c, generation)) return;
         clearSessionControls(id, c.generation);
         const controls = readLaunchControls('codex');
-        const result = await invoke<Json>('codex_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null });
+        const result = await invoke<Json>('codex_session_start', { id, generation, cwd, resumeToken: resumeToken ?? null, continueFrom: continuations.get(id)?.continueFrom ?? null });
         if (!current(id, c, generation)) { await invoke('codex_session_close', { id, generation }).catch(() => {}); return; }
         if (c.exited) throw new Error(c.startupExit || 'Codex process exited');
         const thread = obj(result.thread), history = restoreCodexTurns(arr(thread.turns));
+        c.state = { ...c.state, planMode: continuations.get(id)?.planMode ?? c.state.planMode };
         const liveIds = new Set(c.state.messages.map(m => m.id));
-        c.state = { ...c.state, ready: true, error: undefined, nativeId: str(thread.id), model: str(result.model), effort: str(result.reasoningEffort), approvalPolicy: result.approvalPolicy, sandbox: obj(result.sandbox), models: arr(result.models) as CodexModel[], messages: [...history.filter(m => !liveIds.has(m.id)), ...c.state.messages], historyCursor: str(result.turnsBackwardsCursor) || null };
+        c.state = { ...c.state, ready: true, error: undefined, nativeId: str(thread.id), title: str(thread.name).trim() || c.state.title, threadPath: str(thread.path), lastContextTokens: num(result.lastContextTokens), model: str(result.model), effort: str(result.reasoningEffort), approvalPolicy: result.approvalPolicy, sandbox: obj(result.sandbox), models: arr(result.models) as CodexModel[], messages: [...history.filter(m => !liveIds.has(m.id)), ...c.state.messages], historyCursor: str(result.turnsBackwardsCursor) || null };
         const active = arr(thread.turns).map(obj).find(turn => turn.status === 'inProgress');
         if (active && !c.state.turnId) c.state = { ...c.state, busy: true, turnId: str(active.id) };
         void controls.then(value => {
           if (clients.get(id) === c && c.owners && c.generation === generation && c.state.ready) setSessionControls(id, generation, value);
         });
         publish(c, true);
+        void rpc(c, id, 'collaborationMode/list', {}).then(result => {
+          if (clients.get(id) !== c || !c.owners || !c.state.ready || c.generation !== generation) return;
+          const modes = arr(result.data).map(obj);
+          c.state = { ...c.state, planSupported: modes.some(mode => mode.mode === 'plan') && modes.some(mode => mode.mode === 'default') }; publish(c, true);
+        }).catch(() => { /* older CLIs keep the existing chat controls */ });
+        if (!c.owners) return;
+        const continuation = continuations.get(id);
+        if (continuation) {
+          continuations.delete(id);
+          const held = continuation.held;
+          // The card owns the draft until this one automatic attempt. A cancellation or
+          // explicit send during startup removes it and must prevent forwarding.
+          if (held && c.state.coldReturn === held) {
+            c.state = { ...c.state, coldReturn: undefined }; publish(c, true);
+            const sent = await sendCodexMessage(id, held.prompt);
+            if (!sent && current(id, c, generation) && !c.state.coldReturn) {
+              c.state = { ...c.state, coldReturn: held }; publish(c, true);
+            }
+          }
+        }
         return;
       } catch (error) {
         if (!current(id, c, generation)) return;
@@ -94,15 +119,16 @@ export function retainCodexSession(id: string, cwd: string | null, resumeToken?:
       clients.delete(id);
       void invoke('codex_session_close', { id, generation: c.generation }).catch(() => {});
       clearTimeout(c.publishTimer); clearSessionControls(id, c.generation);
+      continuations.delete(id);
     }, 300);
   };
 }
-export function configureCodex(id: string, patch: Partial<Pick<CodexState, 'model' | 'effort' | 'sandbox' | 'approvalPolicy'>>): void {
-  const c = client(id); if (c.state.busy) return;
+export function configureCodex(id: string, patch: Partial<Pick<CodexState, 'model' | 'effort' | 'sandbox' | 'approvalPolicy' | 'planMode'>>): void {
+  const c = client(id); if (c.state.busy || c.sending || patch.planMode === true && (!c.state.planSupported || !c.state.model)) return;
   const model = c.state.models.find(m => m.model === (patch.model ?? c.state.model));
   if (model && patch.model) patch.effort = model.supportedReasoningEfforts.some(e => e.reasoningEffort === c.state.effort) ? c.state.effort : model.defaultReasoningEffort;
   if (patch.sandbox) c.permissionOverride = { sandboxPolicy: patch.sandbox, approvalPolicy: patch.approvalPolicy };
-  c.state = { ...c.state, ...patch }; publish(c, true);
+  c.state = { ...c.state, ...patch, ...(patch.planMode !== undefined ? { planReady: undefined } : {}) }; publish(c, true);
 }
 export async function readCodexRateLimits(id: string): Promise<Json> {
   const c = clients.get(id);
@@ -133,20 +159,85 @@ export async function runCodexCommand(id: string, command: 'compact' | 'review' 
     throw error;
   } finally { if (startsTurn) { c.sending = false; publish(c, true); } }
 }
+/** A person's send: a thread idle for half a day asks first, because it has very likely lost its cache. */
+export async function sendCodexInteractive(id: string, prompt: string): Promise<boolean> {
+  const c = client(id);
+  if (c.state.coldReturn) return false;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(COLD_RETURN_NEVER) === '1'; } catch { /* optional preference */ }
+  const cold = dismissed || prompt.startsWith('/') ? null : codexColdReturn(c.state, Date.now());
+  if (!cold) return sendCodexMessage(id, prompt);
+  c.state = { ...c.state, coldReturn: { ...cold, prompt } }; publish(c, true);
+  return true;
+}
+/** Settles the held prompt in this thread; returns it so `cancel` can put it back in the composer. */
+export async function settleCodexColdReturn(id: string, choice: 'full' | 'never' | 'cancel'): Promise<string> {
+  const c = client(id), held = c.state.coldReturn, prompt = held?.prompt ?? '';
+  c.state = { ...c.state, coldReturn: undefined }; publish(c, true);
+  if (choice === 'never') { try { localStorage.setItem(COLD_RETURN_NEVER, '1'); } catch { /* optional preference */ } }
+  // A session that cannot take it keeps the card, so the words are not lost.
+  if (choice !== 'cancel' && prompt && !await sendCodexMessage(id, prompt)) { c.state = { ...c.state, coldReturn: held }; publish(c, true); }
+  return prompt;
+}
+/** Prepares a lightweight continuation, forwarding only a prompt held by the cold-return card. */
+export function continueCodexInNewThread(id: string, newId: string): boolean {
+  const c = client(id), held = c.state.coldReturn;
+  if (!c.owners || !c.state.ready || c.state.busy || c.sending || !c.state.nativeId || !c.state.messages.length || c.state.requests.length || codexSubTasks(c.state).length) return false;
+  const messages = c.state.messages, lastPrompt = messages.findLast(m => m.role === 'user'), reply = messages.findLast(m => m.role === 'assistant');
+  continuations.set(newId, { held, planMode: c.state.planMode, continueFrom: { token: c.state.nativeId, path: c.state.threadPath, prompt: lastPrompt?.content ?? '', reply: reply?.content ?? '' } });
+  if (held) { const next = client(newId); next.state = { ...next.state, coldReturn: held }; publish(next, true); }
+  c.state = { ...c.state, coldReturn: undefined };
+  return true;
+}
+/** A prompt with the images it attaches and the skills it names, as `turn/start` and `turn/steer` both take it. */
+function codexInput(c: Client, prompt: string) {
+  const images = [...new Set(gambitAttachments(prompt).filter(a => a.image).map(a => a.path))];
+  const skills = (c.skills ?? []).filter(skill => new RegExp(`\\$${str(skill.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(prompt)).map(skill => ({ type: 'skill', name: skill.name, path: skill.path }));
+  return [{ type: 'text', text: prompt }, ...images.map(path => ({ type: 'localImage', path })), ...skills];
+}
+/** A prompt during a running turn joins it, as `turn/steer` does in Codex's own clients. */
+async function steerCodex(c: Client, id: string, prompt: string): Promise<boolean> {
+  if (!c.state.turnId || c.state.interrupting) return false;
+  try { await rpc(c, id, 'turn/steer', { expectedTurnId: c.state.turnId, input: codexInput(c, prompt) }); return true; }
+  catch (error) { c.state = { ...c.state, error: String(error) }; publish(c, true); return false; }
+}
 export async function sendCodexMessage(id: string, prompt: string): Promise<boolean> {
-  const c = client(id); if (!c.state.ready || c.state.busy || c.sending || !prompt.trim()) return false;
+  const c = client(id);
+  const planCommand = /^\/plan(?:\s+([\s\S]*))?$/.exec(prompt);
+  if (planCommand) {
+    if (!c.state.ready || !c.state.planSupported || !c.state.model || c.state.busy || c.sending) return false;
+    configureCodex(id, { planMode: planCommand[1]?.trim() ? true : !c.state.planMode });
+    if (!planCommand[1]?.trim()) return true;
+    prompt = planCommand[1].trimStart();
+  }
+  // The chime announces a finished Codex turn only after a prompt the user sent, as in the terminal.
+  if (c.state.ready && !c.sending && prompt.trim()) markPromptSubmitted(id);
+  if (c.state.ready && c.state.busy && !c.sending && prompt.trim()) return steerCodex(c, id, prompt);
+  if (!c.state.ready || c.state.busy || c.sending || !prompt.trim()) return false;
   c.sending = true; c.interruptSent = undefined;
   c.state = { ...c.state, busy: true, turnId: '', interrupting: false, error: undefined }; publish(c, true);
   try {
-    const images = [...new Set(gambitAttachments(prompt).filter(a => a.image).map(a => a.path))];
-    const skills = (c.skills ?? []).filter(skill => new RegExp(`\\$${str(skill.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(prompt)).map(skill => ({ type: 'skill', name: skill.name, path: skill.path }));
-    const result = await rpc(c, id, 'turn/start', { input: [{ type: 'text', text: prompt }, ...images.map(path => ({ type: 'localImage', path })), ...skills], ...(c.state.model ? { model: c.state.model } : {}), ...(c.state.effort ? { effort: c.state.effort } : {}), ...c.permissionOverride });
+    if (c.state.planMode) c.planPermissions ??= c.permissionOverride ?? { sandboxPolicy: c.state.sandbox, approvalPolicy: c.state.approvalPolicy };
+    const collaborationMode = c.state.planSupported || c.state.planMode || c.planPermissions ? { mode: c.state.planMode ? 'plan' : 'default', settings: { model: c.state.model, reasoning_effort: c.state.effort || null, developer_instructions: null } } : undefined;
+    const permissions = c.state.planMode ? { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } : c.permissionOverride ?? c.planPermissions;
+    const result = await rpc(c, id, 'turn/start', { input: codexInput(c, prompt), ...(c.state.model ? { model: c.state.model } : {}), ...(c.state.effort ? { effort: c.state.effort } : {}), ...(collaborationMode ? { collaborationMode } : {}), ...permissions });
+    if (!c.state.planMode) c.planPermissions = undefined;
     const turn = obj(result.turn);
     if (!c.state.turnId) c.state = { ...c.state, turnId: str(turn.id) };
     if (c.state.interrupting) await performInterrupt(c, id);
     return true;
   } catch (error) { c.state = { ...c.state, busy: false, error: String(error) }; return false; }
   finally { c.sending = false; publish(c, true); }
+}
+/** Approval starts implementation in the same thread, restoring the user's execution permissions. */
+export async function approveCodexPlan(id: string, prompt: string): Promise<boolean> {
+  const c = client(id);
+  if (!c.owners || !c.state.ready || !c.state.planMode || !c.state.planReady || c.state.coldReturn || c.state.busy || c.sending || c.state.requests.length) return false;
+  const planReady = c.state.planReady;
+  c.state = { ...c.state, planMode: false, planReady: undefined };
+  if (await sendCodexMessage(id, prompt)) return true;
+  c.state = { ...c.state, planMode: true, planReady }; publish(c, true);
+  return false;
 }
 export async function interruptCodex(id: string): Promise<void> {
   const c = client(id); if (!c.state.busy || c.state.interrupting) return;

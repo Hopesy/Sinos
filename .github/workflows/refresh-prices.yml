@@ -1,0 +1,48 @@
+name: Refresh model prices
+
+# Refresh the public models.dev catalogue for Sinos CLI. The website copy
+# and bundled offline fallback share a source; installer distribution stays
+# exclusively on Hopesy/Sinos GitHub Releases.
+
+on:
+  schedule:
+    - cron: '20 4 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Refresh prices
+        run: node scripts/refresh-prices.mjs
+
+      - name: Commit when prices changed
+        run: |
+          set -e
+          git add Web-Home/prices.json src-ui/src/lib/model-prices.json
+          if git diff --cached --quiet; then
+            echo "Prices unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(prices): refresh model prices"
+          git push origin HEAD:main

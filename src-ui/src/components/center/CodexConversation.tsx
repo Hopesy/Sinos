@@ -1,24 +1,29 @@
 import { sessionKeyboardAllowed } from '../../lib/session-keyboard';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { startErrorText } from '../../lib/start-error';
+import { TurnSummary } from './TurnSummary';
+import { useWorktreePending } from '../../lib/worktree-pending';
 import { useAppState } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { orchestrationToolLabel } from '../../lib/orchestration-label';
-import { arr, obj, str, num, pretty, type CodexMessage, type CodexRequest, type Json } from '../../lib/codex-protocol';
-import { interruptCodex, loadCodexHistory, respondCodex, retainCodexSession, useCodexSession } from '../../lib/codex-session';
+import { arr, obj, str, num, pretty, codexSubTasks, type CodexMessage, type CodexRequest, type Json } from '../../lib/codex-protocol';
+import { approveCodexPlan, continueCodexInNewThread, interruptCodex, loadCodexHistory, respondCodex, retainCodexSession, settleCodexColdReturn, useCodexSession } from '../../lib/codex-session';
 import { clipboardWrite } from '../../lib/clipboard';
 import { directoryFailure, directoryFailureMessage } from '../../lib/session-directory';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { useConversationVirtualizer } from './conversation-virtualizer';
 import { ConversationVisible } from './conversation-visibility';
 import { MarkdownContent } from './MarkdownContent';
-import { WelcomeGreeting, WelcomeSessionMeta } from './WelcomeGreeting';
+import { WelcomeGreeting, WelcomeRestoring, WelcomeSessionMeta } from './WelcomeGreeting';
 import { CodexWelcomeIcon } from './CodexWelcomeIcon';
 import { ConversationDirectory } from '../../lib/conversation-links';
 import { useConversationMenu } from '../../lib/use-conversation-menu';
-import { CollapsibleUserMessage, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem } from './ConversationControls';
+import { CollapsibleUserMessage, ColdReturnCard, ConversationNavigation, MessageCopyButton, type ConversationNavigationItem, Chevron } from './ConversationControls';
 import './ConversationView.css';
 import './ClaudeConversation.css';
 import './CodexConversation.css';
+import { pasteImageIntoAnswer } from '../../lib/answer-image-paste';
+import { ScrollLatestIcon } from './ScrollLatestIcon';
 
 function Measured({ id, measure, children }: { id: string; measure: (id: string, height: number) => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -53,7 +58,7 @@ function RequestCard({ sessionId, request }: { sessionId: string; request: Codex
     {input ? questions.map(question => <fieldset key={str(question.id)} disabled={pending}>
       <legend>{str(question.question)}</legend>
       {arr(question.options).map(value => { const option = obj(value); return <label key={str(option.label)}><input type="radio" name={`${JSON.stringify(request.id)}-${str(question.id)}`} checked={answers[str(question.id)] === option.label} onChange={() => setAnswers(a => ({ ...a, [str(question.id)]: str(option.label) }))} /><span>{str(option.label)}<small>{str(option.description)}</small></span></label>; })}
-      {(!arr(question.options).length || question.isOther === true) && <input className="claude-custom-answer" type={question.isSecret ? 'password' : 'text'} aria-label={str(question.header) || str(question.question)} value={answers[str(question.id)] ?? ''} onChange={e => setAnswers(a => ({ ...a, [str(question.id)]: e.target.value }))} onKeyDown={e => {
+      {(!arr(question.options).length || question.isOther === true) && <input className="claude-custom-answer" type={question.isSecret ? 'password' : 'text'} aria-label={str(question.header) || str(question.question)} value={answers[str(question.id)] ?? ''} onChange={e => setAnswers(a => ({ ...a, [str(question.id)]: e.target.value }))} onPaste={question.isSecret ? undefined : e => pasteImageIntoAnswer(e, value => setAnswers(a => ({ ...a, [str(question.id)]: value })))} onKeyDown={e => {
         if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         e.preventDefault();
         if (!e.repeat) submitAnswers();
@@ -71,17 +76,22 @@ function RequestCard({ sessionId, request }: { sessionId: string; request: Codex
 }
 type Row = CodexMessage & { members?: CodexMessage[] };
 export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVisible = isActive, hasBg, bgUrl, bgType }: { sessionId: string; cwd: string | null; resumeToken?: string; isActive: boolean; isVisible?: boolean; hasBg?: boolean; bgUrl?: string; bgType?: string }) {
-  const s = useCodexSession(sessionId), t = useT(), { dispatch } = useAppState();
+  const s = useCodexSession(sessionId), t = useT(), { state, dispatch } = useAppState();
+  const creatingWorktree = useWorktreePending(sessionId, s.ready || !!s.error);
   const directoryIssue = !s.ready ? directoryFailure(s.error) : undefined;
   const directoryError = directoryFailureMessage(s.error, t);
-  const scroll = useRef<HTMLDivElement>(null), pinned = useRef(true), lastTop = useRef(0);
+  const scroll = useRef<HTMLDivElement>(null), pinned = useRef(true), pointerHeld = useRef(false), lastTop = useRef(0);
   const conversationMenu = useConversationMenu(scroll, sessionId, isActive);
   const viewport = useRef({ width: 0, height: 0 });
   const anchor = useRef<{ firstId: string; messageId: string; offset: number; top: number; height: number; applied: boolean } | null>(null);
   const [scrolled, setScrolled] = useState(false), [expanded, setExpanded] = useState<Record<string, boolean>>({}), [copied, setCopied] = useState('');
   const initialToken = useRef(resumeToken);
+  // Captured at mount like initialToken; state, not a ref, because the welcome screen renders from it.
+  const [resumed] = useState(() => !!resumeToken);
   useEffect(() => retainCodexSession(sessionId, cwd, initialToken.current), [sessionId, cwd]);
   useEffect(() => { if (s.nativeId) dispatch({ type: 'SET_SESSION_TOKEN', id: sessionId, token: s.nativeId }); }, [s.nativeId, sessionId, dispatch]);
+  // The conversation's own title names the tab, as a terminal tab takes the tool's OSC title.
+  useEffect(() => { if (s.title) dispatch({ type: 'SET_TAB_TITLE', id: sessionId, title: s.title }); }, [s.title, sessionId, dispatch]);
   useEffect(() => { dispatch({ type: 'SET_AGENT_STATUS', id: sessionId, status: s.requests.length ? 'wait_input' : s.busy ? 'working' : 'idle' }); }, [s.requests.length, s.busy, sessionId, dispatch]);
   const rows = useMemo<Row[]>(() => {
     const result: Row[] = [];
@@ -101,7 +111,7 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
   const sync = useCallback(() => {
     const node = scroll.current; if (!node || !isVisible || !node.clientHeight) return;
     const resized = viewport.current.width !== node.clientWidth || viewport.current.height !== node.clientHeight;
-    if (!resized && node.scrollTop < lastTop.current && node.scrollHeight - node.scrollTop - node.clientHeight > 2) pinned.current = false;
+    if (pointerHeld.current && !resized && node.scrollTop < lastTop.current && node.scrollHeight - node.scrollTop - node.clientHeight > 2) pinned.current = false;
     viewport.current = { width: node.clientWidth, height: node.clientHeight };
     const saved = anchor.current;
     if (saved?.applied) {
@@ -110,7 +120,13 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
     } else if (pinned.current) node.scrollTop = node.scrollHeight;
     lastTop.current = node.scrollTop; setScrolled(!pinned.current);
   }, [isVisible]);
-  useEffect(() => { if (scroll.current) return bindAutoHideScrollbar(scroll.current, { wide: true }); }, []);
+  useEffect(() => {
+    const node = scroll.current; if (!node) return;
+    const unbind = bindAutoHideScrollbar(node, { wide: true, onDragStart: () => { anchor.current = null; pinned.current = false; setScrolled(true); } });
+    const release = () => { pointerHeld.current = false; };
+    document.addEventListener('pointerup', release); document.addEventListener('pointercancel', release);
+    return () => { unbind(); document.removeEventListener('pointerup', release); document.removeEventListener('pointercancel', release); };
+  }, []);
   useLayoutEffect(() => {
     const node = scroll.current, saved = anchor.current;
     if (!node || !isVisible || !node.clientHeight) return;
@@ -149,19 +165,23 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
   const tool = (message: CodexMessage) => {
     const label = orchestrationToolLabel(str(message.item.tool), t, str(message.item.server));
     return <div className={`codex-tool is-${message.interrupted ? 'interrupted' : message.toolStatus ?? 'reasoning'}`} key={message.id}>
-    <div className="codex-tool-heading"><button type="button" className="claude-tool-heading" aria-expanded={!!expanded[message.id]} onClick={() => toggle(message.id)}><span className="codex-chevron" aria-hidden="true">{expanded[message.id] ? '⌄' : '›'}</span><strong>{label ?? (message.role === 'reasoning' ? t('conversation.reasoning') : message.item.type === 'fileChange' ? t('codex.files') : message.item.type === 'commandExecution' ? t('codex.command') : str(message.item.type))}</strong><span>{label ? str(obj(message.item.arguments).title) : title(message)}</span></button><MessageCopyButton copied={copied === message.id} onCopy={() => copy(message.id, [title(message), message.content].join('\n'))} /></div>
+    <div className="codex-tool-heading"><button type="button" className="claude-tool-heading" aria-expanded={!!expanded[message.id]} onClick={() => toggle(message.id)}><span className="codex-chevron" aria-hidden="true"><Chevron open={expanded[message.id]} /></span><strong>{label ?? (message.role === 'reasoning' ? t('conversation.reasoning') : message.item.type === 'fileChange' ? t('codex.files') : message.item.type === 'commandExecution' ? t('codex.command') : str(message.item.type))}</strong><span>{label ? str(obj(message.item.arguments).title) : title(message)}</span></button><MessageCopyButton copied={copied === message.id} onCopy={() => copy(message.id, [title(message), message.content].join('\n'))} /></div>
     {expanded[message.id] && (message.role === 'reasoning' ? <MarkdownContent content={message.content} /> : <pre className="codex-tool-body">{message.content || pretty(message.item)}</pre>)}
   </div>;
   };
   return <ConversationDirectory.Provider value={cwd}><ConversationVisible.Provider value={isVisible}><div className={`claude-conversation codex-conversation${hasBg && bgUrl ? ' has-background' : ''}${navigationItems.length > 1 ? ' has-navigation' : ''}`}>
     {hasBg && bgUrl && <div className="conversation-background">{bgType === 'video' ? <video src={bgUrl} autoPlay loop muted /> : <img src={bgUrl} alt="" />}</div>}
-    <div className="claude-scroll" ref={scroll} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
+    <div className="claude-scroll" ref={scroll} onPointerDownCapture={e => { if (e.button === 0) pointerHeld.current = true; }} onContextMenu={conversationMenu.onContextMenu} onCopy={conversationMenu.onCopy} onWheelCapture={e => { if (e.deltaY < 0 && !e.ctrlKey) pause(); }} onTouchMoveCapture={pause} onKeyDownCapture={e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target as HTMLElement).closest('input,textarea,select')) pause(); }} onScroll={() => {
       const node = scroll.current; if (!node?.clientHeight) return;
       if (node.scrollTop !== lastTop.current) anchor.current = null;
       const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
       const resized = viewport.current.width !== node.clientWidth || viewport.current.height !== node.clientHeight;
-      if (!resized && node.scrollTop < lastTop.current && distance > 2) pinned.current = false;
-      else if (node.scrollTop > lastTop.current && distance < 2) pinned.current = true;
+      if (!resized && node.scrollTop < lastTop.current && distance > 2) {
+        // Only a held pointer (text selection) moves away here; wheel, touch, keys and the
+        // scrollbar pause first. Otherwise the engine restored an older position (macOS WebKit).
+        if (pointerHeld.current) pinned.current = false;
+        else if (pinned.current) node.scrollTop = node.scrollHeight;
+      } else if (node.scrollTop > lastTop.current && distance < 2) pinned.current = true;
       lastTop.current = node.scrollTop; setScrolled(!pinned.current);
     }}>
       <div className={`claude-thread${!rows.length ? ' is-empty' : ''}`}>
@@ -170,9 +190,11 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
         {rows.slice(virtual.start, virtual.end).map((row, i) => <Measured key={row.id} id={virtual.measurementKeys[virtual.start + i]} measure={virtual.measureRow}>
           <article className={`claude-row claude-row--${row.item.type === 'turnStatus' ? str(row.item.status) : row.partial && row.role !== 'user' ? 'running' : row.role} codex-row`} data-message-id={row.id}>
             {row.members ? <>
-              <button type="button" className="codex-group-heading" aria-expanded={!!expanded[row.id]} onClick={() => toggle(row.id)}><span aria-hidden="true">{expanded[row.id] ? '⌄' : '›'}</span><span>{t('codex.activity', { count: row.members.length })}</span>{row.partial && <span className="codex-spinner" aria-hidden="true" />}<small>{title(row.members.at(-1)!)}</small></button>
+              <button type="button" className="codex-group-heading" aria-expanded={!!expanded[row.id]} onClick={() => toggle(row.id)}><span aria-hidden="true"><Chevron open={expanded[row.id]} /></span><span>{t('codex.activity', { count: row.members.length })}</span>{row.partial && <span className="codex-spinner" aria-hidden="true" />}<small>{title(row.members.at(-1)!)}</small></button>
               {expanded[row.id] && <div className="codex-activity-list">{row.members.map(tool)}</div>}
-            </> : row.item.type === 'turnStatus' ? <div className="claude-turn-summary" role="status">{t(row.item.status === 'interrupted' ? 'claude.interrupted' : row.item.status === 'failed' ? 'codex.failed' : 'codex.completed')}{num(row.item.durationMs) > 0 && ` · ${Math.round(num(row.item.durationMs) / 1000)}s`}</div> : <>
+            </> : row.item.type === 'turnStatus' ? (row.turnStats
+              ? <TurnSummary stats={row.turnStats} sessionKey={s.nativeId} messageId={row.id} prefix={t(row.item.status === 'interrupted' ? 'claude.interrupted' : row.item.status === 'failed' ? 'codex.failed' : 'codex.completed')} />
+              : <div className="claude-turn-summary" role="status">{t(row.item.status === 'interrupted' ? 'claude.interrupted' : row.item.status === 'failed' ? 'codex.failed' : 'codex.completed')}{num(row.item.durationMs) > 0 && ` · ${Math.round(num(row.item.durationMs) / 1000)}s`}</div>) : <>
               {row.role === 'user'
                 ? <CollapsibleUserMessage sentAt={row.timestamp} expanded={!!expanded[row.id]} onToggle={() => setExpanded(old => ({ ...old, [row.id]: !old[row.id] }))}><MarkdownContent content={row.content} /></CollapsibleUserMessage>
                 : <div><MarkdownContent content={row.content} /></div>}
@@ -182,15 +204,24 @@ export function CodexConversation({ sessionId, cwd, resumeToken, isActive, isVis
         </Measured>)}
         <div style={{ height: virtual.bottomSpacer }} aria-hidden="true" />
         {s.requests.map(request => <RequestCard key={JSON.stringify(request.id)} sessionId={sessionId} request={request} />)}
+        {s.planMode && s.planReady && !s.busy && <section className="claude-approval" aria-label={t('codex.plan.ready')}>
+          <strong>{t('codex.plan.ready')}</strong>
+          <p>{t('codex.plan.detail')}</p>
+          <div className="claude-approval-actions"><button type="button" disabled={!s.ready || !!s.requests.length || !!s.coldReturn} onClick={() => { void approveCodexPlan(sessionId, t('codex.plan.prompt')); }}>{t('codex.plan.approve')}</button></div>
+        </section>}
+        {s.coldReturn && <ColdReturnCard idleMinutes={s.coldReturn.idleMinutes} tokens={s.coldReturn.tokens} detailKey="codex.cold_return.detail"
+          onNew={s.busy || s.requests.length || codexSubTasks(s).length || state.terminals.some(tab => tab.parentId && (tab.id === sessionId || tab.parentId === sessionId)) ? undefined : () => { const newId = crypto.randomUUID(); if (continueCodexInNewThread(sessionId, newId)) dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId, fresh: true }); }}
+          onFull={() => { void settleCodexColdReturn(sessionId, 'full'); }} onNever={() => { void settleCodexColdReturn(sessionId, 'never'); }}
+          onCancel={() => { void settleCodexColdReturn(sessionId, 'cancel').then(draft => dispatch({ type: 'SET_GAMBIT_DRAFT', id: sessionId, draft })); }} />}
         {s.ready && s.busy && <div className="codex-working" role="status"><span className="codex-spinner" aria-hidden="true" />{t(s.interrupting ? 'codex.stopping' : s.requests.length ? 'codex.waiting' : 'claude.status.working')}…</div>}
-        {s.error && s.ready && <div className="claude-session-error" role="alert">{s.error}</div>}
+        {s.error && !directoryIssue && <div className="claude-session-error" role="alert">{startErrorText(s.error, 'Codex CLI', t)}</div>}
         {directoryIssue && <div className="claude-session-error" role="alert">{directoryError}</div>}
-        {!directoryIssue && !rows.length && <div className="claude-empty"><CodexWelcomeIcon isActive={isVisible} /><WelcomeGreeting /><WelcomeSessionMeta cwd={cwd} model={s.model} /></div>}
+        {!directoryIssue && !rows.length && <div className="claude-empty"><CodexWelcomeIcon isActive={isVisible} /><WelcomeGreeting />{(creatingWorktree || resumed && !s.ready && !s.error) && <WelcomeRestoring label={creatingWorktree ? t('gambit.worktree_creating') : undefined} className="codex-working" mark={<span className="codex-spinner" aria-hidden="true" />} />}<WelcomeSessionMeta cwd={cwd} model={s.model} /></div>}
       </div>
     </div>
     {navigationItems.length > 1 && isActive && <ConversationNavigation items={navigationItems} scrollRef={scroll} onJump={jumpToTurn} />}
-    {scrolled && <button type="button" className="gambit-send claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { anchor.current = null; pinned.current = true; lastTop.current = scroll.current?.scrollTop ?? 0; sync(); }}>
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v11M3 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    {scrolled && <button type="button" className="claude-scroll-bottom" aria-label={t('claude.scroll_latest')} onClick={() => { anchor.current = null; pinned.current = true; lastTop.current = scroll.current?.scrollTop ?? 0; sync(); }}>
+      <ScrollLatestIcon working={s.ready && s.busy && !s.requests.length ? <span className="codex-spinner" aria-hidden="true" /> : undefined} />
     </button>}
     {s.error && !s.ready && (!directoryIssue || directoryIssue.status === 'unavailable') && <button type="button" className="claude-expand claude-reconnect" title={directoryError || s.error} onClick={() => dispatch({ type: 'RESTART_TERMINAL', id: sessionId, newId: crypto.randomUUID() })}>{t('codex.reconnect')}</button>}
     {conversationMenu.menu}

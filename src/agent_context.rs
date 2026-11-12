@@ -177,6 +177,7 @@ mod tests {
             id,
             role: role.into(),
             text: text.into(),
+            tools: Vec::new(),
         }
     }
 
@@ -192,6 +193,7 @@ mod tests {
             updated_at: 1,
             source_conversation: Some("earlier-conversation".into()),
             automatic: false,
+            experience: None,
         }
     }
 
@@ -272,6 +274,7 @@ mod tests {
             updated_at: 1,
             source_conversation: Some("earlier-conversation".into()),
             automatic: false,
+            experience: None,
         }];
         let notes = vec![
             json!({"cwd":"E:\\project","historical":true,"oldApproval":"install a skill for an earlier task"}),

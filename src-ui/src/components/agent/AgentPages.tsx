@@ -1,18 +1,22 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { commands, invoke } from '../../tauri';
 import { useAppState, type AgentPage } from '../../store/app-state';
-import { formatAgentActivity, formatAgentError, formatAgentMessage, loadOlderAgentMessages, refreshChannels, sendAgentMessage, useAgentClient } from '../../lib/agent-client';
+import { formatAgentActivity, formatAgentError, formatAgentMessage, loadOlderAgentMessages, refreshChannels, sendAgentMessage, startNewAgentConversation, useAgentClient } from '../../lib/agent-client';
 import { useT } from '../../i18n/useT';
 import type { I18nKey } from '../../i18n/en';
-import { clipboardWrite } from '../../lib/clipboard';
+import { clipboardRead, clipboardWrite } from '../../lib/clipboard';
+import { useTextContextMenu } from '../../lib/use-text-context-menu';
 import { MarkdownContent } from '../center/MarkdownContent';
 import { Gambit } from '../center/Gambit';
 import { ConversationNavigation, MessageCopyButton, type ConversationNavigationItem } from '../center/ConversationControls';
 import '../center/ConversationView.css';
 import '../common/SettingsModal.css';
 import './AgentPages.css';
+
+/** Sinos Agent's configuration shows as a section of the settings page. */
+const agentSettingsShown = (open: boolean, section: string) => open && section === 'agent';
 
 function AgentSelect<Value extends string>({ value, options, onChange, label, className = '' }: {
   value: Value; options: { value: Value; label: string }[]; onChange: (value: Value) => void; label: string; className?: string;
@@ -23,7 +27,7 @@ function AgentSelect<Value extends string>({ value, options, onChange, label, cl
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  const visible = open && state.agentPageActive === 'config';
+  const visible = open && agentSettingsShown(state.settingsOpen, state.settingsSection);
   const reposition = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -33,9 +37,9 @@ function AgentSelect<Value extends string>({ value, options, onChange, label, cl
   const toggle = () => { if (!open) reposition(); setOpen(!open); };
 
   useEffect(() => {
-    if (state.agentPageActive !== 'config') return;
+    if (!agentSettingsShown(state.settingsOpen, state.settingsSection)) return;
     return () => setOpen(false);
-  }, [state.agentPageActive]);
+  }, [state.settingsOpen, state.settingsSection]);
 
   useEffect(() => {
     if (!visible) return;
@@ -185,6 +189,12 @@ function AgentChatPage() {
     finally { setCancelling(false); }
   };
 
+  const startNew = () => { setLocalError(''); startNewAgentConversation().catch(failure => setLocalError(String(failure))); };
+
+  const newChat = messages.length > 0 && <button type="button" className="gambit-new-chat" disabled={running} onClick={startNew}>
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{t('agent.chat.new')}
+  </button>;
+
   return <PageFrame page="agent">
     <div className={`conversation-view agent-chat-surface${navigationItems.length > 1 ? ' agent-chat-surface--has-navigation' : ''}`}>
     {navigationItems.length > 1 && state.agentPageActive === 'agent' && <ConversationNavigation items={navigationItems} scrollRef={threadRef} onJump={jumpToMessage} />}
@@ -200,6 +210,10 @@ function AgentChatPage() {
           <button type="button" key={text} onClick={() => { setDraft(text); document.querySelector<HTMLTextAreaElement>('.gambit-textarea')?.focus(); }}>{text}<span aria-hidden="true">↗</span></button>)}</div>
       </div> : <div className="agent-message-list" ref={messageListRef}>{messages.map((message, index) =>
         <article className={`conversation-message conversation-message--${message.role}`} data-conversation-navigation-id={String(message.id)} aria-label={message.role === 'user' ? t('agent.chat.user') : 'Sinos Agent'} key={message.id}>
+          {!!message.tools?.length && <details className="agent-tool-summary">
+            <summary>{t('agent.chat.tools', { count: message.tools.length })}{message.tools.some(tool => !tool.ok) ? ` · ${t('agent.chat.tools_failed', { count: message.tools.filter(tool => !tool.ok).length })}` : ''}</summary>
+            <ol>{message.tools.map((tool, i) => <li key={i} className={tool.ok ? undefined : 'failed'}><span aria-hidden="true">{tool.ok ? '✓' : '✕'}</span><code>{tool.name}</code></li>)}</ol>
+          </details>}
           <div className="conversation-bubble"><MarkdownContent content={message.role === 'assistant' ? formatAgentMessage(message.text, t) : message.text} /></div>
           {(message.role === 'user' || !running || index < messages.length - 1) && <MessageCopyButton copied={copiedMessageId === `${conversationId}:${message.id}`} onCopy={() => copyMessage(message.id, message.role === 'assistant' ? formatAgentMessage(message.text, t) : message.text)} />}
         </article>)}
@@ -213,10 +227,24 @@ function AgentChatPage() {
       onClose={() => {}} onSend={send} running={running}
       onCancel={cancelling ? undefined : () => void cancel()}
       sendFailedHint={t('agent.chat.send_failed')}
-      workspaceName="Sinos Agent"
+      workspaceName="Sinos Agent" worktreeControl={newChat}
       leftPanelHidden={state.leftPanelHidden} rightPanelHidden={state.rightPanelHidden}
     />}
   </PageFrame>;
+}
+
+/** A plain text field with the shared right-click menu and a paste button inside its right edge. */
+function AgentPasteInput({ label, value, onValue, openMenu, ...input }: {
+  label: string; value: string; onValue: (value: string) => void;
+  openMenu: ReturnType<typeof useTextContextMenu>['openMenu'];
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>) {
+  const t = useT();
+  // Pasting replaces the whole value: copied URLs and keys often carry a trailing newline.
+  const paste = () => void clipboardRead().then(text => { const next = text.trim(); if (next) onValue(next); });
+  return <label className="agent-field"><span>{label}</span><span className="agent-paste-input">
+    <input {...input} aria-label={label} value={value} spellCheck={false} onChange={event => onValue(event.target.value)} onContextMenu={event => openMenu(event, onValue)} />
+    <button type="button" aria-label={`${t('menu.paste')} ${label}`} onClick={paste}>{t('menu.paste')}</button>
+  </span></label>;
 }
 
 interface ModelSettings {
@@ -245,7 +273,12 @@ function AgentModelSection() {
     return () => { active = false; };
   }, []);
 
-  const endpointChanged = saved !== null && (config.provider !== saved.provider || config.baseUrl.trim().replace(/\/$/, '') !== saved.baseUrl);
+  const { menu, openMenu } = useTextContextMenu();
+  const setBaseUrl = (baseUrl: string) => { setConfig(current => ({ ...current, baseUrl })); setFeedback(''); };
+  const setModel = (model: string) => { setConfig(current => ({ ...current, model })); setFeedback(''); };
+  const setKey = (value: string) => { setApiKey(value); setFeedback(''); };
+  const endpointChanged = saved !== null && (config.provider !== saved.provider || config.baseUrl.trim().replace(/\/+$/, '') !== saved.baseUrl.replace(/\/+$/, ''));
+
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true); setError(''); setFeedback('');
@@ -264,13 +297,14 @@ function AgentModelSection() {
           <label className="agent-field"><span>{t('agent.model.provider')}</span><AgentSelect label={t('agent.model.provider')} value={config.provider} options={[{ value: 'openai', label: t('agent.model.provider_openai') }, { value: 'anthropic', label: t('agent.model.provider_anthropic') }]} onChange={provider => {
             setConfig({ ...config, provider, baseUrl: DEFAULT_URL[provider] }); setFeedback('');
           }} /></label>
-          <label className="agent-field"><span>{t('agent.model.url')}</span><input type="url" value={config.baseUrl} spellCheck={false} placeholder={DEFAULT_URL[config.provider]} onChange={event => { setConfig({ ...config, baseUrl: event.target.value }); setFeedback(''); }} /></label>
-          <label className="agent-field"><span>{t('agent.model.id')}</span><input value={config.model} maxLength={200} spellCheck={false} placeholder={t('agent.model.id_placeholder')} onChange={event => { setConfig({ ...config, model: event.target.value }); setFeedback(''); }} /></label>
-          <label className="agent-field"><span>{t('agent.model.api_key')}</span><input type="password" autoComplete="new-password" value={apiKey} spellCheck={false} placeholder={t(config.hasApiKey && !endpointChanged ? 'agent.model.api_key_saved' : 'agent.model.api_key_placeholder')} onChange={event => { setApiKey(event.target.value); setFeedback(''); }} /></label>
+          <AgentPasteInput label={t('agent.model.url')} type="url" value={config.baseUrl} placeholder={DEFAULT_URL[config.provider]} onValue={setBaseUrl} openMenu={openMenu} />
+          <AgentPasteInput label={t('agent.model.id')} value={config.model} maxLength={200} placeholder={t('agent.model.id_placeholder')} onValue={setModel} openMenu={openMenu} />
+          <AgentPasteInput label={t('agent.model.api_key')} type="password" value={apiKey} autoComplete="new-password" placeholder={t(config.hasApiKey && !endpointChanged ? 'agent.model.api_key_saved' : 'agent.model.api_key_placeholder')} onValue={setKey} openMenu={openMenu} />
           <div className="agent-form-footer"><button type="submit" className="agent-button primary">{saving ? t('agent.model.saving') : t('agent.model.save')}</button><span className="agent-feedback" role="status">{loading ? t('agent.model.loading') : feedback && t(feedback)}</span></div>
         </fieldset>
         {error && <p className="agent-feedback error" role="alert">{formatAgentError(error, t)}</p>}
       </form>
+      {menu}
   </section>;
 }
 
@@ -287,7 +321,7 @@ function AgentModeRow({ title, description, enabled, saving, onToggle }: {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const visible = (hovered || focused) && !dismissed && state.agentPageActive === 'config';
+  const visible = (hovered || focused) && !dismissed && agentSettingsShown(state.settingsOpen, state.settingsSection);
   const reposition = useCallback(() => {
     const row = rowRef.current?.getBoundingClientRect();
     const node = tipRef.current;
@@ -328,7 +362,7 @@ function AgentWorkModesSection() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (state.agentPageActive !== 'config') return;
+    if (!agentSettingsShown(state.settingsOpen, state.settingsSection)) return;
     let active = true;
     const revision = modesRevisionRef.current;
     const englishRevision = englishRevisionRef.current;
@@ -339,7 +373,7 @@ function AgentWorkModesSection() {
       if (active && revision === modesRevisionRef.current) setModes(value);
     }).catch(failure => { if (active) setError(String(failure)); });
     return () => { active = false; };
-  }, [state.agentPageActive]);
+  }, [state.settingsOpen, state.settingsSection]);
 
   useEffect(() => {
     let active = true;
@@ -412,8 +446,8 @@ function AgentChannelsSection() {
   const loginMessage = loginMessageKey ? t(loginMessageKey) : loginStatus?.message || (loginStatus ? t('agent.channels.login.waiting_scan') : '');
 
   useEffect(() => {
-    if (state.agentPageActive === 'config') refreshChannels().catch(failure => setError(String(failure)));
-  }, [state.agentPageActive]);
+    if (agentSettingsShown(state.settingsOpen, state.settingsSection)) refreshChannels().catch(failure => setError(String(failure)));
+  }, [state.settingsOpen, state.settingsSection]);
 
   const acceptPoll = useCallback((result: WeixinPoll) => {
     setLoginStatus({ status: result.status, message: result.message });
@@ -497,7 +531,7 @@ function AgentChannelsSection() {
             <div className="agent-channel-heading"><h3>Telegram</h3><span className={`agent-status ${channels?.status.telegram === 'connected' ? 'connected' : ''}`}>{t(CHANNEL_STATUS[channels?.status.telegram ?? 'disconnected'] ?? 'agent.channels.status.disconnected')}</span></div>
             <p className="agent-channel-description">{t('agent.channels.telegram_description')}</p>
             {channels?.telegram.botName && <p className="agent-channel-account">@{channels.telegram.botName}</p>}
-            <form className="agent-channel-controls" onSubmit={connectTelegram}><input className="agent-inline-input" aria-label={t('agent.channels.token_label')} type="password" autoComplete="new-password" value={token} spellCheck={false} placeholder={t(channels?.telegram.hasToken ? 'agent.channels.token_reconnect' : 'agent.channels.token_placeholder')} onChange={event => setToken(event.target.value)} /><button type="submit" className="agent-button" disabled={!!busy || !token.trim()}>{t(busy === 'telegram' ? 'agent.channels.connecting' : 'agent.channels.connect')}</button>{channels?.telegram.enabled && <button type="button" className="agent-button quiet" disabled={!!busy} onClick={() => void disconnect('telegram')}>{t('agent.channels.disconnect')}</button>}</form>
+            <form className="agent-channel-controls" onSubmit={connectTelegram}><input className="agent-inline-input" aria-label={t('agent.channels.token_label')} autoComplete="off" value={token} spellCheck={false} placeholder={t(channels?.telegram.hasToken ? 'agent.channels.token_reconnect' : 'agent.channels.token_placeholder')} onChange={event => setToken(event.target.value)} /><button type="submit" className="agent-button" disabled={!!busy || !token.trim()}>{t(busy === 'telegram' ? 'agent.channels.connecting' : 'agent.channels.connect')}</button>{channels?.telegram.enabled && <button type="button" className="agent-button quiet" disabled={!!busy} onClick={() => void disconnect('telegram')}>{t('agent.channels.disconnect')}</button>}</form>
             {pairing && channels?.status.telegram !== 'connected' && <div className="agent-pairing"><p>{t('agent.channels.pairing_prompt', { bot: pairing.botName })}</p><code>/pair {pairing.pairingCode}</code></div>}
             {channels?.status.telegram === 'waiting_pairing' && !pairing && <p className="agent-field-hint">{t('agent.channels.pairing_refresh')}</p>}
             {channels?.status.telegramError && <p className="agent-feedback error">{formatAgentError(channels.status.telegramError, t)}</p>}
@@ -559,15 +593,20 @@ function AgentHelpModal({ onClose }: { onClose: () => void }) {
   </dialog>, document.body);
 }
 
-export function AgentPages({ page }: { page: AgentPage }) {
+/** Sinos Agent's model, work modes and channels: the "Sinos Agent" section of the settings page. */
+export function AgentSettings() {
   const t = useT();
   const { state } = useAppState();
   const [helpOpen, setHelpOpen] = useState(false);
-  if (page === 'config') return <PageFrame page="config"><div className="agent-settings-scroll"><div className="agent-settings-content"><p className="agent-settings-intro">{t('agent.settings.intro')}{' '}<button type="button" className="agent-help-link" onClick={() => setHelpOpen(true)}>{t('agent.settings.help')}</button></p><AgentModelSection /><AgentWorkModesSection /><AgentChannelsSection /></div></div>{helpOpen && state.agentPageActive === 'config' && <AgentHelpModal onClose={() => setHelpOpen(false)} />}</PageFrame>;
-  return <AgentChatPage />;
+  return <><div className="agent-settings-scroll"><div className="agent-settings-content"><p className="agent-settings-intro">{t('agent.settings.intro')}{' '}<button type="button" className="agent-help-link" onClick={() => setHelpOpen(true)}>{t('agent.settings.help')}</button></p><AgentModelSection /><AgentWorkModesSection /><AgentChannelsSection /></div></div>{helpOpen && agentSettingsShown(state.settingsOpen, state.settingsSection) && <AgentHelpModal onClose={() => setHelpOpen(false)} />}</>;
 }
 
-export function ChannelConnectionSummary() {
+/** A Sinos Agent tab: the conversation. Its configuration moved into the settings page. */
+export function AgentPages({ page }: { page: AgentPage }) {
+  return page === 'agent' ? <AgentChatPage /> : null;
+}
+
+export function ChannelConnectionSummary({ update }: { update?: ReactNode } = {}) {
   const t = useT();
   const { state, dispatch } = useAppState();
   const { channels } = useAgentClient();
@@ -577,10 +616,15 @@ export function ChannelConnectionSummary() {
   const label = weixin || telegram
     ? t(weixin && telegram ? 'agent.sidebar.both_connected' : weixin ? 'agent.sidebar.weixin_connected' : 'agent.sidebar.telegram_connected')
     : `${defaultChannel} · ${t('agent.channels.status.disconnected')}`;
+  // The Agent conversation, channel status, any app update, then settings at the far right of the bottom row.
   return <div className="agent-channel-summary">
-    <button type="button" className="agent-channel-summary-label" aria-label={t('agent.sidebar.open_settings', { status: label })} onClick={() => dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' })}>{label}</button>
     <button type="button" className="agent-sidebar-button" aria-label={t('agent.sidebar.open_agent')} aria-pressed={state.agentPageActive === 'agent'} onClick={() => dispatch({ type: 'OPEN_AGENT_PAGE', page: 'agent' })}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 14H6l-4 3V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3" /><path d="M10 8h10a2 2 0 0 1 2 2v12l-4-3h-8a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" /></svg>
+    </button>
+    <button type="button" className="agent-channel-summary-label" aria-label={t('agent.sidebar.open_settings', { status: label })} onClick={() => dispatch({ type: 'OPEN_AGENT_PAGE', page: 'config' })}>{label}</button>
+    {update}
+    <button type="button" className="agent-sidebar-button agent-sidebar-settings" aria-label={t('settings.title')} aria-pressed={state.settingsOpen} onClick={() => dispatch({ type: 'TOGGLE_SETTINGS' })}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
     </button>
   </div>;
 }

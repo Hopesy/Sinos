@@ -1,13 +1,13 @@
 #!/bin/sh
 # Sinos CLI — macOS / Linux Installer / Updater
-# Usage:   curl -fsSL https://raw.githubusercontent.com/Hopesy/sinos/main/install/install.sh | sh
-# License: AGPL-3.0-or-later (https://github.com/Hopesy/sinos/blob/main/LICENSE)
+# Usage:   curl -fsSL https://raw.githubusercontent.com/Hopesy/Sinos/main/install/install.sh | sh
+# License: AGPL-3.0-or-later (https://github.com/Hopesy/Sinos/blob/main/LICENSE)
 
 set -e
 
 # Resolve the latest published release directly from the Sinos repository.
 # A version is accepted only if this platform's asset is already present.
-GITHUB_API="https://api.github.com/repos/Hopesy/sinos/releases/latest"
+GITHUB_API="https://api.github.com/repos/Hopesy/Sinos/releases/latest"
 
 # Resolve escape sequences via printf at assignment time so the
 # variables hold real ESC bytes. Plain '\033[...m' string literals
@@ -47,7 +47,7 @@ if [ "$OS" = "Darwin" ]; then
     *)
       echo "  ${RED}Unsupported macOS architecture: $ARCH${RESET}"
       echo "  ${YELLOW}Sinos CLI ships arm64 and Intel x64 macOS builds.${RESET}"
-      echo "  ${YELLOW}Open an issue: https://github.com/Hopesy/sinos/issues${RESET}"
+      echo "  ${YELLOW}Open an issue: https://github.com/Hopesy/Sinos/issues${RESET}"
       exit 1
       ;;
   esac
@@ -67,7 +67,7 @@ elif [ "$OS" = "Linux" ]; then
     *)
       echo "  ${RED}Unsupported Linux architecture: $ARCH${RESET}"
       echo "  ${YELLOW}Sinos CLI currently ships amd64 and arm64 Linux builds only.${RESET}"
-      echo "  ${YELLOW}Open an issue: https://github.com/Hopesy/sinos/issues${RESET}"
+      echo "  ${YELLOW}Open an issue: https://github.com/Hopesy/Sinos/issues${RESET}"
       exit 1
       ;;
   esac

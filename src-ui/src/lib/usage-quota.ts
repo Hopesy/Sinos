@@ -1,7 +1,8 @@
 // Plan usage and balance for the endpoint a tab's CLI is configured to call.
-// Official sign-ins report through the CLI's own protocol (Claude get_usage,
-// Codex account/rateLimits/read); third-party keys are resolved read-only from
-// the tool's configuration by the backend (src/usage_quota). Anything missing
+// In desktop conversations official sign-ins report through the CLI's own protocol
+// (Claude get_usage, Codex account/rateLimits/read). Terminal tabs have no such
+// channel, so the backend (src/usage_quota) reads their plan usage from the CLI's
+// stored sign-in; third-party keys resolve read-only from the tool's configuration. Anything missing
 // hides the meter: there is no failure state.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../tauri';
@@ -10,7 +11,7 @@ import { readCodexRateLimits, useCodexSession } from './codex-session';
 import { useDshSession } from './dsh-session';
 
 export type QuotaPeriod = 'fiveHour' | 'daily' | 'weekly' | 'monthly';
-export interface Quota { period?: QuotaPeriod; used?: number; resetAt?: number; balance?: number; unit?: string }
+export interface Quota { period?: QuotaPeriod; used?: number; resetAt?: number; balance?: number; unit?: string; spent?: boolean }
 
 type Json = Record<string, unknown>;
 // Fixed-interval refresh; turn ends refresh conversation tabs at most this often too,
@@ -49,17 +50,17 @@ export function codexQuotas(response: Json): Quota[] {
 export function providerQuotas(quotas: unknown): Quota[] {
   return (Array.isArray(quotas) ? quotas : []).map(obj).flatMap((quota): Quota[] => {
     const balance = num(quota.balance);
-    if (balance !== undefined) return [{ balance, unit: typeof quota.balanceUnit === 'string' ? quota.balanceUnit : undefined }];
+    if (balance !== undefined) return [{ balance, unit: typeof quota.balanceUnit === 'string' ? quota.balanceUnit : undefined, spent: quota.spent === true || undefined }];
     const used = num(quota.percentage);
     const period = ORDER.includes(quota.period as QuotaPeriod) ? quota.period as QuotaPeriod : undefined;
     return used === undefined ? [] : [{ period, used, resetAt: num(quota.resetAt) || undefined }];
   });
 }
 
-/** Windows first (shortest period first), then a balance, at most two meters. */
+/** Windows first (shortest period first), then balances, at most two meters. */
 export function visibleQuotas(quotas: Quota[]): Quota[] {
   const windows = quotas.filter(q => q.balance === undefined).sort((a, b) => (a.period ? ORDER.indexOf(a.period) : 9) - (b.period ? ORDER.indexOf(b.period) : 9));
-  return [...windows, ...quotas.filter(q => q.balance !== undefined).slice(0, 1)].slice(0, 2);
+  return [...windows, ...quotas.filter(q => q.balance !== undefined)].slice(0, 2);
 }
 
 export function remainingPercent(quota: Quota): number {
@@ -79,9 +80,19 @@ export function formatBalance(quota: Quota): string {
   return unit === 'CNY' ? `¥${amount}` : unit === 'USD' ? `$${amount}` : unit ? `${amount} ${quota.unit}` : amount;
 }
 
+// Answers are remembered per tab, so switching back shows them at once while a refresh runs. A request
+// finishes for its own tab even if the person has moved on: the key keeps tabs from seeing each other's numbers.
+const remembered = new Map<string, { quotas: Quota[]; at: number }>();
+const loading = new Set<string>();
+const REMEMBERED_TABS = 64;
+function remember(key: string, quotas: Quota[]) {
+  remembered.delete(key);
+  remembered.set(key, { quotas, at: Date.now() });
+  if (remembered.size > REMEMBERED_TABS) remembered.delete(remembered.keys().next().value!);
+}
+
 export function useUsageQuota(id: string, tool: string | undefined, cwd: string | undefined, conversation: 'claude' | 'codex' | 'dsh' | null): { quotas: Quota[]; refresh: () => void } {
-  // Keyed so a tab switch never shows the previous tab's numbers while loading.
-  const [result, setResult] = useState<{ key: string; quotas: Quota[] }>({ key: '', quotas: [] });
+  const [, repaint] = useState(0);
   const claudeIdle = useClaudeSession(conversation === 'claude' ? id : '', s => s.ready && !s.busy);
   const codexIdle = useCodexSession(conversation === 'codex' ? id : '', s => s.ready && !s.busy);
   const dshIdle = useDshSession(conversation === 'dsh' ? id : '', s => s.ready && !s.busy);
@@ -89,39 +100,39 @@ export function useUsageQuota(id: string, tool: string | undefined, cwd: string 
   const dshProvider = useDshSession(conversation === 'dsh' ? id : '', s => s.route.provider);
   // Becomes true when the session is ready and idle: at start and after each turn.
   const idle = conversation === 'claude' ? claudeIdle : conversation === 'codex' ? codexIdle : conversation === 'dsh' ? dshIdle : true;
-  const last = useRef<{ key: string; at: number }>({ key: '', at: 0 });
-  const loading = useRef('');
   const reload = useRef<(force: boolean) => void>(() => {});
   const provider = conversation === 'dsh' ? dshProvider : '';
   const key = `${id}\n${tool ?? ''}\n${cwd ?? ''}\n${provider}`;
 
   useEffect(() => {
     if (!tool) return;
-    let cancelled = false;
+    let mounted = true;
     const load = async (skipWait: boolean, force = false) => {
-      if (loading.current === key || (!skipWait && Date.now() - last.current.at < REFRESH_MS)) return;
-      last.current = { key, at: Date.now() };
-      loading.current = key;
+      const known = remembered.get(key);
+      if (loading.has(key) || (!skipWait && known && Date.now() - known.at < REFRESH_MS)) return;
+      loading.add(key);
       try {
-        const route = await invoke<Json>('usage_quota_query', { tool, cwd: cwd ?? null, provider: provider || null, force });
+        const route = await invoke<Json>('usage_quota_query', { tool, cwd: cwd ?? null, provider: provider || null, force, terminal: conversation === null });
         let next: Quota[] = [];
         if (route.kind === 'provider') next = providerQuotas(route.quotas);
         else if (route.kind === 'official' && conversation === 'claude') next = claudeQuotas(await controlClaude(id, { subtype: 'get_usage', skip_behaviors: true }) as Json);
         else if (route.kind === 'official' && conversation === 'codex') next = codexQuotas(await readCodexRateLimits(id) as Json);
-        if (!cancelled) setResult({ key, quotas: next });
+        remember(key, next);
       } catch {
-        if (!cancelled) setResult({ key, quotas: [] });
+        // A failed refresh keeps the last numbers rather than blanking the meter.
+        remember(key, remembered.get(key)?.quotas ?? []);
       } finally {
-        if (loading.current === key) loading.current = '';
+        loading.delete(key);
+        if (mounted) repaint(version => version + 1);
       }
     };
     reload.current = force => { void load(true, force); };
-    if (!idle) return () => { cancelled = true; };
-    void load(last.current.key !== key);
+    if (!idle) return () => { mounted = false; };
+    void load(false);
     const timer = setInterval(() => { void load(false); }, REFRESH_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { mounted = false; clearInterval(timer); };
   }, [id, tool, cwd, conversation, idle, key, provider]);
 
   const refresh = useCallback(() => reload.current(true), []);
-  return { quotas: tool && result.key === key ? result.quotas : [], refresh };
+  return { quotas: tool ? remembered.get(key)?.quotas ?? [] : [], refresh };
 }

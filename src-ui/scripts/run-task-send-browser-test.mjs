@@ -34,7 +34,7 @@ await build({ stdin: { resolveDir: project, loader: 'tsx', contents: `
     b.onResolve({ filter: /^@tauri-apps\/api\/event$/ }, () => ({ path: 'events', namespace: 'fixture' }));
     b.onResolve({ filter: /(?:\.\/|lib\/)terminal-control$/ }, () => ({ path: 'terminal', namespace: 'fixture' }));
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ loader: 'js', resolveDir: project, contents: {
-      store: `import {useSyncExternalStore} from 'react';const p=new URLSearchParams(location.search),listeners=new Set();let state={taskViewMode:p.get('view')||'note',currentLang:'en',activeTerminalId:p.get('tool')||'claude',terminals:['claude','codex','terminal','unready'].map(tool=>({id:tool,tool:tool==='unready'?'claude':tool,claudeMode:'conversation',codexMode:'conversation',folderPath:'D:/test'}))};window.selectSession=id=>{state={...state,activeTerminalId:id};listeners.forEach(fn=>fn())};export const useAppLanguage=()=> 'en';export function useAppState(){return {state:useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>state),dispatch(){}}}`,
+      store: `import {useSyncExternalStore} from 'react';const p=new URLSearchParams(location.search),listeners=new Set();let state={preInputQueue:[],preInputReveal:0,preInputButton:true,currentLang:'en',activeTerminalId:p.get('tool')||'claude',terminals:['claude','codex','terminal','unready'].map(tool=>({id:tool,tool:tool==='unready'?'claude':tool,claudeMode:'conversation',codexMode:'conversation',folderPath:'D:/test'}))};window.selectSession=id=>{state={...state,activeTerminalId:id};listeners.forEach(fn=>fn())};window.addBlankTab=()=>{state={...state,terminals:[...state.terminals,{id:'blank',folderPath:'D:/test'}],activeTerminalId:'blank'};listeners.forEach(fn=>fn())};export const useAppLanguage=()=> 'en';export function useAppState(){return {state:useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>state),dispatch(action){(window.actions||=[]).push(action)}}}`,
       native: `export const isTauri=true,invoke=(name,args)=>window.transport(name,args);export const commands={loadTasks:async()=>JSON.stringify(window.saved),saveTasks:async text=>{window.saved=JSON.parse(text)}};`,
       events: `export async function listen(name,fn){window.events.set(name,fn);return ()=>window.events.delete(name)}`,
       terminal: `export const submitTerminalPrompt=(id,text)=>window.transport('terminal_send',{id,text});`,
@@ -54,62 +54,42 @@ const browser = await chromium.launch({ headless: true, ...(process.env.COFFEE_C
 try {
   const page = await browser.newPage({ viewport: { width: 700, height: 800 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  const open = async (tool, view = 'note') => {
-    await page.goto('http://127.0.0.1:'+server.address().port+'/?tool='+tool+'&view='+view);
+  // A click on a note's text sends it.
+  const open = async tool => {
+    await page.goto('http://127.0.0.1:'+server.address().port+'/?tool='+tool);
     await page.waitForFunction(() => window.ready?.());
-    const button = page.locator(view === 'note' ? '.task-note-send' : view === 'prompt' ? '.task-prompt-send' : '.task-slot-send');
-    await button.waitFor();
-    return button;
+    const note = page.locator('#root .task-note-preview').first();
+    await note.waitFor();
+    return note;
   };
-  for (const tool of ['claude', 'codex', 'terminal']) for (const view of ['note', 'prompt', 'list']) {
-    const button = await open(tool, view);
-    await page.evaluate(() => window.holdSend = true);
-    await button.evaluate(el => { el.click(); el.click(); });
-    await page.waitForFunction(() => typeof window.finishSend === 'function', null, { timeout: 3000 });
-    assert.equal(await button.isDisabled(), true, 'pending sends disable repeated submission');
-    const sends = await page.evaluate(() => window.calls.filter(call => ['claude_session_send','terminal_send'].includes(call.name)||call.method==='turn/start'));
-    assert.equal(sends.length, 1, 'send exactly once');
-    assert.equal(sends[0].id, tool, 'use the focused existing session');
-    const body = view === 'prompt' ? 'Include tests' : 'Build a page\n\nInclude tests';
-    assert.equal(tool === 'codex' ? sends[0].params.input[0].text : sends[0].text, body, 'preserve each view\'s message content');
-    assert.equal(await page.evaluate(() => window.saved[0].status), 'todo', 'do not mark working before acknowledgement');
-    if (tool === 'claude' && view === 'note') await page.evaluate(() => window.selectSession('codex'));
-    await page.evaluate(() => window.finishSend());
-    await page.waitForFunction(() => document.querySelector('.task-board')?.getAttribute('aria-busy') === 'false');
-    if (view !== 'prompt') await page.waitForFunction(() => window.saved[0].status === 'working');
-    else assert.equal(await page.evaluate(() => window.saved[0].status), 'todo', 'prompt mode does not change task priority');
-    assert.equal(await page.evaluate(() => window.calls.filter(call => call.name.endsWith('_session_start')).length), 2, 'sending never creates another session');
-  }
+  // A click puts the note into the current conversation's composer; nothing is sent from the board.
   for (const tool of ['claude', 'codex', 'terminal']) {
-    const button = await open(tool);
-    await page.evaluate(() => window.failSend = true);
-    await button.click();
-    await page.getByRole('alert').waitFor();
-    assert.equal(await page.evaluate(() => window.saved[0].status), 'todo');
-    assert.equal(await page.locator('.task-note-body').inputValue(), 'Build a page', 'failed sends preserve the note');
+    const note = await open(tool);
+    await note.click();
+    const actions = await page.evaluate(() => window.actions || []);
+    const expected = [{ type: 'APPEND_GAMBIT_DRAFT', id: tool, text: 'Build a page\n\nInclude tests' }];
+    // A terminal tab's composer is closed in this fixture, so it opens first; conversations always show theirs.
+    assert.deepEqual(actions, tool === 'terminal' ? [{ type: 'TOGGLE_GAMBIT' }, ...expected] : expected, tool + ': the note lands in the composer');
+    assert.equal(await page.evaluate(() => window.calls.filter(call => ['claude_session_send','terminal_send'].includes(call.name)||call.method==='turn/start').length), 0, 'nothing is sent');
+    assert.equal(await page.evaluate(() => window.saved[0].status), 'todo', 'the note keeps its state');
+    assert.equal(await note.textContent(), 'Build a page\n\nInclude tests', 'and stays on the board');
+    await page.evaluate(() => { window.actions = []; });
   }
-  const edited = await open('claude');
-  await page.evaluate(() => window.holdSend = true);
-  await edited.click();
-  await page.waitForFunction(() => typeof window.finishSend === 'function');
-  await page.locator('.task-note-body').fill('New unsent task');
-  await page.evaluate(() => window.finishSend());
-  await page.waitForFunction(() => document.querySelector('.task-board')?.getAttribute('aria-busy') === 'false');
-  assert.equal(await page.evaluate(() => window.saved[0].status), 'todo', 'acknowledging an older send must not promote newly edited content');
-  assert.equal(await page.locator('.task-note-body').inputValue(), 'New unsent task');
-  const button = await open('unready');
-  assert.equal(await button.isDisabled(), true, 'desktop sessions must be ready before sending');
-  await page.evaluate(() => window.selectSession(null));
-  assert.equal(await button.isDisabled(), true, 'no target disables sending');
-  const plan = await open('claude');
-  await page.locator('.task-note-body').fill('/plan Inspect layout');
-  await plan.click();
-  await page.waitForFunction(() => window.saved[0].status === 'working');
-  const calls = await page.evaluate(() => window.calls);
-  const planIndex = calls.findIndex(call => call.name === 'claude_session_control' && call.request.subtype === 'set_permission_mode');
-  const sendIndex = calls.findIndex(call => call.name === 'claude_session_send');
-  assert.ok(planIndex >= 0 && sendIndex > planIndex, 'retain the composer plan-command behavior');
-  assert.equal(calls[sendIndex].text, 'Inspect layout\n\nInclude tests');
+  // A tab with no tool yet takes the note too, opening its composer.
+  const blank = await open('claude');
+  await page.evaluate(() => { window.actions = []; window.addBlankTab(); });
+  await blank.click();
+  assert.deepEqual(await page.evaluate(() => window.actions), [{ type: 'TOGGLE_GAMBIT' }, { type: 'APPEND_GAMBIT_DRAFT', id: 'blank', text: 'Build a page\n\nInclude tests' }], 'a tab with no tool gets the note in its composer');
+  // With no tab at all the click does nothing.
+  const none = await open('claude');
+  await page.evaluate(() => { window.actions = []; window.selectSession(null); });
+  await none.click();
+  assert.deepEqual(await page.evaluate(() => window.actions), [], 'with no session the click does nothing');
+  // Notes another window wrote land through the sync event (a reload resets the fixture's saved notes).
+  const setNotes = async notes => {
+    await page.evaluate(list => window.events.get('tasks-changed')({ payload: JSON.stringify(list) }), notes);
+    await page.waitForFunction(first => document.querySelector('#root .task-note-preview')?.textContent === first, notes[0].title);
+  };
   await open('claude');
   const commits = await page.evaluate(async () => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -122,6 +102,58 @@ try {
     return {previous,current:window.taskCommits};
   });
   assert.equal(commits.current, commits.previous, 'streamed conversation content must not redraw the task board when send availability is unchanged');
+  // Notes are read-only: no editor, no add, edit, copy or send buttons; at most three lines, then an ellipsis.
+  await open('claude');
+  await setNotes([{ id: 'long', title: Array.from({ length: 40 }, (_, i) => 'line ' + i).join('\n'), status: 'todo', createdAt: 1 }]);
+  const preview = page.locator('#root .task-note-preview');
+  for (const gone of ['textarea', '.task-note-edit', '.task-note-copy', '.task-note-send', '.task-fab-simple', '.task-note-actions']) assert.equal(await page.locator('#root ' + gone).count(), 0, gone + ' is gone');
+  assert.equal(await preview.evaluate(el => getComputedStyle(el).webkitLineClamp), '3', 'a note clamps to three lines');
+  assert.ok(await preview.evaluate(el => el.scrollHeight > el.clientHeight + 1), 'a long note is cut off');
+  assert.ok(await preview.evaluate(el => { const s = getComputedStyle(el); return Math.abs(el.clientHeight - 3 * parseFloat(s.lineHeight)) < 1; }), 'exactly three lines show');
+  assert.equal(await preview.evaluate(el => getComputedStyle(el).userSelect), 'none', 'note text cannot be selected by a drag');
+  // Dragging a note slides the others out of the way and moves its dashed outline to the drop slot; the drop does not send.
+  await page.evaluate(() => window.events.get('tasks-changed')({ payload: JSON.stringify(['A', 'B', 'C'].map((title, i) => ({ id: title, title, status: 'todo', createdAt: i }))) }));
+  const cards = page.locator('#root .task-note-card');
+  await page.waitForFunction(() => document.querySelectorAll('#root .task-note-card').length === 3);
+  const sentBefore = await page.evaluate(() => (window.actions || []).filter(action => action.type === 'APPEND_GAMBIT_DRAFT').length);
+  const first = await cards.nth(0).boundingBox(), second = await cards.nth(1).boundingBox();
+  await page.mouse.move(first.x + 60, first.y + first.height / 2); await page.mouse.down();
+  await page.mouse.move(first.x + 60, second.y + second.height * 0.75, { steps: 8 });
+  assert.equal(await cards.nth(0).evaluate(el => getComputedStyle(el).outlineStyle), 'dashed', 'the dragged note leaves a dashed outline');
+  const moved = await cards.evaluateAll(els => els.map(el => Math.round(new DOMMatrix(el.style.transform || 'none').m42)));
+  assert.ok(moved[1] < 0, 'the passed note slides up out of the way '+moved);
+  assert.ok(moved[0] > 0, 'the dashed outline slides down to the drop slot '+moved);
+  assert.equal(moved[2], 0, 'notes past the slot stay put');
+  await page.mouse.up();
+  await page.waitForFunction(() => window.saved.map(task => task.title).join() === 'B,A,C');
+  assert.deepEqual(await cards.evaluateAll(els => els.map(el => el.style.transform)), ['', '', ''], 'slide offsets clear after the drop');
+  assert.equal(await page.evaluate(() => (window.actions || []).filter(action => action.type === 'APPEND_GAMBIT_DRAFT').length), sentBefore, 'a drop does not fill the composer');
+  // At rest a note is just its text. On hover a soft glow follows the pointer and the trash slides in at the right
+  // end while the text fades beneath it without moving.
+  const tabCard = page.locator('#root [data-note-id="B"]');
+  await page.mouse.move(5, 5);
+  await page.waitForFunction(() => [...document.querySelectorAll('#root .task-note-card')].every(el => getComputedStyle(el).transform === 'none' && !el.getAnimations().length));
+  const restCard = await tabCard.boundingBox(), restLine = await tabCard.locator('.task-note-preview').boundingBox();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#root [data-note-id="B"] .task-note-quick')).opacity === '0');
+  await page.mouse.move(restCard.x + 30, restCard.y + restCard.height / 2);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#root [data-note-id="B"] .task-note-quick')).opacity === '1' && getComputedStyle(document.querySelector('#root [data-note-id="B"]'), '::before').opacity === '1');
+  const glowAt = () => tabCard.evaluate(el => el.style.getPropertyValue('--glow-x'));
+  const leftGlow = await glowAt();
+  await page.mouse.move(restCard.x + restCard.width - 120, restCard.y + restCard.height / 2);
+  assert.ok(parseInt(await glowAt()) > parseInt(leftGlow) + 100, `the glow follows the pointer (${leftGlow} -> ${await glowAt()})`);
+  assert.deepEqual(await tabCard.locator('.task-note-quick button').evaluateAll(els => els.map(el => el.classList.contains('task-note-delete'))), [true], 'the trash is the only hover icon');
+  const del = await tabCard.locator('.task-note-delete').boundingBox();
+  assert.ok(del.x + del.width <= restCard.x + restCard.width, 'the trash sits at the right end');
+  assert.equal(await tabCard.locator('.task-note-delete').evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)', 'a plain icon until aimed at');
+  assert.deepEqual(await tabCard.locator('.task-note-preview').boundingBox(), restLine, 'the text does not move');
+  assert.ok(/linear-gradient/.test(await tabCard.locator('.task-note-preview').evaluate(el => getComputedStyle(el).webkitMaskImage || getComputedStyle(el).maskImage)), 'the text fades beneath the icon');
+  // The trash removes the note without sending it.
+  await tabCard.locator('.task-note-delete').click();
+  await page.waitForFunction(() => window.saved.map(task => task.title).join() === 'A,C');
+  assert.equal(await page.evaluate(() => (window.actions || []).filter(action => action.type === 'APPEND_GAMBIT_DRAFT').length), sentBefore, 'deleting does not fill the composer');
+  // Pressing a note never starts a text selection.
+  const pressPrevented = selector => page.evaluate(sel => { const el = document.querySelector(sel); const ev = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }); el.dispatchEvent(ev); window.dispatchEvent(new PointerEvent('pointerup')); return ev.defaultPrevented; }, selector);
+  assert.equal(await pressPrevented('#root .task-note-card'), true, 'note press does not select text');
   assert.deepEqual(errors, []);
-  console.log('OK: note, category and list send to existing Claude/Codex desktop and terminal sessions, acknowledge before promotion, prevent duplicates, preserve failures and disable unavailable targets');
+  console.log('OK: read-only notes go into the Claude/Codex desktop and terminal composers on click, never send, reorder and delete');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

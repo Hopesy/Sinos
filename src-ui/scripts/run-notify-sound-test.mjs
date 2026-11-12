@@ -4,20 +4,23 @@ import { runInNewContext } from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const compiled = await build({
-  entryPoints: [fileURLToPath(new URL('../src/lib/notify-sound.ts', import.meta.url))],
+  // The desktop session clients mark a send through notify-prompts; one bundle shares its state.
+  stdin: { resolveDir: fileURLToPath(new URL('../src/lib/', import.meta.url)), contents: "export * from './notify-sound'; export { markPromptSubmitted } from './notify-prompts';", loader: 'ts' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
   define: { 'process.env.NODE_ENV': '"production"' },
 });
 
-function fixture({ platform = 'Win32', native = true, failNative = false, disabled = [] } = {}) {
+function fixture({ platform = 'Win32', native = true, failNative = false, disabled = [], chosen = '', focused = true } = {}) {
   const calls = [], timers = new Map();
-  let nextTimer = 0, contexts = 0, notes = 0;
+  let nextTimer = 0, contexts = 0, notes = 0, chosenPlays = 0;
   class AudioContext {
     state = 'running'; currentTime = 0; destination = {};
     constructor() { contexts++; }
     createOscillator() {
       return { frequency: {}, connect() { return this; }, start() { notes++; }, stop() {} };
     }
+    async decodeAudioData() { if (chosen === 'broken') throw new Error('Undecodable'); return {}; }
+    createBufferSource() { return { connect() { return this; }, start() { chosenPlays++; }, stop() {} }; }
     createGain() {
       return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() { return this; } };
     }
@@ -25,19 +28,20 @@ function fixture({ platform = 'Win32', native = true, failNative = false, disabl
   const module = { exports: {} };
   runInNewContext(compiled.outputFiles[0].text, {
     module, exports: module.exports, AudioContext,
-    navigator: { platform }, console: { warn() {} },
+    navigator: { platform }, console: { warn() {} }, document: { hasFocus: () => focused },
     localStorage: { getItem: key => disabled.includes(key) ? 'false' : null },
     window: {
-      ...(native ? { __TAURI_INTERNALS__: { async invoke(command, args) {
+      ...(native ? { __TAURI_INTERNALS__: { metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } }, async invoke(command, args) {
         calls.push({ command, kind: args.kind });
         if (failNative) throw new Error('Native playback unavailable');
+        if (command === 'notify_sound_read') return new ArrayBuffer(chosen ? 8 : 0);
       } } } : {}),
       setTimeout(callback) { timers.set(++nextTimer, callback); return nextTimer; },
       clearTimeout(id) { timers.delete(id); },
     },
   });
   return {
-    api: module.exports, calls, contexts: () => contexts, notes: () => notes,
+    api: module.exports, calls, contexts: () => contexts, notes: () => notes, chosenPlays: () => chosenPlays,
     status(tool, agentStatus) { module.exports.initNotifySound([{ id: 'session', tool, agentStatus }]); },
     settle() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
   };
@@ -50,6 +54,15 @@ for (const tool of ['claude', 'codex', 'omp', 'kimicode', 'opencode']) {
   f.status(tool, 'working'); f.status(tool, 'idle'); f.settle();
   assert.deepEqual(f.calls, [{ command: 'play_notify_sound', kind: 'done' }], `${tool} completion uses native playback`);
   assert.equal(f.contexts(), 0, 'Windows notifications work without a WebView AudioContext');
+}
+
+// Desktop conversations mark the send in their session client, not through the terminal.
+for (const tool of ['codex', 'opencode', 'pi']) {
+  const f = fixture();
+  f.status(tool, 'idle');
+  f.api.markPromptSubmitted('session');
+  f.status(tool, 'working'); f.status(tool, 'idle'); f.settle();
+  assert.deepEqual(f.calls, [{ command: 'play_notify_sound', kind: 'done' }], `${tool} desktop completion chimes after a sent prompt`);
 }
 
 for (const tool of ['codex', 'kimicode', 'opencode']) {
@@ -144,9 +157,26 @@ assert.deepEqual(disconnected.calls.map(call => call.kind), ['done'], 'a fresh c
 
 for (const options of [{ platform: 'MacIntel' }, { platform: 'Linux x86_64' }, { native: false }]) {
   const f = fixture(options);
-  f.api.playNotifySound('done'); f.api.playNotifySound('wait');
-  assert.equal(f.calls.length, 0);
+  f.api.playNotifySound('done');
+  await new Promise(resolve => setImmediate(resolve));
+  f.api.playNotifySound('wait');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.filter(call => call.command === 'play_notify_sound').length, 0);
   assert.equal(f.notes(), 10, 'other platforms and browser previews retain both synthesized chimes');
+}
+{
+  const f = fixture({ platform: 'MacIntel', chosen: 'sound' });
+  f.api.playNotifySound('done');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([f.chosenPlays(), f.notes()], [1, 0], 'a chosen file replaces the chime');
+  const broken = fixture({ platform: 'MacIntel', chosen: 'broken' });
+  broken.api.playNotifySound('done');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([broken.chosenPlays(), broken.notes()], [0, 6], 'a file that cannot play falls back to the chime');
+  const superseded = fixture({ platform: 'MacIntel', chosen: 'sound' });
+  superseded.api.playNotifySound('done'); superseded.api.playNotifySound('wait');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(superseded.chosenPlays(), 1, 'a file decoded after a newer sound began stays silent');
 }
 
 const fallback = fixture({ failNative: true });
@@ -154,3 +184,19 @@ fallback.api.playNotifySound('done');
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(fallback.notes(), 6, 'native errors retain the WebAudio fallback');
 console.log('Notification sound tests passed (completion, preview, permissions, mute and platform routing).');
+
+{
+  // A background window flashes for approval and completion even with every sound muted.
+  const f = fixture({ focused: false, disabled: ['cc-sound-wait', 'cc-sound-done'] });
+  f.status('claude', 'idle'); f.status('claude', 'working'); f.status('claude', 'wait_input');
+  f.status('claude', 'working'); f.status('claude', 'idle'); f.settle();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const attention = f.calls.filter(call => call.command === 'plugin:window|request_user_attention');
+  assert.equal(attention.length, 2, 'wait and done each request attention');
+  assert.ok(!f.calls.some(call => call.command === 'play_notify_sound'), 'muted sounds stay silent');
+  const focused = fixture();
+  focused.status('claude', 'idle'); focused.status('claude', 'working'); focused.status('claude', 'wait_input');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(!focused.calls.some(call => call.command === 'plugin:window|request_user_attention'), 'a focused window is not flashed');
+  console.log('notify attention: ok');
+}

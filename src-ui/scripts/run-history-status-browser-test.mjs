@@ -21,6 +21,7 @@ const mock = `
   export function useAppStateRef(){return {current:state}};
   const sessions=[{id:'one',tool:'claude',session_token:'one',name:'Working on the first task',cwd:'D:/same',saved_at:'2026-10-23T00:00:00Z'},{id:'two',tool:'claude',session_token:'two',name:'Another task in the same folder',cwd:'D:/same',saved_at:'2026-10-22T00:00:00Z'},{id:'other',tool:'codex',session_token:'one',name:'Different tool with the same token',cwd:'D:/same',saved_at:'2026-10-21T00:00:00Z'}];
   if(new URLSearchParams(location.search).has('workers')) sessions.push(...['codex','opencode'].map((tool,index)=>({id:'saved-worker-'+index,tool,session_token:'worker-native-'+index,name:'You are a worker assigned to an internal task',cwd:'D:/same',saved_at:'2026-10-24T00:00:00Z'})));
+  if(new URLSearchParams(location.search).has('worktree')) sessions[0].worktree_cwd='D:/same/.claude/worktrees/coffee-worker-1';
   if(new URLSearchParams(location.search).has('toolIcons')) {
     state={...state,terminals:[]};
     sessions.splice(0,sessions.length,...['claude','codex','cursor','copilot','antigravity','openclaw','hermes','opencode','pi','cline','goose','aider','omp','crush','qwen','kilo','kiro','kimicode','codebuddy','grok','mimocode','minimax','muse'].map(tool=>({id:tool,tool,name:tool,cwd:'D:/icons',saved_at:'2026-10-23T00:00:00Z'})));
@@ -29,10 +30,11 @@ const mock = `
     sessions[1].git_context={branch:'main',pull_requests:['https://github.com/example/repo/pull/42']};
     sessions[2].git_context={branch:'main',pull_requests:['https://github.com/example/repo/pull/43']};
   }
-  const snapshot={sessions,status:'ready'}, emptySet=new Set(), emptyObject={}, agent={conversations:[]};
+  const snapshot={sessions,status:'ready'}, emptySet=new Set(), emptyObject={}, agent={conversations:new URLSearchParams(location.search).has('agent')?[{id:'agent-1',title:'Daily plan',updatedAt:Date.now(),messageCount:4}]:[]};
+  export const invoke=async(name,args)=>{if(name==='worktree_resolve')return {...args.worktree,branch:'same/worker-1',lease:'resolved-lease'};throw new Error('Unexpected IPC '+name)};
   export const commands={async orchestrationRemoveWorker(taskId){if(window.failRemoval)throw new Error('Remove failed');(window.removeRequests??=[]).push(taskId);const s=window.getTeam();return {...s,revision:s.revision+1,tasks:s.tasks.map(task=>task.id===taskId?{...task,hidden:true,phase:['starting','running','uncertain'].includes(task.phase)?'closed':task.phase}:task)}},async gitProjectStatus(folder,context){window.gitReadCount=(window.gitReadCount||0)+1;const p=new URLSearchParams(location.search);let pr=p.get('pr')||'open',number=42;if(p.has('perSession')&&context){number=Number(context.pull_requests[0].split('/').at(-1));pr=number===42?'merged':'closed'}if(p.has('deferGit'))await new Promise(resolve=>{window.resolveGitStatus=resolve});return {repo_root:folder,branch:context?.branch||'feature/ui',github:'ok',pull_request:pr==='branch'?null:{number,url:'https://github.com/example/repo/pull/'+number,state:pr,ci:pr==='open'?(p.get('ci')||'success'):null}}}},isTauri=true;
   export const subscribeHistory=()=>()=>{},getHistorySnapshot=()=>snapshot,prefetchHistory=()=>{},refreshHistory=()=>{},sortByMtime=s=>s;
-  commands.orchestrationRestoreWorker=async(taskId,parentId,sessionId)=>{if(window.failRestore)throw new Error('Restore failed');(window.restoreCalls??=[]).push({taskId,parentId,sessionId});const s=window.getTeam();return {...s,revision:s.revision+1,tasks:s.tasks.map(task=>task.id===taskId?{...task,parentId:task.detached?task.parentId:parentId,sessionId}:task)}};
+  commands.orchestrationRestoreWorker=async(taskId,parentId,sessionId)=>{if(window.failRestore)throw new Error('Restore failed');(window.restoreCalls??=[]).push({taskId,parentId,sessionId});const s=window.getTeam();return {...s,revision:s.revision+1,tasks:s.tasks.map(task=>task.id===taskId?{...task,parentId:task.detached?task.parentId:parentId,sessionId,worktree:task.worktree?{...task.worktree,lease:'worker-new'}:null}:task)}};
   commands.getTerminalSessionToken=async id=>window.sessionTokens?.[id]??null;
   commands.orchestrationDetachWorker=async taskId=>{const s=window.getTeam();return {...s,revision:s.revision+1,tasks:s.tasks.map(task=>task.id===taskId?{...task,detached:true}:task)}};
   export const subscribeHidden=()=>()=>{},getHiddenSnapshot=()=>emptySet,hideSession=()=>{window.deleted=true};
@@ -69,6 +71,12 @@ const browser = await chromium.launch({ headless: true, ...(process.env.COFFEE_C
 try {
   const page = await browser.newPage({ viewport: { width: 640, height: 400 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`http://127.0.0.1:${server.address().port}/?worktree=1`);
+  await page.evaluate(()=>window.updateView({terminals:[]}));
+  await page.locator('.history-card').filter({hasText:'Working on the first task'}).click();
+  await page.waitForFunction(()=>!!window.lastAction);
+  assert.equal(await page.evaluate(()=>window.lastAction.session.worktree.branch),'same/worker-1','history uses the actual branch returned by Git');
+  assert.equal(await page.evaluate(()=>window.lastAction.session.worktree.lease),'resolved-lease','history retains the reacquired lease');
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   for (const tool of ['claude','codex']) for (const mode of ['terminal','conversation']) {
     await page.evaluate(({tool,mode})=>{window.updateView({terminals:[]});localStorage.setItem('coffee:'+tool+'-launch-mode',mode)}, {tool,mode});
@@ -187,7 +195,10 @@ try {
     await page.mouse.move(500,300);
     await page.screenshot({path:join(directory,`git-${state}-${ci??'none'}.png`)});
     assert.equal(await page.locator('.history-card').first().locator('.history-git-mark').count(),0,'working spinner wins over PR status');
-    await page.locator('.history-layout-toggle').click();
+    await page.locator('.history-layout-menu-btn').click();
+    await page.getByRole('menuitem',{name:'Projects'}).hover();
+    await page.getByRole('menu',{name:'Projects'}).getByRole('menuitemradio').first().click();
+    assert.equal(await page.locator('.history-layout-menu').count(),0,'layout menu closes after choosing');
     await page.locator('.history-project-row .history-git-mark').waitFor();
   }
   for (const layout of ['projects', 'list']) {
@@ -236,6 +247,29 @@ try {
     await page.evaluate(layout=>localStorage.setItem('cc-history-layout',layout),layout);
     await page.goto(`http://127.0.0.1:${server.address().port}/?toolIcons=1&pr=branch`);
     await page.locator('.history-card-tool-icon').first().waitFor();
+    if(layout==='projects'){
+      // A busy folder previews its newest sessions and grows click by click; it can fold back at any point.
+      const more=page.getByRole('button',{name:'Show more',exact:true}),less=page.getByRole('button',{name:'Show less',exact:true});
+      const cards=()=>page.locator('.history-card').count();
+      const preview=await cards();
+      assert.ok(preview<23,'one folder does not render every session at once');
+      assert.equal(await more.count(),1);assert.equal(await less.count(),0,'the preview offers only Show more');
+      if(process.env.COFFEE_HISTORY_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_HISTORY_SCREENSHOT});
+      await more.click();
+      const partial=await cards();
+      assert.ok(partial>preview&&partial<23,'Show more adds one step');
+      assert.equal(await more.count(),1);assert.equal(await less.count(),1,'a partly expanded folder offers both Show more and Show less');
+      const [moreBox,lessBox]=await Promise.all([more.boundingBox(),less.boundingBox()]);
+      assert.ok(Math.abs(moreBox.y-lessBox.y)<1&&lessBox.x>moreBox.x+moreBox.width-1,'Show less sits beside Show more');
+      await less.click();
+      assert.equal(await cards(),preview,'Show less folds back from a partial expansion');
+      for(let i=0;i<5&&await cards()<23;i++)await more.click();
+      assert.equal(await cards(),23);
+      assert.equal(await more.count(),0);assert.equal(await less.count(),1,'a fully expanded folder offers only Show less');
+      await less.click();
+      assert.equal(await cards(),preview,'Show less folds back to the preview');
+      for(let i=0;i<5&&await cards()<23;i++)await more.click();
+    }
     assert.equal(await page.locator('.history-card-tool-icon').count(),23);
     for (const row of await page.locator('.history-card').all()) {
       const name=await row.locator('.history-card-title').innerText(),icon=row.locator('.history-card-tool-icon');
@@ -250,6 +284,44 @@ try {
     }
     await page.evaluate(()=>document.documentElement.style.setProperty('--text-2','#aba1aa'));
     await page.screenshot({path:join(directory,`tool-icons-${layout}.png`),fullPage:true});
+  }
+  // The session list's submenu offers all apps, then one favourite tool's sessions, level with its row.
+  await page.evaluate(()=>{localStorage.setItem('cc-history-layout','list');localStorage.setItem('coffee_pinned_items',JSON.stringify(['agent:claude','agent:codex','agent:pi','agent:terminal']));});
+  await page.goto(`http://127.0.0.1:${server.address().port}/?toolIcons=1`);
+  await page.locator('.history-card').first().waitFor();
+  const allCards=await page.locator('.history-card').count();
+  await page.locator('.history-layout-menu-btn').click();
+  const toolsRow=page.getByRole('menuitem',{name:'Sessions'});await toolsRow.hover();
+  const toolMenu=page.getByRole('menu',{name:'Sessions'});await toolMenu.waitFor();
+  assert.equal(await toolMenu.getByRole('menuitemradio').first().getAttribute('aria-checked'),'true','all apps comes first and is chosen by default');
+  assert.deepEqual(await toolMenu.locator('[data-tool]').evaluateAll(items=>items.map(item=>item.dataset.tool)),['claude','codex','pi'],'favourite AI tools in launchpad order, without the terminal');
+  const piName=await toolMenu.locator('[data-tool="pi"] .history-layout-tool-name').textContent();
+  const [rowBox,firstToolBox,menuBox,subBox]=await Promise.all([toolsRow.boundingBox(),toolMenu.getByRole('menuitemradio').first().boundingBox(),page.locator('.history-layout-menu').first().boundingBox(),toolMenu.boundingBox()]);
+  assert.ok(Math.abs(rowBox.y-firstToolBox.y)<1.5,'the first entry sits level with the session list row');
+  assert.ok(subBox.x>=menuBox.x+menuBox.width,'the submenu opens beside the menu');
+  await page.getByRole('menuitem',{name:'Projects'}).hover();
+  assert.equal(await toolMenu.count(),0,'hovering another row closes the submenu');
+  await toolsRow.hover();await toolMenu.locator('[data-tool="pi"]').click();
+  assert.equal(await page.locator('.history-layout-menu').count(),0,'choosing a tool closes both menus');
+  assert.equal(await page.locator('.history-layout-toggle > span').textContent(),piName,'the heading names the tool');
+  const piCards=await page.locator('.history-card').count();
+  assert.ok(piCards>=1&&piCards<allCards,'only that tool\'s sessions are listed');
+  await page.reload();await page.locator('.history-card').first().waitFor();
+  assert.equal(await page.locator('.history-layout-toggle > span').textContent(),piName,'the chosen tool is remembered');
+  await page.evaluate(()=>{localStorage.setItem('cc-history-layout','list');localStorage.removeItem('coffee_pinned_items');});
+  // Sinos Agent conversations carry the desktop app icon, never the animated title-bar logo.
+  for (const layout of ['projects','list']) {
+    await page.evaluate(layout=>localStorage.setItem('cc-history-layout',layout),layout);
+    await page.goto(`http://127.0.0.1:${server.address().port}/?toolIcons=1&agent=1`);
+    const agentCard=page.locator('.history-card').filter({has:page.locator('.history-card-title',{hasText:/^Daily plan$/})});
+    const agentIcon=agentCard.locator('.history-card-tool-icon');
+    await agentIcon.locator('img').waitFor();
+    assert.deepEqual(await agentIcon.locator('img').evaluate(img=>new Promise(resolve=>{const done=()=>resolve([img.src.startsWith('data:image/png'),img.naturalWidth,img.naturalHeight]);img.complete?done():img.onload=done;})),[true,128,128],`${layout}: Sinos Agent shows the 128px Sinos app icon`);
+    const expectedAgentIcon = 'data:image/png;base64,' + (await readFile(join(project, '../icons/128x128.png'))).toString('base64');
+    assert.equal(await agentIcon.locator('img').getAttribute('src'), expectedAgentIcon, 'Agent history uses the actual Sinos product artwork');
+    assert.equal(await agentIcon.locator('svg, animate').count(),0,`${layout}: the Sinos Agent icon is the static image, not the animated logo`);
+    assert.equal(await agentIcon.evaluate(el=>{const i=el.getBoundingClientRect(),t=el.nextElementSibling.getBoundingClientRect();return i.height===14&&Math.abs(i.top+i.height/2-t.top-t.height/2)<1}),true,`${layout}: the Sinos Agent icon aligns with its title`);
+    await agentCard.screenshot({path:join(directory,`coffee-agent-${layout}.png`)});
   }
   await page.evaluate(()=>localStorage.setItem('cc-history-layout','list'));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -273,7 +345,7 @@ try {
     window.updateView({terminals:[{id:'a',tool:'claude',resumeToken:'one',agentStatus:'idle',folderPath:'D:/same'},...window.workerTasks.map(task=>({id:task.sessionId,tool:task.tool,resumeToken:task.nativeId,folderPath:task.cwd,agentStatus:'working'}))]});
     window.updateTeam({enabled:true,tasks:window.workerTasks,revision:3});
   });
-  const family=page.locator('.history-family').first(),workers=family.locator('.history-worker');await workers.first().waitFor();assert.equal(await workers.count(),2);
+  const family=page.locator('.history-family').filter({hasText:'Working on the first task'}).first(),workers=family.locator('.history-worker');await workers.first().waitFor();assert.equal(await workers.count(),2);
   const reveal = await family.evaluate(group => {
     const rows = [...group.querySelectorAll('.history-worker')], animations = rows.flatMap(row => row.getAnimations().filter(animation => animation.animationName === 'orchestration-worker-enter'));
     const sample = time => { animations.forEach(animation => { animation.currentTime = time; }); return { height: rows[0].getBoundingClientRect().height, next: group.nextElementSibling.getBoundingClientRect().top }; };
@@ -369,7 +441,9 @@ try {
   await page.evaluate(()=>window.updateView({terminals:[{id:'a',tool:'claude',resumeToken:'one'}]}));
   await page.evaluate(()=>window.failRestore=true);await workers.first().locator('.history-worker-open').click();
   await page.getByRole('alert').filter({hasText:'Restore failed'}).waitFor();assert.equal(await page.evaluate(()=>window.restoreActions?.length??0),0,'failed history restore never starts a blank session');
-  await page.evaluate(()=>window.failRestore=false);await workers.first().locator('.history-worker-open').click();
+  await page.evaluate(()=>{window.failRestore=false;window.workerTasks[0].worktree={root:'D:/same',path:'D:/same/.claude/worktrees/coffee-worker-1',branch:'same/worker-1',lease:'old'};window.updateTeam({...window.getTeam(),tasks:window.workerTasks,revision:window.getTeam().revision+1})});
+  await workers.first().locator('.history-worker-open').click();
+  assert.equal(await page.evaluate(()=>window.restoreActions.at(-1).child.worktree.lease),'worker-new','worker tab keeps the reacquired lease from the native snapshot');
   assert.equal(await page.evaluate(()=>window.restoreActions.at(-1).child.resumeToken),'worker-native-0','restore opens the exact original conversation');
   assert.equal(await page.evaluate(()=>window.restoreActions.at(-1).child.id),'worker-0');
   assert.equal(await page.evaluate(()=>window.restoreActions.at(-1).parent.id),'a','restore remains grouped with its current parent');

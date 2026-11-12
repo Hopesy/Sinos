@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { IS_MACOS } from './platform';
 
 const STORAGE_KEY = 'cc-ui-scale';
 export const UI_SCALE_CHANGED = 'cc-ui-scale-changed';
@@ -29,7 +30,12 @@ export function setUiScale(percent: number, persist = true): Promise<void> {
     while (queued) {
       const request = queued;
       queued = undefined;
+      // CSS reads this to keep the macOS titlebar at 100% beside the native traffic lights. It is
+      // set before the native zoom lands, so no frame shows the titlebar zoomed with the page.
+      const setTitlebarScale = (percent: number) => document.documentElement.style.setProperty('--ui-scale', String(percent / 100));
+      const previous = snapshot.percent;
       try {
+        setTitlebarScale(request.percent);
         if ('__TAURI_INTERNALS__' in window) {
           const { getCurrentWebview } = await import('@tauri-apps/api/webview');
           await getCurrentWebview().setZoom(request.percent / 100);
@@ -41,12 +47,18 @@ export function setUiScale(percent: number, persist = true): Promise<void> {
         // Rapid pointer movement replaces the queued value; don't replay or save stale steps.
         if (request.persist && !queued) localStorage.setItem(STORAGE_KEY, String(request.percent));
       } catch {
+        setTitlebarScale(previous);
         publish({ failed: true });
       }
     }
     publish({ requestedPercent: null, pending: false });
   })().finally(() => { applying = undefined; });
   return applying;
+}
+
+/** CSS px per screen-space px inside the titlebar (counter-zoomed on macOS). */
+export function titlebarPxPerClientPx(): number {
+  return IS_MACOS ? snapshot.percent / 100 : 1;
 }
 
 export function initializeUiScale(): Promise<void> {

@@ -9,7 +9,7 @@
 //                            (release asset discovery is resolved from GitHub
 //                             at request time.)
 
-const REPO = "Hopesy/sinos"
+const REPO = "Hopesy/Sinos"
 
 // Asset filenames follow `Sinos.CLI_<version>_<OS>_<arch>.<ext>`
 // starting v1.9.2 (CI rename step). Pre-v1.9.2 filenames had no OS
@@ -106,10 +106,62 @@ async function getLatestAssets(env) {
   return assets
 }
 
+// Homepage languages: dictionary code → path (same table as js/main.js and
+// scripts/build-web-i18n.mjs).
+const LANG_PATH = {
+  "en": "/", "zh": "/zh/", "zh-TW": "/zh-hant/", "ja": "/ja/", "ko": "/ko/",
+  "es": "/es/", "fr": "/fr/", "de": "/de/", "pt": "/pt/", "ru": "/ru/",
+}
+
+// The first supported language in Accept-Language, by q-value then order.
+// Traditional Chinese for zh-TW / zh-HK / zh-MO / zh-Hant, Simplified otherwise.
+function langFromAcceptLanguage(header) {
+  const ranked = (header || "").split(",").map((part, i) => {
+    const [tag, ...params] = part.trim().toLowerCase().split(";")
+    const q = params.map(p => p.trim()).find(p => p.startsWith("q="))
+    return { tag, q: q ? parseFloat(q.slice(2)) || 0 : 1, i }
+  }).filter(e => e.tag && e.q > 0).sort((a, b) => b.q - a.q || a.i - b.i)
+  for (const { tag } of ranked) {
+    if (tag === "zh" || tag.startsWith("zh-")) {
+      return /^zh-(tw|hk|mo|hant)\b/.test(tag) ? "zh-TW" : "zh"
+    }
+    const base = tag.split("-")[0]
+    if (LANG_PATH[base]) return base
+  }
+  return "en"
+}
+
+function cookieLang(header) {
+  const m = (header || "").match(/(?:^|;\s*)coffee_lang=([^;]*)/)
+  if (!m) return null
+  let v
+  try { v = decodeURIComponent(m[1]) } catch (e) { return null }
+  return LANG_PATH[v] ? v : null
+}
+
+const BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|embedly|preview|lighthouse/i
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
     const { pathname } = url
+
+    if (pathname === "/robots.txt") {
+      const response = await env.ASSETS.fetch(request)
+      if (!response.ok) return response
+      const body = (await response.text()).replace(/^Sitemap:.*$/m, `Sitemap: ${url.origin}/sitemap.xml`)
+      return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } })
+    }
+
+    if (pathname === "/sitemap.xml") {
+      const response = await env.ASSETS.fetch(request)
+      if (!response.ok) return response
+      const origin = url.origin.replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+      const body = (await response.text())
+        .replace(/<loc>\//g, `<loc>${origin}/`)
+        .replace(/href="\//g, `href="${origin}/`)
+      return new Response(body, { headers: { "Content-Type": "application/xml; charset=utf-8" } })
+    }
 
     // ── /version.json ────────────────────────────────────────────────────────
     // Do not publish a tag before its requested installer is actually present.
@@ -174,6 +226,7 @@ export default {
       const fileRes = await fetch(asset.url, {
         headers: { "User-Agent": "SinosCLI-Worker" }
       })
+      if (!fileRes.ok) return new Response("Installer download unavailable; please retry later.", { status: 502 })
       return new Response(fileRes.body, {
         status: 200,
         headers: {
@@ -203,6 +256,27 @@ export default {
           }
         }
       )
+    }
+
+    if (pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
+      const ua = request.headers.get("User-Agent") || ""
+      const lang = BOT_UA.test(ua)
+        ? "en"
+        : cookieLang(request.headers.get("Cookie")) || langFromAcceptLanguage(request.headers.get("Accept-Language"))
+      if (lang !== "en") {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            "Location": LANG_PATH[lang] + url.search,
+            "Cache-Control": "private, no-store",
+            "Vary": "Accept-Language, Cookie",
+          },
+        })
+      }
+      const res = await env.ASSETS.fetch(request)
+      const out = new Response(res.body, res)
+      out.headers.append("Vary", "Accept-Language, Cookie")
+      return out
     }
 
     // ── everything else → CF Pages static files ──────────────────────────────

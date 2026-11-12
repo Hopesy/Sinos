@@ -123,17 +123,25 @@ function findLaunch(node) {
 }
 findLaunch(center); assert.ok(launchCallback);
 const actions = [];
+const phoneTools = ['claude', 'codex', 'opencode', 'pi'];
+const reducerTree = ts.createSourceFile('app-state.tsx', readFileSync(new URL('../src/store/app-state.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const reducerNode = reducerTree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'reducer');
+assert.ok(reducerNode);
+const reduce = evaluate(`${reducerNode.getText(reducerTree)}; reducer`, {});
 const launch = evaluate(`const launch = ${launchCallback.getText(center)}; launch`, {
-  BUILTIN_AI_CLI_FALLBACK: [{ key: 'claude' }, { key: 'codex' }],
+  BUILTIN_AI_CLI_FALLBACK: phoneTools.map(key => ({ key })),
   launchCtxRef: { current: { terminals: [{ id: 'busy', tool: 'claude' }], activeTerminalId: 'busy' } },
-  dispatch: action => actions.push(action), pushRecentFolder() {},
+  dispatch: action => actions.push(action), pushRecentFolder() {}, rememberFolder() {},
 });
-for (const tool of ['claude', 'codex']) {
+for (const tool of phoneTools) {
   actions.length = 0;
   launch(tool, '/workspace', `phone-${tool}`);
-  assert.equal(actions.find(action => action.type === 'ADD_TERMINAL').session.id, `phone-${tool}`);
+  const added = actions.find(action => action.type === 'ADD_TERMINAL').session;
+  assert.equal(added.id, `phone-${tool}`);
   const start = actions.find(action => action.type === 'SET_TERMINAL_TOOL');
   assert.equal(start.id, `phone-${tool}`);
-  assert.equal(start[`${tool}Mode`], 'terminal', 'phone-launched sessions retain the relay PTY transport');
+  if (tool === 'claude' || tool === 'codex') assert.equal(start[`${tool}Mode`], 'terminal');
+  const launched = reduce({ terminals: [added] }, start).terminals[0];
+  assert.equal(launched[`${tool}Mode`], 'terminal', `${tool}: phone launch retains the shared PTY even when desktop conversations are supported`);
 }
-console.log('OK: phone Claude/Codex launches preserve the reserved ID and shared PTY transport');
+console.log('OK: phone Claude/Codex/OpenCode/Pi launches preserve the reserved ID and shared PTY transport');

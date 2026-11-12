@@ -15,15 +15,15 @@ await build({
     import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {CodexConversation} from './src/components/center/CodexConversation';
     import {Gambit} from './src/components/center/Gambit';
-    import {useCodexSession,sendCodexMessage,interruptCodex} from './src/lib/codex-session';
+    import {useCodexSession,sendCodexMessage,sendCodexInteractive,interruptCodex} from './src/lib/codex-session';
     import './src/styles/global.css';import './src/components/center/TierTerminal.css';
-    function Fixture(){const [active,setActive]=useState('a'),[drafts,setDrafts]=useState({a:'',b:''}),[provider,setProvider]=useState('codex'),[welcomeEpoch,setWelcomeEpoch]=useState(0);window.rerollWelcome=()=>setWelcomeEpoch(n=>n+1);window.setActive=setActive;window.setProvider=setProvider;const s=useCodexSession(active);window.currentState=s;return <div className="panel-center">
+    function Fixture(){const [active,setActive]=useState('a'),[drafts,setDrafts]=useState({a:'',b:''}),[provider,setProvider]=useState('codex'),[welcomeEpoch,setWelcomeEpoch]=useState(0);window.rerollWelcome=()=>setWelcomeEpoch(n=>n+1);window.setActive=setActive;window.setProvider=setProvider;const s=useCodexSession(active);window.currentState=s;window.interactive=text=>sendCodexInteractive(active,text);return <div className="panel-center">
       {['a','b'].map(id=><div key={id} className="host" style={{display:active===id?'flex':'none'}}><CodexConversation key={id+'-'+welcomeEpoch} sessionId={id} cwd="D:/Test" isActive={active===id}/></div>)}
       <Gambit sessionId={active} draft={drafts[active]} onDraftChange={text=>setDrafts(d=>({...d,[active]:text}))} onClose={()=>{}} onSend={text=>sendCodexMessage(active,text)} codex={provider==='codex'} claude={provider==='claude'} running={s.busy} onCancel={()=>interruptCodex(active)} leftPanelHidden rightPanelHidden workspaceName="Test" toolIcon={<span>◈</span>}/>
     </div>};createRoot(document.getElementById('root')).render(<Fixture/>);
   ` },
   bundle: true, outfile: join(directory, 'fixture.js'), jsx: 'automatic',
-  external: ['/fonts/*', '/monogram.svg'], nodePaths: [join(project, 'node_modules')],
+  external: ['/fonts/*', '/monogram.svg', '/backgrounds/*'], nodePaths: [join(project, 'node_modules')],
   loader: { '.webp': 'dataurl', '.webm': 'dataurl', '.gif': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"development"' },
   plugins: [{ name: 'native-boundary', setup(b) {
@@ -37,7 +37,7 @@ await build({
     b.onLoad({ filter: /.*/, namespace: 'svg' }, async args => ({ contents: `export default ${JSON.stringify(await readFile(args.path, 'utf8'))}`, loader: 'js' }));
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ resolveDir: project, loader: 'js', contents: args.path === 'store' ? `
       const state={theme:'dark',gambitEnterToSend:true,terminals:[{id:'a',folderPath:'D:/Test'},{id:'b',folderPath:'D:/Test'}]},dispatch=action=>(window.actions??=[]).push(action);
-      export function useAppLanguage(){return 'en'};export function useAppState(){return {state,dispatch}};
+      window.appFixtureState=state;export function useAppLanguage(){return 'en'};export function useAppState(){return {state,dispatch}};
     ` : args.path === 'syntax' ? `
       export async function tokenizeFile(){return null};export async function tokenizeByLang(){return null};export function getShikiTheme(){return 'dark'};
     ` : args.path === 'clipboard' ? `
@@ -47,7 +47,7 @@ await build({
       let state={ready:true,busy:false,backgroundTasks:[],models:[],commands:[],model:'claude-test',permissionMode:'default',contextTokens:25000,contextWindow:100000,modelUsage:{first:{inputTokens:10000,outputTokens:300,cacheReadInputTokens:15000,cacheCreationInputTokens:1000},second:{inputTokens:6000,outputTokens:100}}};const listeners=new Set();
       window.setClaude=patch=>{state={...state,...patch};listeners.forEach(fn=>fn())};
       export function useClaudeSession(){return useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>state)};
-      export async function controlClaude(){};
+      export async function controlClaude(){};export function continueClaudeInNewConversation(){return false};
     ` : args.path === 'event' ? `
       export async function listen(name,fn){window.codexListener=fn;return()=>{}};
     ` : `
@@ -58,7 +58,8 @@ await build({
       export async function invoke(name,args){window.calls.push({name,...args});
         if(name==='codex_session_start'&&args.id==='a')await new Promise(resolve=>window.resolveStartup=resolve);
         if(name==='codex_session_start')return {thread:{id:'thread-'+args.id,turns:args.id==='b'?history('history-',48):[]},turnsBackwardsCursor:args.id==='b'?'older':null,model:'gpt-test',reasoningEffort:'high',approvalPolicy:'on-request',sandbox:{type:'readOnly'},models:[{id:'gpt-test',model:'gpt-test',displayName:'GPT Test',defaultReasoningEffort:'high',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'}]},{id:'second',model:'second',displayName:'Second model',defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'ultra'}]}]};
-        if(args.method==='turn/start'){const id='turn-'+(++turn);window.turn=id;window.emit(args.id,'turn/started',{turn:{id,status:'inProgress'}});window.emit(args.id,'item/completed',{turnId:id,item:{id:'user',type:'userMessage',content:args.params.input}});return {turn:{id,status:'inProgress'}}}
+        if(args.method==='collaborationMode/list')return {data:[{mode:'plan'},{mode:'default'}]};
+        if(args.method==='turn/start'){if(window.failTurn)throw new Error('Delivery failed');const id='turn-'+(++turn);window.turn=id;window.emit(args.id,'turn/started',{turn:{id,status:'inProgress'}});window.emit(args.id,'item/completed',{turnId:id,item:{id:'user',type:'userMessage',content:args.params.input}});return {turn:{id,status:'inProgress'}}}
         if(args.method==='turn/interrupt'){window.emit(args.id,'turn/completed',{turn:{id:args.params.turnId,status:'interrupted',durationMs:1500}})}
         if(args.method==='skills/list')return {data:[{skills:[{name:'test-skill',path:'D:/skills/test/SKILL.md',description:'A native test skill',enabled:true},{name:'disabled',path:'disabled',enabled:false}]}]};
         if(args.method==='mcpServerStatus/list')return {data:[{name:args.params.cursor?'second-server':'test-server',tools:{read:{description:'Read content'}}}],nextCursor:args.params.cursor?null:'page-2'};
@@ -154,7 +155,8 @@ try {
 
   await page.getByRole('button',{name:'Command',exact:true}).click();
   const commandMenu=page.getByRole('dialog',{name:'Command',exact:true});
-  assert.equal(await commandMenu.getByRole('button').count(),11);
+  assert.equal(await commandMenu.getByRole('button').count(),12);
+  assert.equal(await commandMenu.getByRole('button',{name:/^\/plan/}).count(),1);
   if(process.env.COFFEE_CODEX_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-slash.png')});
   await commandMenu.getByRole('button',{name:/^\/status/}).click();
   await page.getByRole('dialog',{name:'Context window',exact:true}).waitFor();await page.keyboard.press('Escape');
@@ -206,20 +208,26 @@ try {
   await page.waitForFunction(()=>!window.currentState.busy);
   assert.equal(await input.inputValue(),'Keep this draft','stop preserves a draft');
   assert.equal(await page.locator('.claude-session-error').count(),0,'user stop is neutral');
-  await page.getByText('Interrupted · 2s',{exact:true}).waitFor();
+  await page.getByText('Interrupted · Worked for 2s',{exact:true}).waitFor();
+  await input.focus();
   await page.getByRole('button',{name:'Codex permissions',exact:true}).click();
   const permissions=page.getByRole('dialog',{name:'Codex permissions',exact:true});
+  assert.equal(await page.evaluate(()=>document.activeElement?.tagName),'TEXTAREA','clicking a footer control leaves the caret in the draft');
   assert.equal(await permissions.locator('pre').count(),0,'permission menu does not expose protocol JSON');
   assert.equal(await permissions.locator('.codex-permission-option').count(),3);
   if(process.env.COFFEE_CODEX_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-permissions.png')});
   await permissions.getByRole('button',{name:/^Workspace/}).click();
+  assert.equal(await page.evaluate(()=>document.activeElement?.tagName),'TEXTAREA','choosing from a footer menu leaves the caret in the draft');
   assert.equal(await page.evaluate(()=>window.currentState.sandbox.type),'workspaceWrite');
   await page.locator('.claude-effort-trigger').click();
   const effort=page.getByRole('slider');
   assert.equal(await effort.getAttribute('max'),'1','effort uses only the two supported Codex levels');
-  await effort.press('Home');await page.waitForFunction(()=>window.currentState.effort==='medium');
+  await effort.press('Home');
   if(process.env.COFFEE_CODEX_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-effort.png')});
   await effort.press('Escape');assert.equal(await page.locator('.codex-control-menu').count(),0);
+  assert.notEqual(await page.evaluate(()=>window.currentState.effort),'medium','Escape discards the previewed effort');
+  await page.locator('.claude-effort-trigger').click();await effort.press('Home');await page.locator('.claude-effort-trigger').click();
+  await page.waitForFunction(()=>window.currentState.effort==='medium');assert.equal(await page.locator('.codex-control-menu').count(),0);
   await emit('thread/tokenUsage/updated',{turnId,tokenUsage:{last:{totalTokens:42182},total:{totalTokens:123334},modelContextWindow:475000}});
   await page.getByRole('button',{name:'Context used: 9%',exact:true}).click();
   const context=page.getByRole('dialog',{name:'Context window',exact:true});
@@ -233,9 +241,10 @@ try {
   await page.getByRole('button',{name:'Second model',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.currentState.effort),'low','model selects a supported effort');
   await page.locator('.claude-effort-trigger').click();await page.getByRole('slider').press('End');
+  assert.equal(await page.getByRole('slider').getAttribute('aria-valuetext'),'Ultra','the slider previews the custom top level');
+  await page.locator('.claude-effort-trigger').click();
   await page.waitForFunction(()=>window.currentState.effort==='ultra');
   assert.equal(await page.locator('.claude-effort-trigger').textContent(),'Ultra');
-  assert.equal(await page.getByRole('slider').getAttribute('aria-valuetext'),'Ultra');await page.keyboard.press('Escape');
   assert.equal(await page.locator('.claude-effort-trigger').evaluate(el=>getComputedStyle(el).color),'rgb(180, 147, 124)','Ultra footer uses the theme accent');
 
   await page.getByRole('button',{name:'Select Codex model',exact:true}).click();await page.keyboard.press('Escape');
@@ -258,9 +267,9 @@ try {
   await page.getByRole('link',{name:'Website',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.nativeActions.at(-1).args),['https://example.com']);
   await page.getByRole('link',{name:'File URL',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.nativeActions.at(-1).args),['D:/Test/test page.html']);
   assert.equal(await page.getByRole('link',{name:'Blocked',exact:true}).count(),0);
-  await local.click({button:'right'});await page.locator('.term-ctx-menu').waitFor();await page.waitForTimeout(150);if(process.env.COFFEE_CODEX_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-menu.png')});await page.locator('.term-ctx-menu').getByRole('button',{name:'Copy link address',exact:true}).click();assert.equal(await page.evaluate(()=>window.copiedText),'D:/Test/simple-web-test/index.html');
+  await local.click({button:'right'});await page.locator('.term-ctx-menu').waitFor();await page.waitForTimeout(150);if(process.env.COFFEE_CODEX_SCREENSHOT)await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-menu.png')});await page.locator('.term-ctx-menu').getByRole('button',{name:'Copy path',exact:true}).click();assert.equal(await page.evaluate(()=>window.copiedText),'D:/Test/simple-web-test/index.html');
   await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:'Reveal in File Explorer',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.nativeActions.at(-1)),{name:'showInFolder',args:['D:/Test/simple-web-test/index.html']});
-  await local.evaluate(el=>{window.getSelection().selectAllChildren(el)});await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Copy Ctrl/}).click();assert.equal(await page.evaluate(()=>window.copiedText),'Open test page');
+  await local.evaluate(el=>{window.getSelection().selectAllChildren(el)});await local.click({button:'right'});await page.locator('.term-ctx-menu').getByRole('button',{name:/^Copy (Ctrl|⌘)/}).click();assert.equal(await page.evaluate(()=>window.copiedText),'Open test page');
   await local.click({button:'right'});await page.locator('.term-ctx-menu').waitFor();await page.keyboard.press('Escape');await page.locator('.term-ctx-menu').waitFor({state:'hidden'});
   await local.dispatchEvent('contextmenu',{clientX:998,clientY:798});await page.locator('.term-ctx-menu').waitFor();await page.waitForTimeout(150);const menuBounds=await page.locator('.term-ctx-menu').boundingBox();assert.ok(menuBounds.x+menuBounds.width<=996&&menuBounds.y+menuBounds.height<=796,'context menu fits the lower right corner');await page.keyboard.press('Escape');
   await input.fill('/copy');await input.press('Enter');assert.ok((await page.evaluate(()=>window.copiedText)).includes('[Open test page]'));
@@ -283,12 +292,19 @@ try {
   await page.waitForTimeout(400);
   const metrics=()=>scroller.evaluate(el=>({top:el.scrollTop,distance:el.scrollHeight-el.clientHeight-el.scrollTop}));
   assert.ok((await metrics()).distance<2,'restored history starts at the latest message: '+JSON.stringify(await metrics()));
+  // macOS WebKit can restore an older position after a programmatic jump; without user input, keep following.
+  await scroller.evaluate(el=>{el.scrollTop-=400});await page.waitForTimeout(200);
+  assert.ok((await metrics()).distance<2,'an engine scroll restore keeps following: '+JSON.stringify(await metrics()));
+  assert.equal(await page.locator('.host:visible .claude-scroll-bottom').count(),0,'an engine scroll restore shows no jump button');
   await scroller.hover();await page.mouse.wheel(0,-400);await page.waitForTimeout(300);
   const reading=await metrics();
   const returnLatest=page.locator('.host:visible .claude-scroll-bottom');
-  assert.equal(await returnLatest.evaluate(el=>el.classList.contains('gambit-send')),true);
+  assert.equal(await returnLatest.evaluate(el=>el.classList.contains('gambit-send')),false,'return button is a dark chip, not the filled send button');
   assert.equal(await returnLatest.locator('svg path').count(),1,'return button uses the shared SVG arrow');
-  const returnSize=await returnLatest.boundingBox(),sendSize=await page.locator('.gambit-footer > .gambit-send').boundingBox();assert.equal(returnSize.width,sendSize.width);assert.equal(returnSize.height,sendSize.height);
+  const radius=locator=>locator.evaluate(el=>getComputedStyle(el).borderRadius);
+  assert.equal(await radius(returnLatest),await radius(page.locator('.gambit-footer > .gambit-send')),'return button takes the theme shape of the send button');
+  const returnSize=await returnLatest.boundingBox(),hostSize=await page.locator('.host:visible .claude-conversation').boundingBox();assert.equal(returnSize.width,32);assert.equal(returnSize.height,32);
+  assert.ok(Math.abs(returnSize.x+returnSize.width/2-(hostSize.x+hostSize.width/2))<2,'return button is centered in the conversation');
   await page.evaluate(()=>{window.emit('b','turn/started',{turn:{id:'live'}});window.emit('b','item/agentMessage/delta',{turnId:'live',itemId:'answer',delta:'New answer. '.repeat(90)})});
   await page.waitForTimeout(200);
   assert.ok(Math.abs((await metrics()).top-reading.top)<2,'streaming preserves upward reading position');
@@ -323,6 +339,61 @@ try {
   await page.evaluate(()=>window.setActive('a'));assert.equal(await page.locator('.host').nth(1).locator('.conversation-navigation').count(),0,'inactive sessions do not retain an interactive navigation rail');
   await page.evaluate(()=>window.setActive('b'));await navigation.waitFor();
   console.log('ok shared conversation navigation, preview, grouped virtual rows, keyboard jump, streaming, history prepend and narrow panes');
+  // Planning is native and read-only until the person explicitly approves implementation.
+  await input.fill('/plan');
+  assert.equal(await commandMenu.getByRole('button',{name:/^\/plan/}).isDisabled(),true,'a running turn cannot switch into planning');
+  await input.press('Escape');
+  await page.evaluate(()=>window.emit('b','turn/completed',{turn:{id:'live',status:'completed'}}));
+  await input.fill('/plan');await input.press('Enter');
+  await page.waitForFunction(()=>window.currentState.planMode===true);
+  assert.equal(await page.getByRole('button',{name:'Codex permissions',exact:true}).textContent(),'Plan mode');
+  await page.setViewportSize({width:320,height:800});
+  const planningFooter=await page.locator('.gambit-footer').evaluate(el=>({scroll:el.scrollWidth,width:el.clientWidth}));
+  assert.ok(planningFooter.scroll<=planningFooter.width+1,'planning keeps the narrow composer usable');
+  await page.setViewportSize({width:1000,height:800});
+  await page.getByRole('button',{name:'Codex permissions',exact:true}).click();
+  const planSwitch=page.getByRole('switch',{name:'Plan mode',exact:true});
+  assert.equal(await planSwitch.getAttribute('aria-checked'),'true');
+  await planSwitch.click();assert.equal(await planSwitch.getAttribute('aria-checked'),'false');
+  await planSwitch.click();assert.equal(await planSwitch.getAttribute('aria-checked'),'true');await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.beforePlan=structuredClone(window.currentState.sandbox));
+  await input.fill('Plan the change');await input.press('Enter');
+  await page.waitForFunction(()=>window.currentState.busy);
+  const planned=await page.evaluate(()=>window.calls.filter(c=>c.method==='turn/start').at(-1).params);
+  assert.equal(planned.collaborationMode.mode,'plan');assert.equal(planned.sandboxPolicy.type,'readOnly');assert.equal(planned.approvalPolicy,'never');
+  const planTurn=await page.evaluate(()=>window.turn);
+  await page.evaluate(turn=>{window.emit('b','item/completed',{turnId:turn,item:{id:'proposed',type:'plan',text:'1. Update the handler\n2. Run tests'}});window.emit('b','turn/completed',{turn:{id:turn,status:'completed'}})},planTurn);
+  const approve=page.getByRole('button',{name:'Approve and implement',exact:true});await approve.waitFor();
+  if(process.env.COFFEE_CODEX_SCREENSHOT){await approve.scrollIntoViewIfNeeded();await page.locator(`[data-message-id="${planTurn}:proposed"]`).waitFor();await page.screenshot({path:process.env.COFFEE_CODEX_SCREENSHOT.replace('.png','-plan.png')})}
+  const countBeforeApproval=await page.evaluate(()=>window.calls.filter(c=>c.method==='turn/start').length);
+  await page.evaluate(()=>window.failTurn=true);await approve.click();
+  await page.getByText('Error: Delivery failed',{exact:true}).waitFor();
+  assert.equal(await approve.isEnabled(),true,'failed delivery keeps approval available');
+  await page.evaluate(()=>window.failTurn=false);await approve.click();
+  await page.waitForFunction(()=>window.currentState.busy&&!window.currentState.planMode);
+  const implemented=await page.evaluate(()=>window.calls.filter(c=>c.method==='turn/start').at(-1).params);
+  assert.equal(implemented.collaborationMode.mode,'default');assert.deepEqual(implemented.sandboxPolicy,await page.evaluate(()=>window.beforePlan));
+  assert.equal(await approve.count(),0,'one approval cannot execute twice');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='turn/start').length),countBeforeApproval+2,'only explicit approval attempts start implementation');
+  await page.evaluate(()=>window.emit('b','turn/completed',{turn:{id:window.turn,status:'completed'}}));
+
+  // A manual handoff preserves the draft, and linked worker sessions cannot change identity.
+  await input.fill('Unsent draft with "D:/image.png"');
+  const openContext=async()=>{await page.locator('.codex-composer-controls .claude-context-control').click()};
+  await openContext();
+  const fresh=page.getByRole('button',{name:'Continue in a new conversation',exact:true});await fresh.click();
+  assert.equal(await input.inputValue(),'Unsent draft with "D:/image.png"');
+  assert.equal(await page.evaluate(()=>window.actions.at(-1).type),'RESTART_TERMINAL');
+  assert.equal(await page.evaluate(()=>window.actions.at(-1).fresh),true);
+  await page.evaluate(()=>{window.appFixtureState.terminals.find(t=>t.id==='b').parentId='parent';window.emit('b','thread/tokenUsage/updated',{tokenUsage:{last:{totalTokens:200000},total:{totalTokens:200000},modelContextWindow:1000000}})});
+  await openContext();assert.equal(await fresh.isDisabled(),true,'worker tabs retain their ID');await page.keyboard.press('Escape');
+  await page.clock.setFixedTime(new Date(2026,9,25,9,0));
+  await page.evaluate(()=>window.interactive('Held worker prompt'));
+  await page.getByRole('button',{name:'Resume in full',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Continue in a new conversation (recommended)',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await input.fill('');
+  console.log('ok read-only plan, explicit implementation, delivery retry, permission restoration, manual continuation, draft and worker identity');
   await page.evaluate(()=>{document.documentElement.style.setProperty('--bg-terminal','#eee9e2');document.documentElement.style.setProperty('--text-2','#51473d');document.documentElement.style.setProperty('--bg-panel','#e7dfd4')});
   assert.equal(await page.locator('.host:visible .codex-conversation').evaluate(el=>getComputedStyle(el).color),'rgb(81, 71, 61)');
   await page.evaluate(()=>window.setProvider('claude'));await page.getByRole('button',{name:'Context used: 25%',exact:true}).click();
@@ -336,7 +407,7 @@ try {
   await page.keyboard.press('Escape');
   await page.evaluate(()=>window.emit('b','coffee/exit',{code:1,detail:'Startup unavailable'}));
   await page.waitForFunction(()=>document.querySelector('.host:has(.claude-reconnect)'));
-  assert.equal(await page.locator('.host:visible .claude-session-error').count(),0,'connection failures do not become red conversation messages');
+  assert.equal(await page.locator('.host:visible .claude-session-error').textContent(),'Startup unavailable','a failed start says why in place');
   assert.equal(await page.locator('.host:visible .claude-reconnect').getAttribute('title'),'Startup unavailable');
   assert.deepEqual(errors,[]);
   console.log('ok 1000/520/360/320px, theme colors, virtual history, paused reading and history prepend');

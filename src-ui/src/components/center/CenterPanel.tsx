@@ -1,5 +1,7 @@
 import { ConversationView } from './ConversationView';
-import { lazy, Suspense, Fragment, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { lazy, Suspense, Fragment, useState, useEffect, useLayoutEffect, useRef, useMemo, useSyncExternalStore } from 'react';
+import { AutomationsPage } from './AutomationsPage';
+import { addProjectFolder, getProjectFolders, removeProjectFolder, subscribeProjectFolders } from '../../lib/project-folders';
 import { createPortal } from 'react-dom';
 import { InlineSvgIcon } from '../InlineSvgIcon';
 import { focusTerminal } from '../../lib/focus-registry';
@@ -8,6 +10,8 @@ import { TierTerminal } from './TierTerminal';
 import { AgentPages } from '../agent/AgentPages';
 import { ClaudeConversation } from './ClaudeConversation';
 import { CodexConversation } from './CodexConversation';
+import { OpenCodeConversation } from './OpenCodeConversation';
+import { PiConversation } from './PiConversation';
 import { DshConversation } from './DshConversation';
 import { UsageDashboard } from './UsageDashboard';
 import { ToolSettingsPage } from './ToolSettingsPage';
@@ -32,7 +36,7 @@ const EditorSurface = lazy(() => import('./EditorSurface').then(module => ({
 const ImageSurface = lazy(() => import('./ImageSurface').then(module => ({
   default: module.ImageSurface,
 })));
-import { isClaudeConversation, isCodexConversation, isDshConversation } from '../../lib/chat-tools';
+import { isClaudeConversation, isCodexConversation, isDshConversation, isOpenCodeConversation, isPiConversation } from '../../lib/chat-tools';
 
 // Dropdown shown when a tool card is clicked: the globally
 // recent project folders (any tool that used one) + "Open folder…" last.
@@ -125,6 +129,9 @@ interface RemoteHistoryItem {
   user: string;
 }
 import { isTauri, commands } from '../../tauri';
+import { titlebarPxPerClientPx } from '../../lib/ui-scale';
+import { NewSessionTabButton } from './NewSessionTabButton';
+import { homeShortPath } from '../../lib/home-short-path';
 import { getToolDisplayName } from '../../lib/tool-info';
 import './CenterPanel.css';
 
@@ -210,7 +217,7 @@ const bgIcon = (dataUrl: string, size = '1em', extra: React.CSSProperties = {}) 
 // so it never flashes. Outer rect rounded (rx=18) to match the iOS-style
 // rounded square of the official PNG asset; previous opencode.svg lacked this.
 const OPENCODE_SVG  = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="100%" height="100%"><rect width="96" height="96" rx="18" ry="18" fill="#131010"/><rect x="24" y="18" width="48" height="60" fill="#FFFFFF"/><rect x="36" y="30" width="24" height="36" fill="#5A5858"/><rect x="36" y="30" width="24" height="12" fill="#131010"/></svg>';
-const QWEN_SVG      = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%"><defs><linearGradient id="qwen-fill" x1="0%" x2="100%" y1="0%" y2="0%"><stop offset="0%" stop-color="#6336E7" stop-opacity=".84"/><stop offset="100%" stop-color="#6F69F7" stop-opacity=".84"/></linearGradient></defs><path d="M12.604 1.34c.393.69.784 1.382 1.174 2.075a.18.18 0 00.157.091h5.552c.174 0 .322.11.446.327l1.454 2.57c.19.337.24.478.024.837-.26.43-.513.864-.76 1.3l-.367.658c-.106.196-.223.28-.04.512l2.652 4.637c.172.301.111.494-.043.77-.437.785-.882 1.564-1.335 2.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099 0 00-.081.05 575.097 575.097 0 01-2.705 4.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537 0 01-.465-.271l-1.335-2.323a.09.09 0 00-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543 0 01-.002-.54l1.207-2.12a.198.198 0 000-.197 550.951 550.951 0 01-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625 1.387-2.436.132-.234.304-.334.584-.335a338.3 338.3 0 012.589-.001.124.124 0 00.107-.063l2.806-4.895a.488.488 0 01.422-.246c.524-.001 1.053 0 1.583-.006L11.704 1c.341-.003.724.032.9.34zm-3.432.403a.06.06 0 00-.052.03L6.254 6.788a.157.157 0 01-.135.078H3.253c-.056 0-.07.025-.041.074l5.81 10.156c.025.042.013.062-.034.063l-2.795.015a.218.218 0 00-.2.116l-1.32 2.31c-.044.078-.021.118.068.118l5.716.008c.046 0 .08.02.104.061l1.403 2.454c.046.081.092.082.139 0l5.006-8.76.783-1.382a.055.055 0 01.096 0l1.424 2.53a.122.122 0 00.107.062l2.763-.02a.04.04 0 00.035-.02.041.041 0 000-.04l-2.9-5.086a.108.108 0 010-.113l.293-.507 1.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059 0-.073-.026-.043-.077l1.434-2.505a.107.107 0 000-.114L9.225 1.774a.06.06 0 00-.053-.031zm6.29 8.02c.046 0 .058.02.034.06l-.832 1.465-2.613 4.585a.056.056 0 01-.05.029.058.058 0 01-.05-.029L8.498 9.841c-.02-.034-.01-.052.028-.054l.216-.012 6.722-.012z" fill="url(#qwen-fill)" fill-rule="nonzero"/></svg>';
+const QWEN_SVG      = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="17.5 27.7 135.6 135.6" width="100%" height="100%"><path fill="#082DFF" d="M130.06,43.66h-33.37c0-1.42-.37-2.84-1.1-4.11l-4.47-7.74c-1.47-2.54-4.18-4.11-7.12-4.11h-8.93c-2.94,0-5.65,1.57-7.12,4.11l-13.68,23.69c-1.47,2.54-1.47,5.67,0,8.22l4.47,7.74c1.47,2.54,4.18,4.11,7.12,4.11h64.19c2.94,0,5.65-1.57,7.12-4.11l4.47-7.74c1.47-2.54,1.47-5.67,0-8.22l-4.47-7.74c-1.47-2.54-4.18-4.11-7.12-4.11Z"/><path fill="#082DFF" d="M19.75,83.66l16.68,28.9c-1.23.71-2.27,1.74-3.01,3.01l-4.47,7.74c-1.47,2.54-1.47,5.67,0,8.22l4.47,7.74c1.47,2.54,4.18,4.11,7.12,4.11h27.35c2.94,0,5.65-1.57,7.12-4.11l4.47-7.74c1.47-2.54,1.47-5.67,0-8.22l-32.1-55.59c-1.47-2.54-4.18-4.11-7.12-4.11h-8.93c-2.94,0-5.65,1.57-7.12,4.11l-4.47,7.74c-1.47,2.54-1.47,5.67,0,8.22Z"/><path fill="#082DFF" d="M109.55,159.19l16.68-28.9c1.23.71,2.64,1.1,4.11,1.1h8.93c2.94,0,5.65-1.57,7.12-4.11l4.47-7.74c1.47-2.54,1.47-5.67,0-8.22l-13.68-23.69c-1.47-2.54-4.18-4.11-7.12-4.11h-8.93c-2.94,0-5.65,1.57-7.12,4.11l-32.1,55.59c-1.47,2.54-1.47,5.67,0,8.22l4.47,7.74c1.47,2.54,4.18,4.11,7.12,4.11h8.93c2.94,0,5.65-1.57,7.12-4.11Z"/></svg>';
 // OpenClaw brand (lobster mascot) — ported from Web-Home/agents/icons/openclaw.svg.
 // Markup lives in src/icons-inline/openclaw.svg and is imported ?raw above so
 // HistoryBoard can reuse the same bytes. InlineSvgIcon scopes definition IDs
@@ -379,7 +386,7 @@ export function CenterPanel() {
   const editorTabActive = state.editorTabActive;
   const agentPageActive = state.agentPageActive;
   const usageOpen = state.usageOpen;
-  const utilityPageOpen = usageOpen || state.toolSettingsOpen;
+  const utilityPageOpen = usageOpen || state.toolSettingsOpen || state.settingsOpen || state.automationsOpen;
   const contentActive = !editorTabActive && !utilityPageOpen && !diffTabActive && !agentPageActive;
   const splitIds = splitSessionIds(state.sessionSplit);
   const splitVisible = contentActive && splitIds.length > 1 && splitIds.includes(activeTerminalId ?? '');
@@ -428,9 +435,10 @@ export function CenterPanel() {
       const defaults = [
         'agent:claude',
         'agent:codex',
-        'agent:dsh',
         'agent:opencode',
         'agent:pi',
+        // DeepSeek Harness is desktop-only, unlike the four before it.
+        'agent:dsh',
         'agent:terminal',
       ];
       localStorage.setItem('coffee_pinned_items', JSON.stringify(defaults));
@@ -609,24 +617,64 @@ export function CenterPanel() {
     setCodexLaunchMode(mode);
     try { localStorage.setItem('coffee:codex-launch-mode', mode); } catch { /* optional preference */ }
   };
-  // Shared recent project folders, most recently used first.
-  const [recentFolders, setRecentFolders] = useState<string[]>(() => {
-    try { const r = localStorage.getItem('coffee:recent-folders'); return r ? JSON.parse(r) : []; } catch { return []; }
+  const [opencodeLaunchMode, setOpencodeLaunchMode] = useState<ClaudeMode>(() => {
+    try { return localStorage.getItem('coffee:opencode-launch-mode') === 'terminal' ? 'terminal' : 'conversation'; } catch { return 'conversation'; }
   });
+  const changeOpencodeLaunchMode = (mode: ClaudeMode) => {
+    setOpencodeLaunchMode(mode);
+    try { localStorage.setItem('coffee:opencode-launch-mode', mode); } catch { /* optional preference */ }
+  };
+  const [piLaunchMode, setPiLaunchMode] = useState<ClaudeMode>(() => {
+    try { return localStorage.getItem('coffee:pi-launch-mode') === 'terminal' ? 'terminal' : 'conversation'; } catch { return 'conversation'; }
+  });
+  const changePiLaunchMode = (mode: ClaudeMode) => {
+    setPiLaunchMode(mode);
+    try { localStorage.setItem('coffee:pi-launch-mode', mode); } catch { /* optional preference */ }
+  };
+  // Shared recent project folders, most recently used first.
+  const recentFolders = useSyncExternalStore(subscribeProjectFolders, getProjectFolders, getProjectFolders);
   const [folderMenu, setFolderMenu] = useState<{ x: number; y: number; tool: ToolType } | null>(null);
-  const pushRecentFolder = (folder: string) => {
-    setRecentFolders(prev => {
-      const next = [folder, ...prev.filter(f => f !== folder)].slice(0, 8);
-      try { localStorage.setItem('coffee:recent-folders', JSON.stringify(next)); } catch { /* Best-effort operation; failure is non-fatal. */ }
+  // Each tool's last project folder: clicking its card opens straight there.
+  const [lastFolders, setLastFolders] = useState<Record<string, string>>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem('coffee:last-folder-by-tool') || '{}');
+      // A damaged entry is dropped rather than allowed to break the launch page.
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== ''))
+        : {};
+    } catch { return {}; }
+  });
+  const [homeDir, setHomeDir] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri) return;
+    let alive = true;
+    import('@tauri-apps/api/path').then(path => path.homeDir()).then(home => { if (alive) setHomeDir(home); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  // A launch in flight: a second click (or another card) waits instead of launching again.
+  const cardLaunching = useRef(false);
+  const launchFromCard = (tool: ToolType, folder: string) => {
+    if (cardLaunching.current) return;
+    cardLaunching.current = true;
+    void selectTool(tool, undefined, folder).finally(() => { cardLaunching.current = false; });
+  };
+  const updateLastFolders = (update: (current: Record<string, string>) => Record<string, string>) => {
+    setLastFolders(prev => {
+      const next = update(prev);
+      try { localStorage.setItem('coffee:last-folder-by-tool', JSON.stringify(next)); } catch { /* Best-effort operation; failure is non-fatal. */ }
       return next;
     });
   };
-  const removeRecentFolder = (folder: string) => {
-    setRecentFolders(prev => {
-      const next = prev.filter(f => f !== folder);
-      try { localStorage.setItem('coffee:recent-folders', JSON.stringify(next)); } catch { /* Best-effort operation; failure is non-fatal. */ }
-      return next;
-    });
+  const rememberFolder = (tool: ToolType, folder: string) => {
+    addProjectFolder(folder);
+    if (tool) updateLastFolders(prev => ({ ...prev, [tool]: folder }));
+  };
+  const removeRecentFolder = removeProjectFolder;
+  // A folder that no longer exists leaves the recents and is no tool's last folder either.
+  // (Tidying the recents list by hand keeps the tools' last folders.)
+  const forgetMissingFolder = (folder: string) => {
+    removeRecentFolder(folder);
+    updateLastFolders(prev => Object.values(prev).includes(folder) ? Object.fromEntries(Object.entries(prev).filter(([, value]) => value !== folder)) : prev);
   };
 
   // ── Global focus enforcer ────────────────────────────────────────────────
@@ -663,7 +711,7 @@ export function CenterPanel() {
     };
   }, []);
 
-  // Load sticky config — non-sensitive fields from localStorage, password from OS keychain
+  // Load sticky config — other fields from localStorage, password from the OS keyring
   useEffect(() => {
     try {
       const saved = localStorage.getItem('coffee_remote_cfg');
@@ -815,7 +863,7 @@ export function CenterPanel() {
     }
     if (cwd) {
       dispatch({ type: 'SET_FOLDER', path: cwd });
-      pushRecentFolder(cwd);
+      rememberFolder(tool, cwd);
     }
     dispatch({ type: 'SET_TERMINAL_TOOL', id, tool, claudeMode: requestedId ? 'terminal' : undefined, codexMode: requestedId ? 'terminal' : undefined });
   };
@@ -958,12 +1006,15 @@ export function CenterPanel() {
       const dx = ev.clientX - startX;
       if (!started && Math.abs(dx) < THRESHOLD) return;
       started = true;
+      // Pointer and rect math is in client px; transforms apply in the
+      // titlebar's own (possibly counter-zoomed) px.
+      const toTitlebarPx = titlebarPxPerClientPx();
       setTabDrag({
         tabId,
-        deltaX: dx,
+        deltaX: dx * toTitlebarPx,
         fromIdx,
         targetIdx: computeTargetIdx(ev.clientX),
-        slotWidth,
+        slotWidth: slotWidth * toTitlebarPx,
       });
     };
 
@@ -1016,7 +1067,7 @@ export function CenterPanel() {
       const checks = await commands.checkProjectDirectories([cwd]).catch(() => []);
       if (activeIdRef.current !== activeTerminalId) return;
       if (checks.some(check => check.status === 'missing' || check.status === 'not_directory')) {
-        removeRecentFolder(cwd);
+        forgetMissingFolder(cwd);
         void handlePickFolder(tool);
         return;
       }
@@ -1029,9 +1080,9 @@ export function CenterPanel() {
     // The old single-instance lock that lived here has been removed.
     if (activeTerminalId) {
       if (cwd) {
-        pushRecentFolder(cwd);
+        rememberFolder(tool, cwd);
       }
-      dispatch({ type: 'LAUNCH_TERMINAL_TOOL', id: activeTerminalId, tool, toolData, cwd, claudeMode: tool === 'claude' ? claudeLaunchMode : undefined, codexMode: tool === 'codex' ? codexLaunchMode : undefined });
+      dispatch({ type: 'LAUNCH_TERMINAL_TOOL', id: activeTerminalId, tool, toolData, cwd, claudeMode: tool === 'claude' ? claudeLaunchMode : undefined, codexMode: tool === 'codex' ? codexLaunchMode : undefined, opencodeMode: tool === 'opencode' ? opencodeLaunchMode : undefined, piMode: tool === 'pi' ? piLaunchMode : undefined });
     }
   };
 
@@ -1050,12 +1101,13 @@ export function CenterPanel() {
 
   const openToolFolderMenu = (tool: ToolType, anchor: HTMLElement) => {
     if (recentFolders.length === 0) { void handlePickFolder(tool); return; }
+    // The list opens below the card, its left edge on the folder button's left edge.
     const card = anchor.closest('.launchpad-card');
-    const rect = (card ?? anchor).getBoundingClientRect();
-    setFolderMenu({ x: rect.left + rect.width * 0.55, y: rect.bottom + 4, tool });
+    const button = card?.querySelector('.launchpad-folder') ?? anchor;
+    setFolderMenu({ x: button.getBoundingClientRect().left, y: (card ?? anchor).getBoundingClientRect().bottom + 4, tool });
     void commands.checkProjectDirectories(recentFolders).then(checks => {
       for (const check of checks) {
-        if (check.status === 'missing' || check.status === 'not_directory') removeRecentFolder(check.path);
+        if (check.status === 'missing' || check.status === 'not_directory') forgetMissingFolder(check.path);
       }
     }).catch(() => {});
   };
@@ -1089,14 +1141,14 @@ export function CenterPanel() {
       host: sshHost.trim(),
       port: parseInt(sshPort) || (remoteProtocol === 'ssh' ? 22 : 7681),
       username: sshUser.trim(),
-      // password intentionally omitted — stored in OS keychain, not localStorage
+      // password omitted here — saved by the backend in the OS keyring
     };
 
     try {
       localStorage.setItem('coffee_remote_cfg', JSON.stringify(connDataObj));
     } catch { /* Best-effort operation; failure is non-fatal. */ }
 
-    // Save password to OS keychain (Windows Credential Manager / macOS Keychain)
+    // Save password in the OS credential store through the backend
     if (isTauri && sshPass) {
       commands.savePassword(sshHost.trim(), sshUser.trim(), sshPass).catch(() => {});
     }
@@ -1185,7 +1237,7 @@ export function CenterPanel() {
   // replaced by the shape texture in those [data-shape] overrides). Without
   // this, the xterm canvas renders its solid `bgOpaque` and covers the
   // backdrop exactly where it matters most — the largest surface.
-  const isBackdropShape = state.currentShape === 'glass' || isFrostShape(state.currentShape) || state.currentShape === 'carbon' || state.currentShape === 'monogram' || state.currentShape === 'characters';
+  const isBackdropShape = state.currentShape === 'glass' || isFrostShape(state.currentShape) || state.currentShape === 'carbon' || state.currentShape === 'monogram' || state.currentShape === 'characters' || state.currentShape === 'basalt';
   const hasBg = (bgType !== 'none' && bgPath !== '') || isBackdropShape;
 
   // Convert wallpaper path to a displayable URL. User-picked local
@@ -1253,7 +1305,7 @@ export function CenterPanel() {
           // Muse inherits its Windows launcher's title; keep the workspace name.
           const task = orchestration.tasks.find(task => task.sessionId === session.id);
           const worker = task?.detached ? undefined : task;
-          const title = task?.title || (session.tool === 'muse' ? baseTitle : session.toolTitle?.trim() || baseTitle);
+          const title = task?.title || (session.tool === 'muse' ? baseTitle : session.pinnedTitle || session.toolTitle?.trim() || baseTitle);
           const showAgentStatus = supportsAgentStatus(session.tool)
             && (['claude', 'codex', 'kimicode', 'omp', 'dsh'].includes(session.tool ?? '') || session.agentStatus !== undefined);
           return (
@@ -1380,6 +1432,8 @@ export function CenterPanel() {
           </div>
         )}
 
+        <NewSessionTabButton />
+
       </div>,
       tabSlot)}
       <div className={`main-content${splitVisible ? ' has-session-split' : ''}`}>
@@ -1406,6 +1460,10 @@ export function CenterPanel() {
           >
             {isDshConversation(t) ? (
               <DshConversation key={`dsh-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
+            ) : isPiConversation(t) ? (
+              <PiConversation key={`pi-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
+            ) : isOpenCodeConversation(t) ? (
+              <OpenCodeConversation key={`opencode-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
             ) : isCodexConversation(t) ? (
               <CodexConversation key={`codex-${t.id}-${t.restartKey ?? 0}`} sessionId={t.id} cwd={t.folderPath} resumeToken={t.resumeToken} isActive={t.id === activeTerminalId && contentActive && !state.settingsOpen} isVisible={contentActive && (splitVisible ? splitIds.includes(t.id) : t.id === activeTerminalId)} hasBg={hasBg} bgUrl={bgUrl} bgType={bgType} />
             ) : isClaudeConversation(t) ? (
@@ -1551,6 +1609,7 @@ export function CenterPanel() {
         ))}
 
         {usageOpen && <UsageDashboard />}
+        {state.automationsOpen && <AutomationsPage />}
         <ToolSettingsPage active={state.toolSettingsOpen} tools={AGENT_CATALOG.filter(item => pinnedItems.includes(`agent:${item.key}`)).map(item => ({ value: item.key as string, label: item.label, icon: item.icon, installed: item.key === 'terminal' || toolsInstalled[item.key ?? ''] !== false }))} count={pinnedItems.length} limit={MAX_PINS}>
           {[true, false].map(enabled => {
             const items = AGENT_CATALOG.filter(item => item.type === 'ai-cli' && pinnedItems.includes(`agent:${item.key}`) === enabled);
@@ -1621,36 +1680,30 @@ export function CenterPanel() {
                                   className="launchpad-card"
                                   onClick={(event) => {
                                     if (disabled) return;
-                                    if (tool.requiresCwd) { openToolFolderMenu(tool.key, event.currentTarget); return; }
+                                    if (tool.requiresCwd) {
+                                      const last = tool.key ? lastFolders[tool.key] : undefined;
+                                      if (last) launchFromCard(tool.key, last); else openToolFolderMenu(tool.key, event.currentTarget);
+                                      return;
+                                    }
                                     selectTool(tool.key);
                                   }}
                                 >
                                   <div className="launchpad-icon">{tool.icon}</div>
-                                  {!isTerminal && tool.key && <CliUpdateButton tool={tool.key} active={!utilityPageOpen && !configModalTool} installed={installed} />}
                                   <div className="launchpad-card-info">
-                                    <span style={isTerminal ? { display: 'inline-flex', alignItems: 'center', gap: '6px' } : undefined}>
-                                      {tool.label}
-                                      {isTerminal && (
-                                        <span
-                                          className="remote-link-hint"
-                                          onClick={(e) => { e.stopPropagation(); setShowRemoteForm(true); }}
-                                        >
-                                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                                            <circle cx="12" cy="12" r="10"/>
-                                            <path d="M2 12h20"/>
-                                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                                          </svg>
-                                        </span>
-                                      )}
-                                    </span>
+                                    {/* Name line: the tool name, then its update or remote chip. */}
+                                    <div className="launchpad-card-title">
+                                      <span className="launchpad-card-name">{tool.label}</span>
+                                      {!isTerminal && tool.key && <CliUpdateButton tool={tool.key} active={!utilityPageOpen && !configModalTool} installed={installed} />}
+                                      {isTerminal && <button type="button" className="launchpad-chip" onClick={(e) => { e.stopPropagation(); setShowRemoteForm(true); }}>{t('launchpad.remote')}</button>}
+                                    </div>
+                                    {tool.requiresCwd && (tool.key && lastFolders[tool.key]
+                                      ? <span className="launchpad-card-path is-path"><bdi>{homeShortPath(lastFolders[tool.key], homeDir)}</bdi></span>
+                                      : <span className="launchpad-card-path">{t('launchpad.pick_folder')}</span>)}
                                   </div>
-                                  {CONFIGURABLE_AGENT_TOOLS.has(tool.key) && <button type="button" className="launchpad-config" aria-label={`${tool.label} ${t('settings.title')}`} onClick={event => { event.stopPropagation(); setFolderMenu(null); setConfigModalTool({ key: tool.key as string, label: tool.label }); }}>
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                      <circle cx="12" cy="12" r="3" />
-                                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                                    </svg>
+                                  {tool.requiresCwd && <button type="button" className="launchpad-folder" aria-label={t('launchpad.open_folder')} disabled={disabled} onClick={event => { event.stopPropagation(); openToolFolderMenu(tool.key, event.currentTarget); }}>
+                                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
                                   </button>}
-                                  {tool.type === 'ai-cli' && <LaunchModeControl value={tool.key === 'claude' ? claudeLaunchMode : tool.key === 'codex' ? codexLaunchMode : tool.key === 'dsh' ? 'conversation' : 'terminal'} disabled={disabled} label={tool.key === 'codex' ? 'Codex' : tool.key === 'dsh' ? 'DeepSeek Harness' : undefined} modes={tool.key === 'dsh' ? ['conversation'] : undefined} onChange={tool.key === 'claude' ? changeClaudeLaunchMode : tool.key === 'codex' ? changeCodexLaunchMode : tool.key === 'dsh' ? () => {} : undefined} />}
+                                  {tool.type === 'ai-cli' && <LaunchModeControl value={tool.key === 'claude' ? claudeLaunchMode : tool.key === 'codex' ? codexLaunchMode : tool.key === 'opencode' ? opencodeLaunchMode : tool.key === 'pi' ? piLaunchMode : tool.key === 'dsh' ? 'conversation' : 'terminal'} disabled={disabled} label={tool.key === 'codex' ? 'Codex' : tool.key === 'opencode' ? 'OpenCode' : tool.key === 'pi' ? 'Pi' : tool.key === 'dsh' ? 'DeepSeek Harness' : undefined} modes={tool.key === 'dsh' ? ['conversation'] : undefined} onChange={tool.key === 'claude' ? changeClaudeLaunchMode : tool.key === 'codex' ? changeCodexLaunchMode : tool.key === 'opencode' ? changeOpencodeLaunchMode : tool.key === 'pi' ? changePiLaunchMode : tool.key === 'dsh' ? () => {} : undefined} />}
                                 </div>
                               </div>
                             );
@@ -1762,7 +1815,8 @@ export function CenterPanel() {
                                 <div className="remote-form-row">
                                   <label>{t('remote.password')}</label>
                                   <input
-                                    type="password"
+                                    autoComplete="off"
+                                    spellCheck={false}
                                     value={sshPass}
                                     onChange={e => setSshPass(e.target.value)}
                                     className="remote-input"
@@ -1822,7 +1876,7 @@ export function CenterPanel() {
                                     // password omitted from localStorage
                                   };
                                   try { localStorage.setItem('coffee_remote_cfg', JSON.stringify(connDataObj)); } catch { /* Best-effort operation; failure is non-fatal. */ }
-                                  // Load password for this specific host from keychain, fall back to current sshPass state
+                                  // Load the saved password for this specific host, fall back to current sshPass state
                                   const doConnect = (pw: string) => {
                                     if (isTauri && pw) commands.savePassword(item.host.trim(), item.user || '', pw).catch(() => {});
                                     selectTool('remote', JSON.stringify({ ...connDataObj, password: pw }));

@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
+import { patchXtermWebglAtlas } from './xterm-webgl-atlas-patch';
 
 // xterm.js's WebGL addon (RectangleRenderer.updateBackgrounds) decides
 // "draw a bg rect for this cell?" by `cell.bg !== 0`. But cell.bg is a
@@ -29,24 +30,29 @@ function patchXtermWebglBgFlags(): Plugin {
         .replace(/u!==0\|\|d&&c!==0/g, '(u&50331648)!==0||d&&c!==0')
         .replace(/0!==a\|\|h&&0!==l/g, '0!==(a&50331648)||h&&0!==l');
       if (after === before) {
-        // Don't fail the build if upstream changes its mangling — leave
-        // a console hint and ship the unpatched bundle (degrades to
-        // current behavior, doesn't break the app).
-        this.warn(
-          '[patch-xterm-webgl-bg-flags] guard pattern not found in ' +
-          id +
-          ' — xterm.js bundle layout changed, Glass dark plates will reappear until the regex is updated'
-        );
-        return null;
+        // Fail loudly: shipping unpatched silently brings Glass dark plates
+        // back. Update the regex when xterm's bundle mangling changes.
+        this.error('[patch-xterm-webgl-bg-flags] guard pattern not found in ' + id);
       }
       return { code: after, map: null };
     },
   };
 }
 
+function patchXtermWebglAtlasPlugin(): Plugin {
+  return {
+    name: 'coffee-cli:patch-xterm-webgl-atlas',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@xterm/addon-webgl')) return null;
+      return { code: patchXtermWebglAtlas(code), map: null };
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), patchXtermWebglBgFlags()],
+  plugins: [react(), patchXtermWebglBgFlags(), patchXtermWebglAtlasPlugin()],
   // Monaco 0.56 exposes the narrow standalone API through `editor.api`, but
   // its package export also imports the editor CSS. Point Vite at the exact
   // ESM files so the lazy editor chunk stays isolated from the main app.

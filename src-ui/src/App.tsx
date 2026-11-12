@@ -1,6 +1,8 @@
 // App.tsx — 3-panel IDE layout (frameless window)
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { AutomationRunner } from './components/center/AutomationRunner';
+import { SettingsModal } from './components/common/SettingsModal';
 import { useAppState } from './store/app-state';
 import { retryInvoke } from './tauri';
 import { initNotifySound } from './lib/notify-sound';
@@ -11,12 +13,12 @@ import { useOrchestration } from './lib/orchestration';
 import { useSessionReplyVisibility } from './lib/use-session-reply-visibility';
 import { routeFileDrop } from './lib/file-drop';
 import { initHistoryAutoRefresh } from './lib/history-cache';
+import { initializeVoiceSources } from './lib/voice-source-discovery';
 import { isFrostShape, resolveThemeMode } from './lib/personalization';
 import { useDataAttr } from './lib/use-data-attr';
 import { TitleBar } from './components/common/TitleBar';
 import { ResizeEdges } from './components/common/ResizeEdges';
 import { PanelResizer, type PanelSide } from './components/common/PanelResizer';
-import { SettingsModal } from './components/common/SettingsModal';
 import { CharacterBackground } from './components/common/CharacterBackground';
 import { Explorer } from './components/left/Explorer';
 import { CenterPanel } from './components/center/CenterPanel';
@@ -50,8 +52,10 @@ function defaultPanelWidths(
   leftHidden = false,
   rightHidden = false,
 ): PanelWidths {
-  const fluid = clamp(viewportWidth * 0.28, 240, 320);
-  return normalizePanelWidths({ left: fluid, right: fluid }, viewportWidth, leftHidden, rightHidden);
+  // The session list reads comfortably at 280px; the wider workspace goes to the center.
+  const left = clamp(viewportWidth * 0.24, 240, 280);
+  const right = clamp(viewportWidth * 0.28, 240, 320);
+  return normalizePanelWidths({ left, right }, viewportWidth, leftHidden, rightHidden);
 }
 
 function normalizePanelWidths(
@@ -370,11 +374,11 @@ export function App() {
       el.setAttribute('data-shape', 'glass');
       el.setAttribute('data-frost', state.currentShape);
     } else {
-      // Character flow reuses Carbon's transparent chrome without its mesh.
-      el.setAttribute('data-shape', state.currentShape === 'characters' ? 'carbon' : state.currentShape);
+      // Character flow and Basalt reuse Carbon's transparent chrome, each with its own background instead of the mesh.
+      el.setAttribute('data-shape', state.currentShape === 'characters' || state.currentShape === 'basalt' ? 'carbon' : state.currentShape);
       el.removeAttribute('data-frost');
     }
-    if (state.currentShape === 'characters') el.setAttribute('data-background', 'characters');
+    if (state.currentShape === 'characters' || state.currentShape === 'basalt') el.setAttribute('data-background', state.currentShape);
     else el.removeAttribute('data-background');
     try { localStorage.setItem('cc-shape', state.currentShape); } catch { /* Best-effort operation; failure is non-fatal. */ }
 
@@ -387,9 +391,10 @@ export function App() {
       inv('set_frosted_backdrop', {
         on: frost,
         dark: resolvedMode !== 'light',
+        followSystem: state.themeMode === 'system',
       }).catch(() => {});
     }
-  }, [state.currentShape, state.currentTheme, resolvedMode]);
+  }, [state.currentShape, state.currentTheme, state.themeMode, resolvedMode]);
 
   // Sync the UI language to the <html> lang attribute so CSS :lang(zh)
   // selectors can fire. This is what swaps the splash-label out of the
@@ -492,6 +497,7 @@ export function App() {
   // (prefetchHistory flips status to 'ready'), so users who never open it
   // pay only the 60s setInterval tick (a function call that early-returns).
   useEffect(() => initHistoryAutoRefresh(), []);
+  useEffect(() => { void initializeVoiceSources(); }, []);
 
   return (
     <>
@@ -499,6 +505,7 @@ export function App() {
       {/* Custom titlebar — drag region + minimize / maximize / close */}
       <TitleBar />
       <AgentBridge />
+      <AutomationRunner />
 
       {/* 3-panel workspace. Titlebar toggles flip leftPanelHidden /
           rightPanelHidden. The OS window itself doesn't resize (same
@@ -528,6 +535,9 @@ export function App() {
               />
             </>
           )}
+
+          {/* Settings covers the whole workspace below the titlebar, sidebars included. */}
+          <SettingsModal />
 
           {/* Center: always mounted */}
           <main className="panel panel-center">
@@ -563,7 +573,6 @@ export function App() {
       {/* Personalization settings — centered modal opened by the titlebar
           gear. App-level overlay (gated on state.settingsOpen) so it floats
           above the whole workspace, like ActiveGambit. */}
-      <SettingsModal />
 
       {/* 8 transparent resize-edge strips (window chrome). Three-platform
           unified — Windows + macOS already get edge cursors via OS shims,

@@ -8,13 +8,21 @@ export function isCodexConversation(session: Pick<TerminalSession, 'tool' | 'cod
   return session?.tool === 'codex' && session.codexMode === 'conversation';
 }
 
+export function isPiConversation(session: Pick<TerminalSession, 'tool' | 'piMode'> | undefined): boolean {
+  return session?.tool === 'pi' && session.piMode === 'conversation';
+}
+
+export function isOpenCodeConversation(session: Pick<TerminalSession, 'tool' | 'opencodeMode'> | undefined): boolean {
+  return session?.tool === 'opencode' && session.opencodeMode === 'conversation';
+}
+
 /** DeepSeek Harness has no terminal mode in Coffee CLI: every tab is a desktop conversation. */
 export function isDshConversation(session: Pick<TerminalSession, 'tool'> | undefined): boolean {
   return session?.tool === 'dsh';
 }
 
 export function isConversationSession(session: TerminalSession | undefined): boolean {
-  return isClaudeConversation(session) || isCodexConversation(session) || isDshConversation(session);
+  return isClaudeConversation(session) || isCodexConversation(session) || isOpenCodeConversation(session) || isPiConversation(session) || isDshConversation(session);
 }
 
 const CHAT_TOOLS = new Set<ToolType>([

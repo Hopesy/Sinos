@@ -17,6 +17,9 @@ export const isTauri =
   typeof window !== 'undefined' &&
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__);
 
+export type VoiceInputEvent = { kind: 'ready' } | { kind: 'processing' } | { kind: 'text'; text: string; done: boolean } | { kind: 'error'; message: string } | { kind: 'level'; level: number };
+export type VoiceInputSource = { id: string; name: string; accountId?: string | null; issue?: string | null; transcriptionMode?: 'streaming' | 'batch' };
+
 export interface CliUpdateStatus { tool: string; current: string | null; latest: string | null; available: boolean }
 
 // Resolve the invoke function across Tauri v1 / v2
@@ -137,6 +140,8 @@ export interface SavedSession {
   file_path?: string;
   turn_count?: number;
   git_context?: SessionGitContext | null;
+  /** Set when the conversation ran in a Coffee worktree that still exists; it resumes there. */
+  worktree_cwd?: string;
 }
 
 export interface ChatSessionRead {
@@ -196,6 +201,8 @@ export const commands = {
   checkCliUpdate: (tool: string) => invoke<CliUpdateStatus>('check_cli_update', { tool }),
   updateCli: (tool: string) => invoke<CliUpdateStatus>('update_cli', { tool }),
   orchestrationGet: () => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_get'),
+  orchestrationSetMode: (mode: string) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_set_mode', { mode }),
+  orchestrationSetPick: (sessionId: string, tools: string[]) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_set_pick', { sessionId, tools }),
   orchestrationSetAgent: (tool: string, enabled: boolean) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_set_agent', { tool, enabled }),
   orchestrationSync: (sessions: unknown[]) => invoke<import('./lib/orchestration').ResultDelivery[]>('orchestration_sync', { sessions }),
   orchestrationCloseGroup: (id: string, keepChildren: boolean) => invoke<import('./lib/orchestration').OrchestrationSnapshot>('orchestration_close_group', { id, keepChildren }),
@@ -213,6 +220,22 @@ export const commands = {
     const updates = new (await import('@tauri-apps/api/core')).Channel<CatalogSkill[]>(onUpdate);
     return invoke<CatalogSkill[]>('search_tool_skills', { query, onUpdate:updates });
   },
+  voiceInputSources: () => invoke<VoiceInputSource[]>('voice_input_sources'),
+  voiceInputProbeSource: (source: string) => invoke<{ latencyMs: number; accountId: string | null } | null>('voice_input_probe_source', { source }),
+  voiceInputSelectSource: (source: string) => invoke<void>('voice_input_select_source', { source }),
+  voiceInputAvailable: (tool: string, cwd?: string, source?: string) => invoke<boolean>('voice_input_available', { tool, cwd, source }),
+  voiceInputStart: async (tool: string, cwd: string | undefined, language: string, device: string, onEvent: (event: VoiceInputEvent) => void, source?: string) => {
+    const events = new (await import('@tauri-apps/api/core')).Channel<VoiceInputEvent>(onEvent);
+    return invoke<number>('voice_input_start', { tool, cwd, source, language, device: device || null, onEvent: events });
+  },
+  voiceInputFinish: (id: number) => invoke<void>('voice_input_finish', { id }),
+  voiceInputCancel: (id: number) => invoke<void>('voice_input_cancel', { id }),
+  voiceInputDevices: () => invoke<{ devices: string[]; default: string | null }>('voice_input_devices'),
+  voiceMicTestStart: async (device: string, onLevel: (level: number) => void) => {
+    const levels = new (await import('@tauri-apps/api/core')).Channel<number>(onLevel);
+    return invoke<number>('voice_mic_test_start', { device: device || null, onLevel: levels });
+  },
+  voiceMicTestStop: (id: number) => invoke<void>('voice_mic_test_stop', { id }),
   getToolSkillDescription: (source: string, name: string) => invoke<string>('get_tool_skill_description', { source, name }),
   installToolSkill: (tool: string, source: string, name: string) => invoke<SkillInventory>('install_tool_skill', { tool, source, name }),
   removeToolSkill: (tool: string, path: string) => invoke<SkillInventory>('remove_tool_skill', { tool, path }),
@@ -222,6 +245,10 @@ export const commands = {
     invoke<ToolMemoryDocument>('save_tool_memory', { tool, path, original, content }),
   pickFolder: () => invoke<string>('pick_folder'),
   playNotifySound: (kind: 'done' | 'wait') => invoke<void>('play_notify_sound', { kind }),
+  notifySoundFiles: () => invoke<{ done: string | null; wait: string | null }>('notify_sound_files'),
+  notifySoundChoose: (kind: 'done' | 'wait', path: string) => invoke<string>('notify_sound_choose', { kind, path }),
+  notifySoundClear: (kind: 'done' | 'wait') => invoke<void>('notify_sound_clear', { kind }),
+  notifySoundRead: (kind: 'done' | 'wait') => invoke<ArrayBuffer>('notify_sound_read', { kind }),
 
   // Window decorators
   windowMinimize: () => invoke<void>('window_minimize'),
@@ -386,7 +413,7 @@ export const commands = {
   loadTasks: () => invoke<string>('load_tasks'),
   saveTasks: (data: string) => invoke<void>('save_tasks', { data }),
 
-  // Credential store — passwords live in OS keychain, never in localStorage
+  // Credential store — passwords live in the OS keyring, never in localStorage
   savePassword: (host: string, username: string, password: string) =>
     invoke<void>('save_password', { host, username, password }),
   loadPassword: (host: string, username: string) =>
@@ -397,10 +424,9 @@ export const commands = {
     invoke<void>('open_url', { url }),
   computerName: () => invoke<string>('computer_name'),
 
-  // In-app self-update (Windows): download the latest installer from
-  // the distribution endpoint with streamed progress, launch it, exit.
+  // Download and verify the platform installer from Hopesy/Sinos GitHub Releases.
+  // Windows launches it and exits; macOS opens the DMG; Linux reveals Downloads.
   // Emits `self-update-progress` while it runs (see onSelfUpdateProgress).
-  // Rejects on non-Windows / download failure — caller falls back to openUrl.
   downloadAndInstallUpdate: () =>
     invoke<void>('download_and_install_update'),
 
@@ -423,7 +449,7 @@ export const commands = {
 
 // In-app self-update progress, emitted by download_and_install_update.
 export interface SelfUpdateProgress {
-  status: 'speed_test' | 'downloading' | 'launching' | 'error';
+  status: 'speed_test' | 'downloading' | 'launching' | 'downloaded' | 'error';
   percent: number;
 }
 

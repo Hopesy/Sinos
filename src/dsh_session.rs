@@ -232,11 +232,14 @@ fn is_route_error(error: &str) -> bool {
 /// requests on the runtime's stdout, and the replies come back as files beside the control file.
 /// Sub-agent Sessions keep their own presets, as with the native command.
 const PERMISSION_PLUGIN: &str = r#"import { readFileSync, rmSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 export const inject = ['permissionPresets', 'sessions', 'approval', 'agents', 'userQuestions'];
 export function apply(ctx) {
   const { COFFEE_DSH_CONTROL: file, COFFEE_DSH_SESSION: id } = process.env;
   const pending = new Map();
-  let applied = '', count = 0;
+  let applied = '', count = 0, background = '[]';
   const read = path => { try { return readFileSync(path, 'utf8').trim(); } catch { return ''; } };
   const send = frame => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n');
   const update = () => {
@@ -264,6 +267,37 @@ export function apply(ctx) {
     pending.set(requestId, reply => { signal?.removeEventListener('abort', cancel); resolve(reply); });
     send({ id: requestId, method, params: { ...params, requestId } });
   });
+  // Sub-agents outlive the turn that started them, which the SDK protocol does not show.
+  const report = () => {
+    // A sub-agent's own label is not part of a stable interface; read what is there and let the client name it otherwise.
+    const children = ctx.agents.list().filter(agent => String(agent.session.header?.parentSession) === id && agent.status !== 'idle')
+      .map(agent => ({ id: 'agent:' + String(agent.id ?? agent.session.id), kind: 'agent', description: [agent.label, agent.session.header?.label].find(value => typeof value === 'string') ?? '', name: typeof agent.name === 'string' ? agent.name : '' }));
+    // Jobs come from the Session's own job events on the client, which can tell a foreground command from a backgrounded one.
+    const tasks = children, key = JSON.stringify(tasks);
+    if (key === background) return;
+    background = key;
+    send({ method: 'coffee/background', params: { sessionId: id, count: tasks.length, tasks } });
+  };
+  // A message for the running turn is read at its next step, as DeepSeek Harness's own clients steer.
+  const steer = () => {
+    const prefix = basename(file) + '.steer.';
+    for (const name of readdirSync(dirname(file)).filter(name => name.startsWith(prefix) && !name.endsWith('.next'))) {
+      const path = join(dirname(file), name), text = JSON.parse(read(path) || '{}').text;
+      rmSync(path, { force: true });
+      const session = ctx.sessions.list().find(s => String(s.id) === id);
+      const agent = session && ctx.agents.list().find(a => a.session === session);
+      if (!agent || typeof text !== 'string' || !text.trim()) continue;
+      const message = Object.freeze({ id: randomUUID(), role: 'user', content: Object.freeze([Object.freeze({ type: 'text', text })]), source: Object.freeze({ kind: 'user' }) });
+      if (agent.status === 'running') agent.steer(message); else agent.followup(message);
+    }
+  };
+  // The SDK protocol only sends whole messages; forward the main agent's live text, reasoning and tool arguments as they stream.
+  ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    if (String(agent?.session?.id) !== id) return;
+    const chunk = frame.chunk;
+    if (frame.type === 'chunk' && !['text-delta', 'reasoning-delta', 'tool-call-delta'].includes(chunk?.type)) return;
+    send({ method: 'coffee/stream', params: { sessionId: id, frame: frame.type === 'chunk' ? { type: 'chunk', chunk } : { type: frame.type } } });
+  });
   ctx.on('session/created', update);
   ctx.on('approval/request', request => ask('approval/request', { toolName: request.toolName, reason: request.reason }, request.signal).then(reply => reply.outcome, () => 'cancelled'));
   ctx.on('user-questions/request', async request => {
@@ -271,15 +305,17 @@ export function apply(ctx) {
     if (reply.cancelled) throw new Error('The user declined to answer');
     return { answers: reply.answers };
   });
-  ctx.effect(() => { const timer = setInterval(() => { update(); collect(); }, 250); return () => clearInterval(timer); });
+  ctx.effect(() => { const timer = setInterval(() => { update(); collect(); try { steer(); } catch {} try { report(); } catch {} }, 250); return () => clearInterval(timer); });
 }
 "#;
 const PRESETS: [&str; 2] = ["workspace-write", "danger-full-access"];
 
 /// Renames into place so the plugin never reads a half-written file.
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
-    let next = path.with_extension("next");
-    std::fs::write(&next, text).and_then(|_| std::fs::rename(&next, path)).map_err(|e| e.to_string())
+    // Reuse unique same-directory staging: replacing the extension collapsed
+    // distinct steer UUIDs onto one .next file and concurrent sends overwrote it.
+    // The helper's dot-prefixed temporary names are also invisible to the plugin.
+    crate::json_file::write_atomic(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Tabs share the generated plugin and patch; a tab starting beside this one may be reading them.
@@ -394,7 +430,7 @@ fn start(app: tauri::AppHandle, id: String, generation: String, cwd: Option<Stri
         s.stop();
         for (_, tx) in s.protocol.pending.lock().unwrap().drain() { let _ = tx.send(Err("DeepSeek Harness process exited".into())); }
         s.remove_control_files();
-        crate::orchestration::native_stop(&watcher_id, "dsh", &s.generation);
+        crate::orchestration::native_exit(&watcher_id, "dsh", &s.generation);
         emit(&watcher_app, &watcher_id, &s, json!({"method":"coffee/exit","params":{"code":code,"detail":s.stderr.lock().unwrap().as_str()}}));
         let sessions = watcher_app.state::<DshSessions>(); let mut map = sessions.0.lock().unwrap();
         if map.get(&watcher_id).is_some_and(|live| Arc::ptr_eq(live, &s)) { map.remove(&watcher_id); }
@@ -444,13 +480,20 @@ pub async fn dsh_session_set_preset(sessions: State<'_, DshSessions>, id: String
 }
 #[tauri::command]
 pub async fn dsh_session_request(sessions: State<'_, DshSessions>, id: String, generation: String, method: String, params: Value) -> Result<Value, String> {
-    if !matches!(method.as_str(), "session/prompt" | "session/query" | "session/working-directory/get") { return Err("Unsupported DeepSeek Harness request".into()); }
+    if !matches!(method.as_str(), "session/prompt" | "session/steer" | "session/query" | "session/working-directory/get") { return Err("Unsupported DeepSeek Harness request".into()); }
     let s = get(&sessions, &id, &generation)?;
     // Requests always address this tab's own Session.
     let mut params = params; params["sessionId"] = json!(s.native_id);
+    let prompt = params["contentBlocks"].as_array().into_iter().flatten().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n");
     if method == "session/prompt" {
-        let prompt = params["contentBlocks"].as_array().into_iter().flatten().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n");
         crate::orchestration::native_input(&id, "dsh", &s.generation, &prompt, &uuid::Uuid::new_v4().to_string(), None)?;
+    }
+    // The SDK queues every prompt for the next turn; the Host plugin hands this one to the running turn instead.
+    if method == "session/steer" {
+        if prompt.trim().is_empty() { return Err("Message is empty".into()); }
+        crate::orchestration::native_steer(&id, "dsh", &s.generation, &prompt)?;
+        let file = s.control.with_extension(format!("preset.steer.{}", uuid::Uuid::new_v4().simple()));
+        return tauri::async_runtime::spawn_blocking(move || write_atomic(&file, &json!({"text":prompt}).to_string()).map(|_| json!({}))).await.map_err(|e| e.to_string())?;
     }
     // Commands such as /compact run an auxiliary model request before answering.
     let timeout = Duration::from_secs(if method == "session/query" { 900 } else { 60 });
@@ -550,9 +593,12 @@ fn history_in(home: &Path, limit: usize) -> Vec<HistoryEntry> {
             .and_then(|text| serde_json::from_str(&text).ok()).unwrap_or(Value::Null);
         let rows = &cache["record"]["rows"];
         if rows["sessionListMetadata"]["val"]["blank"] == true { continue; }
+        // Sub-agent Sessions belong to the conversation that started them; resumed alone they have no parent to report to.
+        let header = read_log_header(&log).unwrap_or(Value::Null);
+        if header["parentSession"].is_string() || header["delegationDepth"].as_u64().is_some_and(|depth| depth > 0) { continue; }
         let modified_ms = modified.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let cwd = cache["record"]["identity"]["cwd"].as_str().map(String::from)
-            .or_else(|| read_log_header(&log).and_then(|header| header["cwd"].as_str().map(String::from))).unwrap_or_default();
+            .or_else(|| header["cwd"].as_str().map(String::from)).unwrap_or_default();
         entries.push(HistoryEntry {
             title: rows["title"]["val"].as_str().filter(|t| !t.trim().is_empty()).map(String::from),
             cwd,
@@ -583,6 +629,29 @@ pub async fn dsh_session_history(session_id: String) -> Result<Vec<Value>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simultaneous_steer_messages_keep_their_own_payloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let control = directory.path().join("session.preset");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let jobs: Vec<_> = (0..16).map(|index| {
+            let path = control.with_extension(format!("preset.steer.{index}"));
+            let payload = json!({"text": format!("message-{index}:{}", "独立输入".repeat(16_384))}).to_string();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let result = write_atomic(&path, &payload);
+                (path, payload, result)
+            })
+        }).collect();
+        for job in jobs {
+            let (path, payload, result) = job.join().unwrap();
+            assert!(result.is_ok(), "distinct steer messages must not share a staging file: {result:?}");
+            assert_eq!(std::fs::read_to_string(path).unwrap(), payload, "each successful steer owns its original text");
+        }
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 16, "no staging files remain");
+    }
     #[cfg(windows)]
     #[test]
     fn stop_closes_launcher_descendants_with_busy_stdin() {
@@ -698,7 +767,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn history_lists_cached_sessions_newest_first_and_skips_blanks() {
+    fn history_lists_cached_sessions_newest_first_and_skips_blanks_and_sub_agents() {
         let root = std::env::temp_dir().join(format!("coffee-dsh-hist-{}", uuid::Uuid::new_v4()));
         let write_log = |id: &str, cwd: &str| {
             let dir = root.join("sessions/--D-repo--").join(id); std::fs::create_dir_all(&dir).unwrap();
@@ -709,6 +778,8 @@ mod tests {
         write_log("session-old", "D:\\old");
         write_log("session-blank", "D:\\blank");
         write_log("session-new", "D:\\repo");
+        let child = root.join("sessions/--D-repo--/child-1"); std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("session.v4.jsonl.zstd"), zstd::encode_all(r#"{"type":"session","id":"child-1","cwd":"D:\\repo","parentSession":"session-new","origin":"subagent","delegationDepth":1}"#.as_bytes(), 3).unwrap()).unwrap();
         std::fs::write(cache.join("session-new.json"), r#"{"version":7,"record":{"identity":{"cwd":"D:\\repo","createdAt":5},"rows":{"title":{"val":"Fix the build"},"sessionListMetadata":{"val":{"blank":false,"lastPromptAt":42}},"sessionStats":{"val":{"turns":3}}}}}"#).unwrap();
         std::fs::write(cache.join("session-blank.json"), r#"{"record":{"rows":{"sessionListMetadata":{"val":{"blank":true}}}}}"#).unwrap();
         let entries = history_in(&root, 10);

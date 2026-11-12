@@ -4,14 +4,18 @@ import type { TerminalSession } from '../store/app-state';
 
 export interface OrchestrationTask {
   id: string; parentId: string; parentNativeId: string | null; sessionId: string; nativeId: string | null;
-  parentTool: string; tool: 'claude' | 'codex' | 'opencode'; title: string; cwd: string; phase: string; summary: string | null;
+  parentTool: string; tool: 'claude' | 'codex' | 'opencode' | 'dsh' | 'pi'; title: string; cwd: string; phase: string; summary: string | null;
   question: { id: string; text: string; answer: string | null } | null; generation: string | null; activity: string | null;
   detached?: boolean;
   hidden?: boolean;
   resultDelivery?: string | null;
+  /** Present when the worker was started in its own git worktree. */
+  worktree?: import('./worktree').Worktree | null;
 }
-export interface OrchestrationSnapshot { enabled: boolean; agents: string[]; coordinators: string[]; tasks: OrchestrationTask[]; revision: number }
-export interface ResultDelivery { id: string; parentId: string; generation: string; text: string }
+export type OrchestrationMode = 'auto' | 'manager' | 'lead';
+export interface OrchestrationSnapshot { enabled: boolean; agents: string[]; mode?: OrchestrationMode; coordinators: string[]; tasks: OrchestrationTask[]; revision: number; picks?: Record<string, string[]> }
+/** `parentId` is the target tab: the coordinator for results, the worker itself for a retry. */
+export interface ResultDelivery { id: string; parentId: string; generation: string; text: string; kind?: 'retry' }
 let snapshot: OrchestrationSnapshot = { enabled: false, agents: [], coordinators: [], tasks: [], revision: 0 };
 const listeners = new Set<() => void>();
 export function receiveOrchestration(value: OrchestrationSnapshot) {

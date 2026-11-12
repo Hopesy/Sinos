@@ -23,7 +23,7 @@ try {
     const reactUrl = original.match(/from "([^"\n]*\/react\.js\?v=[^"]+)"/)[1];
     return route.fulfill({ contentType: 'text/javascript', body: `
       import React from '${reactUrl}'; const {useEffect,useState,createElement:h}=React;
-      export const TERM_COLOR_SCHEMES=[];
+      export const TERM_COLOR_SCHEMES=[]; export const ClaudeTool=()=>null, ClaudeThinking=()=>null;
       export function ${name}(p){const [draft,setDraft]=useState('');useEffect(()=>{window.lifetimes??=[];window.lifetimes.push(['mount',p.sessionId]);return()=>window.lifetimes.push(['unmount',p.sessionId])},[p.sessionId]);return h('div',{'data-fixture-view':p.sessionId,'data-active':String(p.isActive),'data-visible':String(p.isVisible??p.isActive),style:{padding:32,flex:1}},h('h3',null,'${name}'),h('p',null,p.cwd??p.folderPath),h('input',{value:draft,onChange:e=>setDraft(e.target.value),'aria-label':'draft '+p.sessionId}))}
     ` });
   });
@@ -57,7 +57,7 @@ try {
   await page.getByRole('button', { name: 'Agent configuration', exact: true }).click();
   assert.equal(await page.getByText('Agent Tools', { exact: true }).count(), 0, 'retired category is removed');
   assert.equal(await page.getByText('Coffee 101', { exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await page.getByRole('complementary').getByRole('button', { name: 'New session', exact: true }).click();
   for (const session of [
     { id: 'a', tool: 'claude', claudeMode: 'conversation', resumeToken: 'thread-a', toolTitle: 'Claude desktop task' },
     { id: 'b', tool: 'codex', codexMode: 'conversation', resumeToken: 'thread-b', toolTitle: 'Codex desktop task' },

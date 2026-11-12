@@ -4,7 +4,7 @@ import { recordSessionReply, recordSessionQuestion } from './session-replies';
 import { invoke } from '../tauri';
 import { arr, obj, str, emptyDshState, reduceDshNotification, restoreDshLog, type DshModel, type DshRoute, type DshState, type Json } from './dsh-protocol';
 
-interface Client { state: DshState; generation: string; listeners: Set<() => void>; owners: number; cwd: string | null; starting?: Promise<void>; switching?: Promise<void>; preset?: string; connecting?: boolean; exited?: boolean; replyTurn?: number; closeTimer?: ReturnType<typeof setTimeout>; publishTimer?: ReturnType<typeof setTimeout> }
+interface Client { state: DshState; generation: string; listeners: Set<() => void>; owners: number; cwd: string | null; starting?: Promise<void>; switching?: Promise<void>; target?: DshRoute; nextRoute?: DshRoute; preset?: string; connecting?: boolean; exited?: boolean; replyTurn?: number; closeTimer?: ReturnType<typeof setTimeout>; publishTimer?: ReturnType<typeof setTimeout> }
 const clients = new Map<string, Client>();
 const EMPTY = emptyDshState();
 const current = (id: string, c: Client, generation = c.generation) => clients.get(id) === c && c.generation === generation;
@@ -148,9 +148,21 @@ function restart(id: string, route?: DshRoute): Promise<void> {
 export const stopDsh = (id: string) => restart(id);
 export function setDshRoute(id: string, route: DshRoute): Promise<void> {
   const c = clients.get(id);
+  // A switch requested while another reloads waits for it; only the latest request is then applied.
+  if (c?.switching) {
+    c.nextRoute = route;
+    return c.switching.then(() => { if (!current(id, c) || c.nextRoute !== route) return; c.nextRoute = undefined; return setDshRoute(id, route); });
+  }
   const done = restart(id, route);
-  if (c) { c.switching = done; void done.finally(() => { if (c.switching === done) c.switching = undefined; }); }
+  if (c) { c.switching = done; c.target = route; void done.finally(() => { if (c.switching === done) { c.switching = undefined; c.target = undefined; } }); }
   return done;
+}
+
+/** Changes only the effort, on top of the route being switched to (queued or applying), so an
+ * effort change made during a model switch never brings back the previous model. */
+export function setDshEffort(id: string, effort: string): Promise<void> {
+  const c = clients.get(id); if (!c) return Promise.resolve();
+  return setDshRoute(id, { ...(c.nextRoute ?? c.target ?? c.state.route), effort });
 }
 
 /** Applied live by Coffee's plugin, so a running turn carries on. The control shows only what the Session's
@@ -167,7 +179,7 @@ export async function sendDshMessage(id: string, prompt: string): Promise<boolea
   const c = clients.get(id); const text = prompt.trim();
   // A model or effort switch reloads in the background; a message sent meanwhile goes out once it is back.
   if (c?.switching) await c.switching;
-  if (!c?.state.ready || c.state.restarting || !text) return false;
+  if (!c?.state.ready || !current(id, c) || c.state.restarting || !text) return false;
   // The configured model is missing: surface it now rather than answer from a model the user did not pick.
   if (c.state.routeError) { c.state = { ...c.state, error: c.state.routeError }; publish(c, true); return false; }
   const command = COMMAND.test(text);
@@ -176,12 +188,14 @@ export async function sendDshMessage(id: string, prompt: string): Promise<boolea
     c.state = { ...c.state, messages: [...c.state.messages, { id: `unsupported:${Date.now()}`, role: 'notice', content: 'commands-unsupported', turn: 0, timestamp: Date.now(), tone: 'info' }] }; publish(c, true);
     return true;
   }
+  // A message typed during a turn steers it; the SDK alone would hold it for the next turn.
+  const steer = !command && c.state.busy;
   if (!command) { c.state = { ...c.state, busy: true, startedAt: c.state.startedAt ?? Date.now(), error: undefined }; publish(c, true); }
   try {
-    await invoke('dsh_session_request', { id, generation: c.generation, method: command ? 'session/query' : 'session/prompt', params: { contentBlocks: [{ type: 'text', text }] } });
+    await invoke('dsh_session_request', { id, generation: c.generation, method: command ? 'session/query' : steer ? 'session/steer' : 'session/prompt', params: { contentBlocks: [{ type: 'text', text }] } });
     return true;
   } catch (error) {
-    c.state = { ...c.state, busy: false, error: String(error) }; publish(c, true);
+    c.state = { ...c.state, busy: steer, error: String(error) }; publish(c, true);
     return false;
   }
 }

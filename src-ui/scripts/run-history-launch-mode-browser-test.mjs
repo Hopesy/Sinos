@@ -24,7 +24,7 @@ try {
     const reactUrl = source.match(/from "([^"\n]*\/react\.js\?v=[^"]+)"/)[1];
     await route.fulfill({ contentType: 'text/javascript', body: `
       import React from '${reactUrl}';
-      export const TERM_COLOR_SCHEMES=[];
+      export const TERM_COLOR_SCHEMES=[]; export const ClaudeTool=()=>null, ClaudeThinking=()=>null;
       export function ${name}(props){return React.createElement('div',{'data-native-view':'${name}','data-native-token':props.resumeToken,'data-session-id':props.sessionId},'${name}')}
     ` });
   });
@@ -46,7 +46,7 @@ try {
   };
   for (const tool of ['claude', 'codex']) {
     const desktop = tool === 'claude' ? 'ClaudeConversation' : 'CodexConversation';
-    await page.getByRole('button', { name: 'New session', exact: true }).click();
+    await page.getByRole('complementary').getByRole('button', { name: 'New session', exact: true }).click();
     assert.equal(await modeGroup(tool).getByRole('button', { name: 'Terminal', exact: true }).getAttribute('aria-pressed'), 'true', 'fresh Sinos preference preserves shared terminal sessions');
     await modeGroup(tool).getByRole('button', { name: 'Desktop', exact: true }).click();
     await history(tool).click();
@@ -54,7 +54,8 @@ try {
     assert.equal(await activeView().getAttribute('data-native-token'), tool + '-native');
     await closeActive();
     for (const [label, view] of [['Terminal', 'TierTerminal'], ['Desktop', desktop], ['Terminal', 'TierTerminal']]) {
-      await page.getByRole('button', { name: 'New session', exact: true }).click();
+      // The tab strip's + opens the same launch page as the sidebar's New session.
+      await page.locator('.chrome-tab-add').click();
       await modeGroup(tool).getByRole('button', { name: label, exact: true }).click();
       await history(tool).click();
       await page.waitForFunction(name => [...document.querySelectorAll('[data-native-view]')].some(el => el.offsetParent && el.dataset.nativeView === name), view);
