@@ -139,6 +139,60 @@ Current TODOs and acceptance gaps are maintained in the [release plan](../exec-p
   installer download/hash/MSI verification and publication. GitHub login is still
   required. The project release instructions now record this execution policy.
 
+### Relay reconnect fix and held candidate — 2026-11-13
+
+- Pushed release candidate `55fc03a8b17682f15c88c2ee9f77186fd7dbf415`
+  (`v4.0.6`). Public GitHub results: [Review passed](https://github.com/Hopesy/Sinos/actions/runs/43367687223),
+  [Android passed](https://github.com/Hopesy/Sinos/actions/runs/43367687199), and
+  [Release quality failed](https://github.com/Hopesy/Sinos/actions/runs/43367677674)
+  with exit 1. Packaging and asset verification were skipped; the full failure
+  log requires normal GitHub authentication and remains uninspected.
+- After a Cloudflare quota notice, source inspection found that desktop
+  `1000/replaced` closes reset retry backoff and reconnected after one second.
+  Debug and installed builds shared saved relay credentials, enabling repeated
+  mutual eviction while both ran, even without a phone connected. The earlier
+  side-by-side debug preview could trigger this defect. Attribution of the full
+  Cloudflare daily request total still requires account-side metrics.
+- The user requested these fixes before proceeding with release. The candidate
+  remains unpublished with its pushed tag preserved; use a new version/tag for
+  the eventual release. Current TODOs remain in the same release plan.
+- The fix stops displaced owners, adds explicit desktop takeover with a fresh
+  owner and preserved pairing identity, retains backoff across short closes,
+  and separates debug relay configuration/keyring service from production.
+  Frontend pairing waits for the native scope. Formal compatibility and test
+  entrypoints are recorded in [the relay design](../design/relay.md).
+- Evidence under `.Sinos-temp/relay-reconnect/`: the targeted UI regressions
+  first exposed 3 failures and then passed all 8 tests. The real component
+  Chromium regression passed with an inspected screenshot. Relay typecheck,
+  3 unit tests, and actual local Workers/DO integration passed, including exact
+  host replacement and encrypted handoff to the existing guest connection.
+  The local helper's first readiness timeout came from ANSI-colored log parsing;
+  stripping terminal control sequences fixed that helper without changing the
+  Worker or assertions. Both helper runs and storage were loopback-only.
+- Full frontend build and lint passed, with **385 Vitest tests in 64 files**,
+  **73/73 unit scripts**, and **40/40 browser scripts**. Production dependency
+  audit found **0 vulnerabilities**. The new browser regression is automatically
+  discovered by the unified browser runner. Remote native verification remains
+  pending in the active plan. Rust was not reinstalled, production relay
+  configuration was not deployed, and the installed application/user sessions
+  were left running.
+- Follow-up review identified a close/heartbeat/write race during awaited RPCs,
+  stale cross-process device remarks during takeover, and an editable relay
+  field before initial status. The transport loop now reads control frames
+  independently of ordered RPCs and pending writes, takeover reloads the saved
+  credential, and initial address editing/probing waits for the native scope.
+  Four transport-loop regressions cover stalled RPCs, pending/failing sends,
+  write order and old-channel queue disposal; a credential-loader regression covers other-instance remarks
+  and revocation. Native execution remains pending on GitHub. The startup UI
+  regression failed before the additional guard and passed after it.
+- The follow-up full frontend run passed build/lint but one unchanged syntax-
+  highlighting Vitest timed out (384 passed / 1 failed). Its isolated run passed;
+  the complete single-worker rerun passed all **385 tests**, followed by
+  **73/73 scripts**. The browser run was interrupted when the session ended;
+  after the user's continuation request, a full rerun passed **40/40 scripts**.
+  Assertions and timeouts remained unchanged. This local result does not
+  identify the earlier Release CI failure; its authenticated logs remain outstanding.
+
 ## Historical integration — 2026-10-31
 
 Merged Coffee-CLI `main` through

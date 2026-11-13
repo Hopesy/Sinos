@@ -71,10 +71,10 @@ fn monitor(manager: Arc<RelayHost>, share: Arc<TemporaryShare>) -> std::pin::Pin
                     if response["state"] == "authorized" {
                         let key = response["response"].as_str().and_then(|boxed| crypto::unbox_key(boxed, &share.invite.secret).ok());
                         if let (Some(key), Some(pair_id), Some(token)) = (key, response["pairId"].as_str(), response["hostToken"].as_str()) {
-                            let device = Arc::new(Device {
-                                credential: Credential { pair_id: pair_id.into(), relay_url: share.invite.relay.clone(), token: token.into(), content_key: crypto::encode(&key), device_name: "临时访客".into(), paired_at: now_ms(), revoked: false },
-                                name: RwLock::new("临时访客".into()), stopped: AtomicBool::new(false), online: AtomicBool::new(false), state: RwLock::new("connecting".into()), share: Some(share.scope.clone()),
-                            });
+                            let device = Arc::new(Device::new(
+                                Credential { pair_id: pair_id.into(), relay_url: share.invite.relay.clone(), token: token.into(), content_key: crypto::encode(&key), device_name: "临时访客".into(), paired_at: now_ms(), revoked: false },
+                                Some(share.scope.clone()),
+                            ));
                             *share.device.lock().unwrap() = Some(device.clone());
                             tauri::async_runtime::spawn(manager.clone().run_device(device));
                         }

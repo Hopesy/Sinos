@@ -2410,6 +2410,7 @@ pub fn start_ui(pending_launch: Option<crate::launch::LaunchRequest>) -> anyhow:
             crate::relay_host::relay_cancel_pairing,
             crate::relay_host::relay_revoke_device,
             crate::relay_host::relay_rename_device,
+            crate::relay_host::relay_resume_device,
             set_background_mode,
             set_session_active,
             get_native_history,

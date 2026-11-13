@@ -48,7 +48,7 @@ try {
   const authorized = await (await post('/v1/pair/request', { publicKey, requestToken })).json() as { hostToken: string; response: string };
   const parts = authorized.response.split('.').map(fromBase64Url);
   assert.deepEqual(openBoxedContentKey({ ephPublicKey: parts[0], nonce: parts[1], boxed: parts[2] }, host.secretKey), key);
-  const hs = await socket(pairId, 'host', authorized.hostToken);
+  let hs = await socket(pairId, 'host', authorized.hostToken);
   const gs = await socket(pairId, 'guest', deviceToken);
   const guestRead = binary(gs);
   hs.send(await sealFrame(key, { type: 'hello', protocol: 'coffee-v1', channel: 'test' }));
@@ -57,6 +57,16 @@ try {
   gs.send(await sealFrame(key, { type: 'request', text: '手机发送中文', id: 'one' }));
   assert.deepEqual(await openFrame(key, await hostRead), { type: 'request', text: '手机发送中文', id: 'one' });
   const pong = once(gs, 'message'); gs.send('ping'); assert.equal(String((await pong)[0]), 'pong');
+  // The displaced desktop must receive the exact terminal signal understood by
+  // all clients; the new owner keeps the existing guest and encrypted channel.
+  const displaced = once(hs, 'close');
+  hs = await socket(pairId, 'host', authorized.hostToken);
+  const [displacedCode, displacedReason] = await displaced;
+  assert.equal(displacedCode, 1000);
+  assert.equal(String(displacedReason), 'replaced');
+  const takeoverRead = binary(gs);
+  hs.send(await sealFrame(key, { type: 'hello', protocol: 'coffee-v1', channel: 'explicit-takeover' }));
+  assert.deepEqual(await openFrame(key, await takeoverRead), { type: 'hello', protocol: 'coffee-v1', channel: 'explicit-takeover' });
   const closedGuest = once(gs, 'close'), closedHost = once(hs, 'close');
   assert.equal((await fetch(`${origin}/v1/pair/${pairId}?token=wrong`, { method: 'DELETE' })).status, 401);
   assert.equal((await fetch(`${origin}/v1/pair/${pairId}?token=${authorized.hostToken}`, { method: 'DELETE' })).status, 200);
@@ -91,5 +101,5 @@ try {
   assert.equal((await post('/v1/pair/request', { publicKey: temporaryPublicKey, requestToken: temporaryOwner, pollOnly: true })).status, 410);
   const stale = new WebSocket(`${origin.replace(/^http/, 'ws')}/v1/pair/${invitation.pairId}?role=guest&token=${temporaryGuest.deviceToken}`);
   sockets.push(stale); assert.equal((await once(stale, 'close'))[0], 1008);
-  console.log('PASS: permanent pairing, temporary-only claims, eight concurrent claims with one winner, scoped encrypted channel, guest reconnect, cancellation, no poll resurrection, stale credential rejection');
+  console.log('PASS: permanent pairing, exact host replacement signal and encrypted takeover, temporary-only claims, eight concurrent claims with one winner, scoped encrypted channel, guest reconnect, cancellation, no poll resurrection, stale credential rejection');
 } finally { for (const ws of sockets) ws.terminate(); }

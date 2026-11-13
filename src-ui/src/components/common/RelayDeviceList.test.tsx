@@ -31,6 +31,34 @@ it('renames only the selected pairing and retains the edit if saving fails', asy
   await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
 });
 
+it('keeps a replaced connection offline and requires an explicit takeover', async () => {
+  const action = vi.fn().mockResolvedValue(true);
+  const replaced = { ...device('device-111111', true, 1), state: 'replaced' };
+  const view = render(<RelayDeviceList devices={[replaced]} busy={false} action={action} />);
+  expect(screen.queryByRole('list', { name: '在线设备' })).toBeNull();
+  expect(screen.getByText('已被接管')).toBeTruthy();
+  expect(screen.getByText('其他 Sinos CLI 实例已接管，当前实例已暂停自动重连。')).toBeTruthy();
+  expect(action).not.toHaveBeenCalled();
+  const takeover = screen.getByRole('button', { name: '在此接管 Android 手机 · 111111' });
+  fireEvent.click(takeover);
+  await waitFor(() => expect(action).toHaveBeenCalledWith('relay_resume_device', { pairId: replaced.pairId }));
+  expect(action).toHaveBeenCalledTimes(1);
+  view.rerender(<RelayDeviceList devices={[{ ...replaced, online: false, state: 'connecting' }]} busy={false} action={action} />);
+  expect(screen.queryByRole('button', { name: /在此接管/ })).toBeNull();
+});
+
+it('never offers takeover for revoked records and prevents takeover while busy', () => {
+  const action = vi.fn().mockResolvedValue(true);
+  const replaced = { ...device('device-111111', false, 1), state: 'replaced' };
+  const revoked = { ...device('device-222222', false, 2), state: 'revoked' };
+  render(<RelayDeviceList devices={[replaced, revoked]} busy action={action} />);
+  const buttons = screen.getAllByRole('button', { name: /在此接管/ });
+  expect(buttons).toHaveLength(1);
+  expect(buttons[0].hasAttribute('disabled')).toBe(true);
+  fireEvent.click(buttons[0]);
+  expect(action).not.toHaveBeenCalled();
+});
+
 it('revokes only the selected pairing directly and disables actions while busy', async () => {
   const action = vi.fn().mockResolvedValue(true);
   const devices = [device('device-111111', true, 1), device('device-222222', true, 2)];

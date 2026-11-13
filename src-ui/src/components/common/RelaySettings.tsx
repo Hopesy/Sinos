@@ -9,7 +9,9 @@ interface RelayStatus { relayUrl: string; inviteUrl: string | null; expiresAt: n
 async function call<T>(command: string, args?: Record<string, unknown>) { const { invoke } = await import('@tauri-apps/api/core'); return invoke<T>(command, args); }
 export function RelaySettings() {
   const [status, setStatus] = useState<RelayStatus | null>(null);
-  const [relay, setRelay] = useState('https://sinos-relay.zhlhopefil.workers.dev');
+  // The native host owns build-specific defaults; a debug preview must not
+  // briefly offer the production relay before its isolated scope is loaded.
+  const [relay, setRelay] = useState('');
   const [qr, setQr] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -55,16 +57,16 @@ export function RelaySettings() {
       <label htmlFor="relay-address-input">Cloudflare 中继地址</label>
       <div className="relay-address-row">
         <div className="relay-address-field">
-          <input id="relay-address-input" type={showAddress ? 'url' : 'password'} value={relay} onChange={e => { setRelay(e.target.value); setTestResult(null); }} placeholder={showAddress ? 'https://relay.example.com' : '*****'} spellCheck={false} autoCapitalize="off" autoComplete="off" disabled={busy || testing} />
+          <input id="relay-address-input" type={showAddress ? 'url' : 'password'} value={relay} onChange={e => { setRelay(e.target.value); setTestResult(null); }} placeholder={showAddress ? 'https://relay.example.com' : '*****'} spellCheck={false} autoCapitalize="off" autoComplete="off" disabled={busy || testing || !status} />
           <button className="relay-eye" type="button" aria-label={showAddress ? '隐藏中继地址' : '显示中继地址'} title={showAddress ? '隐藏中继地址' : '显示中继地址'} aria-pressed={showAddress} onClick={() => setShowAddress(value => !value)}>{showAddress ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </div>
-        <button className="settings-btn relay-test" aria-label={testing ? '测试中' : '测试连接'} title={testing ? '测试中…' : '测试连接'} disabled={busy || testing || !relay.trim()} onClick={() => void testConnection()}>{testing ? <LoaderCircle size={17} className="relay-spin" /> : <Unplug size={17} />}</button>
+        <button className="settings-btn relay-test" aria-label={testing ? '测试中' : '测试连接'} title={testing ? '测试中…' : '测试连接'} disabled={busy || testing || !status || !relay.trim()} onClick={() => void testConnection()}>{testing ? <LoaderCircle size={17} className="relay-spin" /> : <Unplug size={17} />}</button>
       </div>
       {testResult && <p className={`relay-test-result ${testResult.ok ? 'is-success' : 'is-error'}`} role={testResult.ok ? 'status' : 'alert'}>{testResult.message}</p>}
     </div>
     <section className="relay-pair-card" aria-label="手机配对">
       <div className="relay-pair-heading"><span className="relay-pair-icon"><QrCode size={20} strokeWidth={1.6} /></span><div><h3>手机配对</h3><p>{showingInvite ? '扫描二维码，或在手机上打开链接' : '扫码连接，接续电脑会话'}</p></div>
-        {!showingInvite && <button className="relay-connect" disabled={busy} onClick={() => void action('relay_create_pairing', { relayUrl: relay })}>{busy ? <LoaderCircle size={14} className="relay-spin" /> : <Plus size={14} />}{busy ? '连接中…' : '连接新设备'}</button>}
+        {!showingInvite && <button className="relay-connect" disabled={busy || !status || !relay.trim()} onClick={() => void action('relay_create_pairing', { relayUrl: relay })}>{busy ? <LoaderCircle size={14} className="relay-spin" /> : <Plus size={14} />}{busy ? '连接中…' : '连接新设备'}</button>}
       </div>
       {showingInvite && <div className="relay-invite">
       <img src={qr} alt="手机扫码配对二维码" />

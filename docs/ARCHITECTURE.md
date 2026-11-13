@@ -38,6 +38,7 @@ Sinos CLI 是 Tauri 2 桌面工作区：Rust 管理本机 CLI、原生对话、�
 - [开发与兼容规则](design/development.md)：剪贴板、Tauri、hook、路径与安装脚本约束。
 - [发布与验证](design/release.md)：完整门禁、远程 Rust 构建、草稿和十个安装包核验。
 - [Sinos Agent](design/agent.md)：用户操作、渠道与持久化契约。
+- [移动中继与实例接管](design/relay.md)：连接归属、断线退避、调试/正式版配对隔离和回归入口。
 - [Claude 移动事件](design/claude-mobile.md)、[Codex 移动适配](design/codex-mobile.md)：协议来源、回放、降级和验收条件。
 - [上游兼容策略](design/upstream-compatibility.md)：保留的 Sinos 行为及明确排除项。
 

@@ -1,6 +1,5 @@
 //! Outbound encrypted companion connection. Credentials stay in the native host.
 use crate::{pair_crypto as crypto, remote_server::RemoteState};
-use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -11,13 +10,57 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
 
 const DEFAULT_RELAY: &str = "https://sinos-relay.zhlhopefil.workers.dev";
+
+struct RelayScope {
+    service: &'static str,
+    config_file: &'static str,
+    default_url: &'static str,
+}
+
+fn relay_scope(debug: bool) -> RelayScope {
+    if debug {
+        RelayScope { service: "coffee-cli-debug", config_file: "relay-url-debug", default_url: "http://127.0.0.1:8788" }
+    } else {
+        RelayScope { service: "coffee-cli", config_file: "relay-url", default_url: DEFAULT_RELAY }
+    }
+}
+
+fn credential_account(pair_id: Option<&str>) -> String {
+    match pair_id {
+        Some(id) => format!("mobile-{id}"),
+        None => "paired-mobile-devices".into(),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CloseAction { Retry, Replaced, Revoked }
+
+fn close_action(code: Option<u16>, reason: Option<&str>) -> CloseAction {
+    if code == Some(1008) {
+        CloseAction::Revoked
+    } else if code == Some(1000) && reason == Some("replaced") {
+        CloseAction::Replaced
+    } else {
+        CloseAction::Retry
+    }
+}
+
+// A connection must survive a full 30 seconds to reset successive failures.
+fn retry_delay(attempt: &mut u32, connected: Option<Duration>) -> Duration {
+    if connected.is_some_and(|elapsed| elapsed >= Duration::from_secs(30)) {
+        *attempt = 0;
+    }
+    let seconds = (1u64 << (*attempt).min(5)).min(30);
+    *attempt = attempt.saturating_add(1);
+    Duration::from_secs(seconds)
+}
 static HOST: OnceLock<Arc<RelayHost>> = OnceLock::new();
 #[path = "relay_share.rs"]
 pub(crate) mod sharing;
+#[path = "relay_socket.rs"]
+mod connection;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,12 +78,42 @@ struct Device {
     credential: Credential,
     name: RwLock<String>,
     stopped: AtomicBool,
+    displaced: AtomicBool,
     online: AtomicBool,
     state: RwLock<String>,
     share: Option<Arc<crate::remote_share::ShareScope>>,
 }
 impl Device {
-    fn active(&self) -> bool { !self.stopped.load(Ordering::SeqCst) && self.share.as_ref().map(|share| share.active(now_ms())).unwrap_or(true) }
+    fn new(credential: Credential, share: Option<Arc<crate::remote_share::ShareScope>>) -> Self {
+        Self {
+            name: RwLock::new(credential.device_name.clone()),
+            stopped: AtomicBool::new(credential.revoked),
+            displaced: AtomicBool::new(false),
+            credential,
+            online: AtomicBool::new(false),
+            state: RwLock::new("connecting".into()),
+            share,
+        }
+    }
+    fn active(&self) -> bool {
+        !self.stopped.load(Ordering::SeqCst) && !self.displaced.load(Ordering::SeqCst)
+            && self.share.as_ref().map(|share| share.active(now_ms())).unwrap_or(true)
+    }
+    fn handle_close(&self, action: CloseAction) {
+        match action {
+            CloseAction::Retry => {}
+            CloseAction::Revoked => {
+                self.stopped.store(true, Ordering::SeqCst);
+                self.online.store(false, Ordering::SeqCst);
+            }
+            CloseAction::Replaced => {
+                let mut state = self.state.write().unwrap();
+                self.displaced.store(true, Ordering::SeqCst);
+                self.online.store(false, Ordering::SeqCst);
+                *state = "replaced".into();
+            }
+        }
+    }
     fn saved_credential(&self) -> Credential {
         let mut credential = self.credential.clone();
         credential.device_name = self.name.read().unwrap().clone();
@@ -61,6 +134,38 @@ impl Device {
         Ok(())
     }
 }
+// Called under credential_lock so rename/revoke cannot race the snapshot.
+fn resume_owner(old: &Arc<Device>, load: impl FnOnce(&str) -> Result<Credential, String>) -> Result<Option<Arc<Device>>, String> {
+    if old.stopped.load(Ordering::SeqCst) {
+        return Err("设备已撤销，无法接管".into());
+    }
+    let state = old.state.read().unwrap();
+    if state.as_str() != "replaced" || !old.displaced.load(Ordering::SeqCst) {
+        return Ok(None);
+    }
+    // Another process may have renamed or revoked this pairing since startup.
+    // Re-read the authoritative record; never save the displaced owner's cache.
+    let saved = load(&old.credential.pair_id)?;
+    if saved.revoked {
+        old.stopped.store(true, Ordering::SeqCst);
+        return Err("设备已撤销，无法接管".into());
+    }
+    if saved.pair_id != old.credential.pair_id || saved.relay_url != old.credential.relay_url
+        || saved.token != old.credential.token || saved.content_key != old.credential.content_key {
+        return Err("配对信息已变化，请重新配对".into());
+    }
+    Ok(Some(Arc::new(Device::new(saved, None))))
+}
+
+fn resume_in_map(devices: &mut HashMap<String, Arc<Device>>, pair_id: &str, load: impl FnOnce(&str) -> Result<Credential, String>) -> Result<Option<Arc<Device>>, String> {
+    let old = devices.get(pair_id).cloned().ok_or("设备不存在")?;
+    let fresh = resume_owner(&old, load)?;
+    if let Some(device) = &fresh {
+        devices.insert(pair_id.to_string(), device.clone());
+    }
+    Ok(fresh)
+}
+
 #[derive(Clone)]
 struct Invitation {
     public_key: String,
@@ -175,26 +280,22 @@ pub fn normalize_relay(value: &str) -> Result<String, String> {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|p| p.join(".coffee-cli/relay-url"))
+    dirs::home_dir().map(|p| p.join(".coffee-cli").join(relay_scope(cfg!(debug_assertions)).config_file))
 }
-fn credential_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("coffee-cli", "paired-mobile-devices")
+fn credential_entry(pair_id: Option<&str>) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(relay_scope(cfg!(debug_assertions)).service, &credential_account(pair_id))
         .map_err(|_| "无法访问系统凭据库".into())
 }
+fn load_credential(pair_id: &str) -> Result<Credential, String> {
+    let raw = credential_entry(Some(pair_id))?.get_password().map_err(|_| "无法读取设备凭据")?;
+    serde_json::from_str(&raw).map_err(|_| "设备凭据损坏".into())
+}
 fn load_credentials() -> Result<Vec<Credential>, String> {
-    match credential_entry()?.get_password() {
+    match credential_entry(None)?.get_password() {
         Ok(raw) => {
             let ids: Vec<String> =
                 serde_json::from_str(&raw).map_err(|_| "配对记录损坏，请重新配对")?;
-            ids.iter()
-                .map(|id| {
-                    let raw = keyring::Entry::new("coffee-cli", &format!("mobile-{id}"))
-                        .map_err(|_| "无法访问设备凭据")?
-                        .get_password()
-                        .map_err(|_| "无法读取设备凭据")?;
-                    serde_json::from_str(&raw).map_err(|_| "设备凭据损坏".into())
-                })
-                .collect()
+            ids.iter().map(|id| load_credential(id)).collect()
         }
         Err(keyring::Error::NoEntry) => Ok(vec![]),
         Err(_) => Err("无法读取系统凭据库，已保存的设备暂不可用".into()),
@@ -207,14 +308,13 @@ fn save_credentials(values: &[Credential]) -> Result<(), String> {
     }
     let raw = serde_json::to_string(&values.iter().map(|v| &v.pair_id).collect::<Vec<_>>())
         .map_err(|_| "无法保存配对记录")?;
-    credential_entry()?
+    credential_entry(None)?
         .set_password(&raw)
         .map_err(|_| "无法写入系统凭据库，配对未保存".into())
 }
 fn save_credential(value: &Credential) -> Result<(), String> {
     let raw = serde_json::to_string(value).map_err(|_| "无法保存配对记录")?;
-    keyring::Entry::new("coffee-cli", &format!("mobile-{}", value.pair_id))
-        .map_err(|_| "无法访问设备凭据")?
+    credential_entry(Some(&value.pair_id))?
         .set_password(&raw)
         .map_err(|_| "无法保存设备凭据".into())
 }
@@ -260,7 +360,7 @@ pub fn start(remote: RemoteState) {
     let relay = config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| normalize_relay(&s).ok())
-        .unwrap_or_else(|| DEFAULT_RELAY.into());
+        .unwrap_or_else(|| relay_scope(cfg!(debug_assertions)).default_url.into());
     let manager = Arc::new(RelayHost {
         remote,
         relay: RwLock::new(relay),
@@ -355,6 +455,22 @@ pub async fn relay_rename_device(pair_id: String, device_name: String) -> Result
 }
 
 #[tauri::command]
+pub async fn relay_resume_device(pair_id: String) -> Result<RelayStatus, String> {
+    let manager = host()?;
+    let _guard = manager.credential_lock.lock().await;
+    let owner = manager.clone();
+    let fresh = tokio::task::spawn_blocking(move || {
+        let mut devices = owner.devices.write().unwrap();
+        resume_in_map(&mut devices, &pair_id, load_credential)
+    }).await.map_err(|_| "无法读取设备凭据")??;
+    if let Some(device) = fresh {
+        let worker = manager.clone();
+        tauri::async_runtime::spawn(async move { worker.run_device(device).await; });
+    }
+    Ok(manager.status())
+}
+
+#[tauri::command]
 pub async fn relay_revoke_device(pair_id: String) -> Result<RelayStatus, String> {
     let manager = host()?;
     let _guard = manager.credential_lock.lock().await;
@@ -397,8 +513,9 @@ pub async fn relay_revoke_device(pair_id: String) -> Result<RelayStatus, String>
         .await
         .map_err(|_| "无法保存设备状态")??;
     manager.devices.write().unwrap().remove(&pair_id);
-    let _ = keyring::Entry::new("coffee-cli", &format!("mobile-{pair_id}"))
-        .and_then(|e| e.delete_credential());
+    if let Ok(entry) = credential_entry(Some(&pair_id)) {
+        let _ = entry.delete_credential();
+    }
     Ok(manager.status())
 }
 
@@ -544,15 +661,7 @@ impl RelayHost {
         {
             return;
         }
-        let stopped = credential.revoked;
-        let device = Arc::new(Device {
-            name: RwLock::new(credential.device_name.clone()),
-            credential,
-            stopped: AtomicBool::new(stopped),
-            online: AtomicBool::new(false),
-            state: RwLock::new("connecting".into()),
-            share: None,
-        });
+        let device = Arc::new(Device::new(credential, None));
         let id = device.credential.pair_id.clone();
         if let Some(old) = self.devices.write().unwrap().insert(id, device.clone()) {
             old.stopped.store(true, Ordering::SeqCst);
@@ -566,21 +675,18 @@ impl RelayHost {
         let mut attempt = 0u32;
         while device.active() {
             *device.state.write().unwrap() = "connecting".into();
-            let result = self.run_socket(device.clone()).await;
+            let mut connected_at = None;
+            let _ = self.run_socket(device.clone(), &mut connected_at).await;
             device.online.store(false, Ordering::SeqCst);
             if !device.active() {
                 break;
             }
             *device.state.write().unwrap() = "offline".into();
-            if result.is_ok() {
-                attempt = 0;
-            }
-            let wait = (1u64 << attempt.min(5)).min(30);
-            attempt += 1;
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+            let wait = retry_delay(&mut attempt, connected_at.map(|started: Instant| started.elapsed()));
+            tokio::time::sleep(wait).await;
         }
     }
-    async fn run_socket(&self, device: Arc<Device>) -> Result<(), String> {
+    async fn run_socket(&self, device: Arc<Device>, connected_at: &mut Option<Instant>) -> Result<(), String> {
         let mut url = url::Url::parse(&device.credential.relay_url).map_err(|_| "INVALID_URL")?;
         let secure = url.scheme() == "https";
         url.set_scheme(if secure { "wss" } else { "ws" })
@@ -596,103 +702,125 @@ impl RelayHost {
         .await
         .map_err(|_| "CONNECT_TIMEOUT")?
         .map_err(|_| "CONNECT_FAILED")?;
-        let key = crypto::decode(&device.credential.content_key)?;
-        let (mut sink, mut source) = socket.split();
-        let (replies, mut outgoing) = mpsc::channel::<(Value, bool)>(16);
-        let limit = Arc::new(tokio::sync::Semaphore::new(8));
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        let mut last_seen = Instant::now();
-        let mut channel = uuid::Uuid::new_v4().to_string();
-        let mut received_seq = 0u64;
-        *device.state.write().unwrap() = "connected".into();
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    if !device.active() { let _ = sink.close().await; return Ok(()); }
-                    if last_seen.elapsed() > Duration::from_secs(25) { return Err("HEARTBEAT_TIMEOUT".into()); }
-                    sink.send(Message::Text("ping".into())).await.map_err(|_| "SEND_FAILED")?;
-                }
-                Some((reply, allow_chunks)) = outgoing.recv() => {
-                    if !device.active() { return Ok(()); }
-                    // Drop work from a replaced phone connection.
-                    if reply["channel"] != channel { continue; }
-                    for frame in crypto::seal_reply(&key, &reply, allow_chunks)? {
-                        if !device.active() { return Ok(()); }
-                        sink.send(Message::Binary(frame.into())).await.map_err(|_| "SEND_FAILED")?;
-                    }
-                }
-                message = source.next() => {
-                    let Some(Ok(message)) = message else { return Err("DISCONNECTED".into()) };
-                    last_seen = Instant::now();
-                    match message {
-                        Message::Text(text) => {
-                            if text == "pong" { continue; }
-                            let Ok(control) = serde_json::from_str::<Value>(&text) else { continue };
-                            match control["type"].as_str() {
-                                Some("peer-joined") => {
-                                    device.online.store(true, Ordering::SeqCst);
-                                    channel = uuid::Uuid::new_v4().to_string(); received_seq = 0;
-                                    let hello = crypto::seal(&key, &json!({"type":"hello", "protocol":"coffee-v1", "channel":channel}))?;
-                                    sink.send(Message::Binary(hello.into())).await.map_err(|_| "SEND_FAILED")?;
-                                }
-                                Some("peer-left") => { device.online.store(false, Ordering::SeqCst); }
-                                Some("revoked") => { device.stopped.store(true, Ordering::SeqCst); return Ok(()); }
-                                _ => {}
-                            }
-                        }
-                        Message::Binary(frame) => {
-                            let Ok(request) = crypto::open(&key, &frame) else { continue };
-                            if !device.active() { return Ok(()); }
-                            let seq = request["seq"].as_u64().unwrap_or(0);
-                            if request["channel"] != channel || seq <= received_seq { continue; }
-                            received_seq = seq;
-                            if request["type"] != "request" { continue; }
-                            let id = request["id"].as_str().unwrap_or("");
-                            if id.is_empty() || id.len() > 64 { continue; }
-                            // Keep terminal keystrokes and other writes in wire
-                            // order. Spawning one task per key can reorder them.
-                            if matches!(request["action"].as_str(), Some("session.input" | "session.prompt" | "session.answer" | "session.queue_action" | "session.images" | "session.pause" | "session.kill" | "session.launch" | "workspace.save" | "terminal.resize")) {
-                                let allow_chunks = request["acceptChunks"].as_bool().unwrap_or(false);
-                                let response = crate::remote_server::relay_request(self.remote.clone(), request, device.share.clone()).await;
-                                for frame in crypto::seal_reply(&key, &response, allow_chunks)? {
-                                    if !device.active() { return Ok(()); }
-                                    sink.send(Message::Binary(frame.into())).await.map_err(|_| "SEND_FAILED")?;
-                                }
-                                continue;
-                            }
-                            let Ok(permit) = limit.clone().try_acquire_owned() else {
-                                let _ = replies.try_send((json!({"type":"response", "channel":channel, "id":id, "status":429, "error":"TOO_MANY_REQUESTS"}), false)); continue;
-                            };
-                            let remote = self.remote.clone(); let tx = replies.clone(); let active = device.clone();
-                            tokio::spawn(async move {
-                                let _permit = permit;
-                                if !active.active() { return; }
-                                let allow_chunks = request["acceptChunks"].as_bool().unwrap_or(false);
-                                let response = crate::remote_server::relay_request(remote, request, active.share.clone()).await;
-                                let _ = tx.send((response, allow_chunks)).await;
-                            });
-                        }
-                        Message::Ping(bytes) => { sink.send(Message::Pong(bytes)).await.map_err(|_| "SEND_FAILED")?; }
-                        Message::Close(frame) => {
-                            if frame.map(|f| u16::from(f.code) == 1008).unwrap_or(false) { device.stopped.store(true, Ordering::SeqCst); }
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        *connected_at = Some(Instant::now());
+        let remote = self.remote.clone();
+        let share = device.share.clone();
+        connection::run(socket, device, move |request| {
+            crate::remote_server::relay_request(remote.clone(), request, share.clone())
+        }).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_device() -> Arc<Device> {
+        Arc::new(Device::new(Credential {
+            pair_id: "pair".into(), relay_url: DEFAULT_RELAY.into(), token: "token".into(),
+            content_key: "key".into(), device_name: "original".into(), paired_at: 42, revoked: false,
+        }, None))
+    }
+
+    #[test]
+    fn close_replacement_and_revocation_are_distinct_and_terminal() {
+        assert_eq!(close_action(Some(1000), Some("replaced")), CloseAction::Replaced);
+        assert_eq!(close_action(Some(1008), Some("revoked")), CloseAction::Revoked);
+        assert_eq!(close_action(Some(1008), Some("replaced")), CloseAction::Revoked);
+        for (code, reason) in [(Some(1000), Some("other")), (Some(1001), Some("replaced")), (None, None)] {
+            assert_eq!(close_action(code, reason), CloseAction::Retry);
+        }
+        let device = test_device();
+        device.online.store(true, Ordering::SeqCst);
+        device.handle_close(CloseAction::Replaced);
+        assert!(!device.active());
+        assert!(!device.online.load(Ordering::SeqCst));
+        assert_eq!(&*device.state.read().unwrap(), "replaced");
+        assert!(!device.saved_credential().revoked);
+        let revoked = test_device();
+        revoked.handle_close(CloseAction::Revoked);
+        assert!(!revoked.active());
+        assert!(revoked.saved_credential().revoked);
+        assert!(resume_owner(&revoked, |_| panic!("revoked device must not load credentials")).is_err());
+    }
+
+    #[test]
+    fn resume_uses_a_new_owner_and_preserves_latest_identity() {
+        let old = test_device();
+        let mut devices = HashMap::from([("pair".into(), old.clone())]);
+        assert!(resume_in_map(&mut devices, "pair", |_| Ok(old.saved_credential())).unwrap().is_none());
+        *old.state.write().unwrap() = "connected".into();
+        assert!(resume_in_map(&mut devices, "pair", |_| Ok(old.saved_credential())).unwrap().is_none());
+        old.handle_close(CloseAction::Replaced);
+        old.rename("新名字".into(), |_| Ok(())).unwrap();
+        let new = resume_in_map(&mut devices, "pair", |_| Ok(old.saved_credential())).unwrap().unwrap();
+        assert!(Arc::ptr_eq(devices.get("pair").unwrap(), &new));
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert!(!old.active());
+        assert!(new.active());
+        assert_eq!(&*new.state.read().unwrap(), "connecting");
+        let saved = new.saved_credential();
+        assert_eq!((saved.pair_id.as_str(), saved.token.as_str(), saved.content_key.as_str(), saved.device_name.as_str(), saved.paired_at, saved.revoked),
+            ("pair", "token", "key", "新名字", 42, false));
+        assert!(resume_in_map(&mut devices, "pair", |_| Ok(old.saved_credential())).unwrap().is_none());
+        new.stopped.store(true, Ordering::SeqCst);
+        assert!(resume_in_map(&mut devices, "pair", |_| Ok(old.saved_credential())).is_err());
+        assert!(Arc::ptr_eq(devices.get("pair").unwrap(), &new));
+    }
+
+    #[test]
+    fn takeover_reloads_other_instances_remarks_and_revocation() {
+        let old = test_device();
+        old.handle_close(CloseAction::Replaced);
+        let mut persisted = old.saved_credential();
+        persisted.device_name = "renamed in another instance".into();
+        let mut devices = HashMap::from([("pair".into(), old.clone())]);
+        assert!(resume_in_map(&mut devices, "pair", |_| Err("keyring unavailable".into())).is_err());
+        assert!(Arc::ptr_eq(devices.get("pair").unwrap(), &old));
+        let new = resume_in_map(&mut devices, "pair", |id| {
+            assert_eq!(id, "pair");
+            Ok(persisted.clone())
+        }).unwrap().unwrap();
+        assert_eq!(old.saved_credential().device_name, "original");
+        assert_eq!(new.saved_credential().device_name, persisted.device_name);
+        new.handle_close(CloseAction::Replaced);
+        persisted.revoked = true;
+        assert!(resume_in_map(&mut devices, "pair", |_| Ok(persisted)).is_err());
+        assert!(!new.active());
+        assert!(new.saved_credential().revoked);
+    }
+
+    #[test]
+    fn reconnect_backoff_counts_short_closes_and_saturates_until_stable() {
+        let mut attempts = 0;
+        for expected in [1, 2, 4, 8, 16, 30, 30] {
+            assert_eq!(retry_delay(&mut attempts, None), Duration::from_secs(expected));
+        }
+        attempts = u32::MAX;
+        assert_eq!(retry_delay(&mut attempts, Some(Duration::from_secs(29))), Duration::from_secs(30));
+        assert_eq!(attempts, u32::MAX);
+        assert_eq!(retry_delay(&mut attempts, Some(Duration::from_secs(30))), Duration::from_secs(1));
+        assert_eq!(retry_delay(&mut attempts, None), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn relay_scopes_keep_release_compatibility_and_debug_separate() {
+        let release = relay_scope(false);
+        let debug = relay_scope(true);
+        assert_eq!((release.service, release.config_file, release.default_url),
+            ("coffee-cli", "relay-url", "https://sinos-relay.zhlhopefil.workers.dev"));
+        assert_ne!(debug.service, release.service);
+        assert_ne!(debug.config_file, release.config_file);
+        assert_eq!(debug.default_url, "http://127.0.0.1:8788");
+        assert_eq!(credential_account(None), "paired-mobile-devices");
+        assert_eq!(credential_account(Some("abc")), "mobile-abc");
+        assert_eq!(normalize_relay("https://test.example").unwrap(), "https://test.example");
+    }
+
     #[test]
     fn device_rename_preserves_connection_identity_and_survives_later_saves() {
         let device = Device {
             credential: Credential { pair_id: "same-pair".into(), relay_url: DEFAULT_RELAY.into(), token: "test-token".into(), content_key: "test-key".into(), device_name: "Android 手机".into(), paired_at: 123, revoked: false },
-            name: RwLock::new("Android 手机".into()), stopped: AtomicBool::new(false), online: AtomicBool::new(true), state: RwLock::new("connected".into()), share: None,
+            name: RwLock::new("Android 手机".into()), stopped: AtomicBool::new(false), displaced: AtomicBool::new(false), online: AtomicBool::new(true), state: RwLock::new("connected".into()), share: None,
         };
         device.rename(" 我的 Pixel · Chrome ".into(), |saved| {
             assert_eq!(saved.device_name, "我的 Pixel · Chrome");

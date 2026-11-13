@@ -35,6 +35,28 @@ it('tests the entered relay without creating an invitation, and clears stale res
   expect(screen.queryByText('中继服务可达 · 125 ms')).toBeNull();
 });
 
+it('waits for the native relay scope before allowing a new pairing', async () => {
+  let resolveStatus!: (value: unknown) => void;
+  const status = { relayUrl: 'http://127.0.0.1:8788', inviteUrl: null, expiresAt: null, error: null, devices: [] };
+  invoke.mockImplementation(command => command === 'relay_status'
+    ? new Promise(resolve => { resolveStatus = resolve; })
+    : Promise.resolve(status));
+  render(<RelaySettings />);
+  const connect = screen.getByRole('button', { name: '连接新设备' });
+  expect(connect.hasAttribute('disabled')).toBe(true);
+  expect((screen.getByLabelText('Cloudflare 中继地址') as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: '测试连接' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText('Cloudflare 中继地址') as HTMLInputElement).value).toBe('');
+  fireEvent.click(connect);
+  expect(invoke.mock.calls.some(([command]) => command === 'relay_create_pairing')).toBe(false);
+  // call() awaits the Tauri import before reaching this pending native request.
+  await waitFor(() => expect(invoke.mock.calls.some(([command]) => command === 'relay_status')).toBe(true));
+  resolveStatus(status);
+  await waitFor(() => expect((screen.getByLabelText('Cloudflare 中继地址') as HTMLInputElement).value).toBe(status.relayUrl));
+  fireEvent.click(connect);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('relay_create_pairing', { relayUrl: status.relayUrl }));
+});
+
 it('shows connection errors and allows another test', async () => {
   render(<RelaySettings />);
   await waitFor(() => expect((screen.getByLabelText('Cloudflare 中继地址') as HTMLInputElement).value).toBe(relayUrl));
