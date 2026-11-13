@@ -1,6 +1,8 @@
-# Changelog
+# Historical Changelog
 
-All notable changes to Coffee CLI are documented in this file.
+This history preserves earlier Sinos CLI and Coffee CLI release records and their original attribution. Version numbers and ordering reflect the historical records.
+
+For current Sinos CLI releases, see [GitHub Releases](https://github.com/Hopesy/Sinos/releases). The current bundled release notes are maintained in [install/release-notes-template.md](../../install/release-notes-template.md).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 For releases prior to v1.5.5, see the
@@ -415,7 +417,7 @@ formally claims seven brand marks against future rebranded clones.
 
 ### Added
 - **AGPL-3.0-or-later** as the project's source-code license
-  ([LICENSE](LICENSE), canonical FSF text).
+  ([LICENSE](../../LICENSE), canonical FSF text).
 - **NOTICE** — copyright, attribution for seven original designs
   (Gambit, Pitch, Coffee-CLI MCP, Sentinel Protocol, Multi-Agent
   Cross-Terminal Collaboration, VibeID, Vibetype), third-party asset

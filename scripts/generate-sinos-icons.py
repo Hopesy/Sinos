@@ -6,8 +6,8 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else ROOT / "branding" / "sinos"
-BRANDING = ROOT / "branding" / "sinos"
+SOURCE = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else ROOT / "icons" / "branding"
+BRANDING = ROOT / "icons" / "branding"
 ICONS = ROOT / "icons"
 PUBLIC = ROOT / "src-ui" / "public"
 UI_ASSETS = ROOT / "src-ui" / "src" / "assets"

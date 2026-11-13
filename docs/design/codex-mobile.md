@@ -108,7 +108,7 @@ conversation and does not modify the user's Codex config or shared daemon.
 Both loopback listeners require separate random bearer credentials. The TUI
 receives its token through `--remote-auth-token-env`; the engine receives only
 its SHA-256 credential digest as a CLI argument. The proxy rejects browser
-Origins. Phones use the existing paired local/Cloudflare encrypted transport,
+Origins. Phones use the existing paired, encrypted Cloudflare relay transport,
 never the app-server port. No new public deployment is needed.
 
 `CodexEventStream.ts` consumes original agent/plan Markdown deltas, public

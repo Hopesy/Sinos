@@ -33,18 +33,33 @@ desktop.ini
 .env.local
 models.json
 
-# Internal design / strategy docs — kept locally, never published.
-# Public-facing positioning lives on Web-Home; in-flight feature designs
-# and competitor research stay private until a launch warrants disclosure.
-# Root only: the website's own docs pages live under Web-Home/**/docs/.
-/docs/
+# Documentation: shared guides and standard topic/plan/history Markdown only.
+# Ad-hoc design notes and non-Markdown artifacts stay local. Website docs are
+# maintained separately under Web-Home/**/docs/.
+/docs/*
+!/docs/README.md
+!/docs/ARCHITECTURE.md
+!/docs/REPO_COLLAB_GUIDE.md
+!/docs/PLANS_GUIDE.md
+!/docs/HISTORY_GUIDE.md
+!/docs/design/
+/docs/design/**
+!/docs/design/**/
+!/docs/design/**/*.md
+!/docs/exec-plans/
+/docs/exec-plans/**
+!/docs/exec-plans/**/
+!/docs/exec-plans/**/*.md
+!/docs/histories/
+/docs/histories/**
+!/docs/histories/**/
+!/docs/histories/**/*.md
 
 # AI agent guardrails — kept locally so Claude Code reads them on every
 # session, but not published. CLAUDE.md is the team's candid "how to
 # work in this repo" memo (release pitfalls we've hit, tooling rules
 # we've broken N times, CF Worker routing internals); it's not the
-# contributor guide. A public-facing CONTRIBUTING.md, when needed,
-# should be authored separately.
+# contributor guide. The public guide lives in .github/CONTRIBUTING.md.
 CLAUDE.md
 
 # Dev artifacts, scripts & logs

@@ -71,15 +71,17 @@ API 密钥与渠道 token 存于系统凭据库；配置、接收游标、Agent 
 
 ## 开发验证
 
-```powershell
-cargo check
-cargo test
+在仓库根目录执行前端统一验证入口：
+
+```bash
 cd src-ui
 npm run build
-node scripts/run-terminal-observer-test.mjs
-node scripts/run-terminal-control-test.mjs
-node scripts/run-agent-tools-test.mjs
-node scripts/run-agent-client-test.mjs
+npm run lint
+npm test
+npm run test:browser
+npm audit --audit-level=high --omit=dev
 ```
+
+Rust 检查、原生协议回归和安装包构建由 GitHub Actions 执行。完整流程见 [发布与验证](release.md) 和 [开发文档](../README.md)。
 
 自动测试使用真实 xterm 和本地模拟模型服务；不连接真实消息账号、不发送真实消息。

@@ -28,10 +28,6 @@
   <img src="https://img.shields.io/github/license/Hopesy/sinos" />
 </p>
 
-<p align="center">
-  <img src="screenshot/hero.png" alt="Sinos CLI — Launchpad with underwater wallpaper" width="860" />
-</p>
-
 ---
 
 ## English
@@ -41,10 +37,6 @@
 Sinos CLI is a **desktop workspace for AI coding agents** — Claude Code, OpenAI Codex, Qwen, OpenCode, and more. Keep conversations, terminals, files, and code changes in one place, arrange sessions in tabs or splits, and continue managing tasks through connected messaging channels. The interface supports **11 languages**.
 
 Built with Tauri and a Rust backend, Sinos CLI is available for Windows, macOS, and Linux.
-
-<p align="center">
-  <img src="screenshot/wallpaper.jpg" alt="Sinos CLI workspace with custom wallpaper" width="860" />
-</p>
 
 ### Supported AI CLIs
 
@@ -100,15 +92,11 @@ Your agent works fast. Keep up with it. The built-in task board lets you create 
 
 Every conversation with every agent is automatically saved. The **History panel** gives you a full searchable log of past sessions — scroll back through what was said, what was built, what went wrong. Pick up any past session exactly where you left off, or use it as context for a new one.
 
-![Session History](screenshot/session-history.gif)
-
 ---
 
 #### Multi-Tab: Vibe Coding + DOS Game
 
 Run multiple agents and terminals in parallel, each in its own tab with its own independent context. Here: a **Claude Code vibe-coding session** running alongside a **DOS game in the built-in terminal** — two completely separate processes, zero interference. Sinos CLI handles whatever you throw at it.
-
-![Multi-Tab Sessions](screenshot/multi-tab.gif)
 
 ---
 
@@ -187,15 +175,11 @@ The Android companion connects to a running desktop instance. Pair once from
 Pairing is stored securely and subsequent launches reconnect automatically.
 See [Android setup and build instructions](src-ui/android/README.md).
 
-### Build from Source
+### Development
 
-```bash
-# Prerequisites: Rust, Node.js
-git clone https://github.com/Hopesy/Sinos
-cd sinos
-cd src-ui && npm install && cd ..
-cargo tauri build
-```
+See the [development documentation](docs/README.md) for the repository layout and validation workflow, the [Sinos Agent guide](docs/design/agent.md) for built-in Agent usage, and the [contribution guide](.github/CONTRIBUTING.md) before opening a pull request.
+
+Frontend checks run locally. Rust validation, native protocol tests and the five-platform installer builds run in GitHub Actions.
 
 ---
 
@@ -410,7 +394,7 @@ The code remains licensed under the [GNU Affero General Public License v3.0 or l
 The original Coffee CLI copyright, attribution, design notices, and trademark policy are preserved in [NOTICE](NOTICE) and [TRADEMARKS.md](TRADEMARKS.md).
 Coffee CLI, Gambit, Pitch, VibeID, Vibetype, Coffee-CLI MCP, Sentinel Protocol, Hyper-Agent, and the other upstream marks named there remain the property of their respective upstream owner; this fork does not claim them as Sinos marks.
 
-Sinos CLI uses a separate Sinos name and the distinct assets under [`branding/sinos`](branding/sinos).
+Sinos CLI uses a separate Sinos name and the distinct assets under [`icons/branding`](icons/branding).
 
 ---
 

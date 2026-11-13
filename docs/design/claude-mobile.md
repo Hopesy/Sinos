@@ -43,7 +43,7 @@ writes are retried. Packet/journal gaps or overflow invalidate authority and use
 native history/VT until the next turn. Closing the terminal stops the collector
 and removes its temporary plugin/files.
 
-The existing authenticated direct/Cloudflare relay transports paginated events
+The existing paired and encrypted Cloudflare relay transports paginated events
 with independent Claude epoch/cursors. Mobile renders original Markdown during
 generation, retains the last good view during reconnection, preserves native
 history/images/tool outcomes and pins disk handoffs to native user UUIDs once

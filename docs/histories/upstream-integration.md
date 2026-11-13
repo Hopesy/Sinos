@@ -114,6 +114,31 @@ kept during source integration; formal release preparation targets `4.0.6`.
 - Targeted regressions were reproduced before fixes and rerun after them. The
   complete `v4.0.6` release validation and remote CI checks follow separately.
 
+### Release preflight checkpoint — 2026-11-13
+
+Current TODOs and acceptance gaps are maintained in the [release plan](../exec-plans/active/2026-11-13-release-v4.0.6.md); current compatibility rules are in [the design topic](../design/upstream-compatibility.md). Results below describe this dated checkpoint.
+
+- Release metadata and all five bundled changelog sections target `4.0.6`.
+  `cargo check` regenerated the root package version in Cargo.lock.
+- Desktop build, ESLint, **382 Vitest tests in 64 files**, **72/72 script
+  regressions**, and **39/39 browser scripts** passed. Production dependency
+  auditing reports **0 vulnerabilities**.
+- Locked Cargo check and correctness/suspicious Clippy checks passed; ordinary
+  style warnings remain. Full Rust regression: **753 passed, 29 ignored**.
+- Validation runs serially after memory pressure interrupted the first attempt.
+  Test artifacts stay under `.Sinos-temp/test-artifacts`. Set
+  `GIT_CEILING_DIRECTORIES` to the absolute `.Sinos-temp` path for these runs:
+  otherwise non-repository fixtures inherit this checkout's Git root and ignore
+  rules. The initial 10 fixture-isolation failures were reproduced, and the
+  complete suite passed with the discovery boundary; assertions were unchanged.
+- Host memory pressure interrupted the isolated Windows executable build before
+  the final native protocol check. On 2026-11-13 the user directed native builds,
+  tests and packaging to GitHub Actions and requested removal of local Rust tools
+  and caches. The existing Release quality/platform jobs cover the native protocol
+  checks; their results remain pending, alongside remote five-platform Review,
+  installer download/hash/MSI verification and publication. GitHub login is still
+  required. The project release instructions now record this execution policy.
+
 ## Historical integration — 2026-10-31
 
 Merged Coffee-CLI `main` through
