@@ -96,7 +96,7 @@ try{
  const tracking=page.getByRole('switch');await tracking.click();assert.equal(await tracking.getAttribute('aria-checked'),'false');assert.equal(await rows.first().isVisible(),false,'disabling Git tracking hides the file list');await tracking.click();await rows.first().waitFor();assert.equal(await tracking.getAttribute('aria-checked'),'true','tracking can resume from the retained Sinos control');
  await tracking.click();const pausedGitReads=await page.evaluate(()=>window.calls.gitReads);
  await page.evaluate(()=>{window.holdPreview=true;window.previewExplorerFile()});await page.waitForFunction(()=>window.resolvePreview);
- await page.getByText('加载中…',{exact:true}).waitFor();
+ await page.locator('.diff-body').getByText('加载中…',{exact:true}).waitFor();
  await page.evaluate(()=>{window.holdPreview=false;window.resolvePreview()});
  await page.waitForFunction(()=>document.querySelector('.diff-body')?.textContent.includes('const before = 1'));
  assert.match(await page.locator('.diff-body').textContent(),/const before = 1/,'Explorer files remain readable while Git tracking is off');
