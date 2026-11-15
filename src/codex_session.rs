@@ -296,7 +296,6 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn stop_closes_launcher_descendants_with_busy_stdin() {
-        use std::os::windows::process::CommandExt;
         use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
         use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
         struct OwnedFixture(HANDLE);
@@ -304,14 +303,7 @@ mod tests {
             fn drop(&mut self) { unsafe { let _ = TerminateProcess(self.0, 0); let _ = CloseHandle(self.0); } }
         }
         let directory = tempfile::tempdir().unwrap();
-        let script = directory.path().join("child.ps1");
-        std::fs::write(&script, "[Console]::WriteLine($PID); [Console]::ReadLine() | Out-Null").unwrap();
-        let launcher = directory.path().join("launcher.cmd");
-        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-        std::fs::write(&launcher, format!("@echo off\r\n\"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"\r\n", powershell.display(), script.display())).unwrap();
-        let mut command = Command::new("cmd.exe");
-        command.args(["/d", "/c"]).arg(&launcher).creation_flags(0x08000000)
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut command = crate::session_start::process_fixture::launcher(directory.path());
         let (mut child, job) = crate::terminal::windows_job::spawn_session(&mut command).unwrap();
         let stdout = child.stdout.take().unwrap();
         let input = child.stdin.take().unwrap();
@@ -324,11 +316,11 @@ mod tests {
         let (pid_tx, pid_rx) = mpsc::channel();
         let reader = std::thread::spawn(move || {
             let mut lines = BufReader::new(stdout).lines();
-            let _ = pid_tx.send(lines.next().unwrap().unwrap().trim().parse::<u32>().unwrap());
+            let _ = pid_tx.send(crate::session_start::process_fixture::ready_pid(&mut lines));
             for _line in lines {}
             drop(reading);
         });
-        let pid = pid_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let pid = pid_rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|error| { session.stop(); panic!("Child fixture readiness failed: {error}") });
         let descendant = OwnedFixture(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid).unwrap() });
         let mut unrelated_command = Command::new("cmd.exe");
         unrelated_command.args(["/d", "/c", "pause"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());

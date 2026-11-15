@@ -46,7 +46,7 @@ export const commands={
  async gitProjectStatus(){return {repo_root:'D:/test',branch:'feature/sidebar',github:'ok',pull_request:{number:42,url:'https://github.com/example/repo/pull/42',state:'open',ci:'success'}}},
  async gitCommitFiles(root,hash){window.calls.commits++;return [entry('src/shared.tsx',2,1)]},
  async gitInit(){window.calls.init++},
- async readTextFile(path){window.calls.fileReads++;return 'const before = 1;\\nconst after = '+(window.previewAfter??3)+';\\n'+Array.from({length:180},(_,i)=>'const line_'+i+' = '+i+';').join('\\n')},
+ async readTextFile(path){window.calls.fileReads++;if(window.holdPreview)await new Promise(resolve=>window.resolvePreview=resolve);return 'const before = 1;\\nconst after = '+(window.previewAfter??3)+';\\n'+Array.from({length:180},(_,i)=>'const line_'+i+' = '+i+';').join('\\n')},
  async gitShowFile(root,spec){window.calls.fileReads++;return spec.includes('~1')?'const before = 1;\\n':'const before = 1;\\nconst after = 2;\\n'},
  async openUrl(url){window.openedUrl=url}
 };
@@ -95,7 +95,10 @@ try{
  console.log('OK: launchpad with a remembered directory stays idle; real loading, tool launch and close recover correctly');
  const tracking=page.getByRole('switch');await tracking.click();assert.equal(await tracking.getAttribute('aria-checked'),'false');assert.equal(await rows.first().isVisible(),false,'disabling Git tracking hides the file list');await tracking.click();await rows.first().waitFor();assert.equal(await tracking.getAttribute('aria-checked'),'true','tracking can resume from the retained Sinos control');
  await tracking.click();const pausedGitReads=await page.evaluate(()=>window.calls.gitReads);
- await page.evaluate(()=>window.previewExplorerFile());await page.locator('.diff-body').waitFor();
+ await page.evaluate(()=>{window.holdPreview=true;window.previewExplorerFile()});await page.waitForFunction(()=>window.resolvePreview);
+ await page.getByText('加载中…',{exact:true}).waitFor();
+ await page.evaluate(()=>{window.holdPreview=false;window.resolvePreview()});
+ await page.waitForFunction(()=>document.querySelector('.diff-body')?.textContent.includes('const before = 1'));
  assert.match(await page.locator('.diff-body').textContent(),/const before = 1/,'Explorer files remain readable while Git tracking is off');
  assert.equal(await page.getByRole('tab',{name:'文件对比'}).getAttribute('aria-selected'),'true');
  await page.evaluate(()=>{window.previewAfter=11;window.dispatchEvent(new CustomEvent('fs-refresh',{detail:{dirPath:'D:/test'}}))});

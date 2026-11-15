@@ -40,6 +40,42 @@ impl Drop for PendingStart {
     fn drop(&mut self) { self.starts.lock().unwrap().pending.remove(&self.key); }
 }
 
+#[cfg(all(test, windows))]
+pub(crate) mod process_fixture {
+    use std::{io::Write, os::windows::process::CommandExt, path::Path, process::{Command, Stdio}};
+
+    /// Use the already-built test executable as the .cmd launcher's descendant.
+    /// This exercises real Job Objects without three concurrent PowerShell cold starts.
+    pub fn launcher(directory: &Path) -> Command {
+        let launcher = directory.join("launcher.cmd");
+        std::fs::write(&launcher, format!(
+            "@echo off\r\n\"{}\" --exact session_start::process_fixture::child_process --ignored --nocapture\r\n",
+            std::env::current_exe().unwrap().display(),
+        )).unwrap();
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c"]).arg(launcher).env("SINOS_PROCESS_FIXTURE", "1")
+            .creation_flags(0x08000000).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        command
+    }
+
+    pub fn ready_pid(lines: &mut impl Iterator<Item = std::io::Result<String>>) -> u32 {
+        for line in lines {
+            let line = line.unwrap();
+            if let Some(pid) = line.trim().strip_prefix("SINOS_FIXTURE_PID=") { return pid.parse().unwrap(); }
+        }
+        panic!("Native child fixture exited before readiness");
+    }
+
+    #[test]
+    #[ignore = "internal child-process fixture, invoked only by Job Object regressions"]
+    fn child_process() {
+        if std::env::var("SINOS_PROCESS_FIXTURE").as_deref() != Ok("1") { return; }
+        println!("\nSINOS_FIXTURE_PID={}", std::process::id());
+        std::io::stdout().flush().unwrap();
+        std::io::stdin().read_line(&mut String::new()).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
