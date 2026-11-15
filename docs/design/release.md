@@ -44,6 +44,7 @@
 
 - 安装包先上传到 Release 草稿，等所有必要 CI 作业结束并确认成功，再公开发布。用户授权发布版本包含最终公开草稿步骤，不重复请求确认；普通开发或文档修改不自动授权发版。
 - 十个安装包必须齐全：Windows x64 的 EXE／MSI，macOS ARM64／Intel 的 DMG，Linux x64／ARM64 各自的 DEB／RPM／AppImage。核对版本、平台命名、上传完成状态和非空文件，实际下载全部安装包，计算 SHA-256 并与 GitHub 资产摘要逐一比较；Windows MSI 还需核对包内 ProductVersion。
+- Windows 升级验收补充：在隔离环境验证上一公开版到候选版的 MSI 升级，核对安装退出码、系统登记、实际 EXE 版本与新 `LocalPackage`。若出现 1714/1612，先检查旧缓存和 `InstallSource`；从对应已发布版本取回原包，核对摘要、ProductCode 和 PackageCode 后，使用 Windows Installer 自身的修复流程恢复缓存，再重试升级。详细日志放 `.Sinos-temp/`。
 - 已推送标签的候选版本若查出真实缺陷，停止出包并保持未公开；修复后使用新版本和新标签，不改写已推送标签，不公开已知有问题的候选包。
 
 ### 更新日志（每次发布必做）

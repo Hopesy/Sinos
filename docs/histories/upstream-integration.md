@@ -1,5 +1,23 @@
 # Upstream integration record
 
+## Windows MSI upgrade recovery — 2026-11-15
+
+- The user downloaded the correct 4.0.7 MSI, but Windows Installer requested
+  the old 4.0.5 package during removal. Application events recorded error 1714
+  with system error 1612, followed by upgrade exit status 1603.
+- Read-only inspection confirmed the registered 4.0.5 `LocalPackage` was absent,
+  and its original Downloads source was also missing. The public release endpoint,
+  new MSI metadata and new EXE metadata all correctly reported 4.0.7. The cause
+  of the missing Windows Installer cache has not been established.
+- Retrieved the original published 4.0.5 MSI and verified its GitHub SHA-256,
+  ProductCode and PackageCode against the installed product. Windows Installer
+  `/fv` restored the cache, then `/i` upgraded with the verified 4.0.7 MSI; both
+  operations exited 0, with restart suppressed and no manual registry edits.
+- Verified installed DisplayVersion and executable ProductVersion both equal
+  4.0.7, the new cached MSI exists, and the old product registration is gone.
+  Evidence: `.Sinos-temp/release-v4.0.7/install-investigation/`, including MSI
+  logs, product/package identities, event records and installed verification.
+
 ## Release v4.0.7 published — 2026-11-15
 
 - Published [Sinos CLI v4.0.7](https://github.com/Hopesy/Sinos/releases/tag/v4.0.7) from `eb337eb40dbe2f0a9c9f94d5a494365ed797642f`.
