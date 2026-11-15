@@ -1,5 +1,21 @@
 # Upstream integration record
 
+## Release v4.0.7 published — 2026-11-15
+
+- Published [Sinos CLI v4.0.7](https://github.com/Hopesy/Sinos/releases/tag/v4.0.7) from `eb337eb40dbe2f0a9c9f94d5a494365ed797642f`.
+  The actual release SHA passed [Review](https://github.com/Hopesy/Sinos/actions/runs/43692195501),
+  [Release](https://github.com/Hopesy/Sinos/actions/runs/43692198149) and Android CI.
+- Local final build/lint, 386 Vitest tests, 74 unit scripts and all 40 browser
+  scripts passed; the final CI browser runner passed 40/40 in one complete run.
+  Five-platform Rust checks/tests and all final-binary protocol checks passed.
+- Downloaded all ten installers and matched every GitHub SHA-256. Read the Windows
+  MSI ProductVersion as 4.0.7. Published the verified draft and confirmed latest,
+  all ten assets and the exact five-language bundled release body.
+- Preserved the unpublished v4.0.6 tag. The desktop overlay observation remains
+  open for reproduction; the branding cleanup carries no claimed root-cause fix.
+  Evidence: `.Sinos-temp/release-v4.0.7/`; the completed plan records live-account
+  and device coverage limits alongside the archived process evidence.
+
 ## Release v4.0.7 preparation — 2026-11-15
 
 - Renewed publication authorization covers the complete delivery since `v4.0.5`:
@@ -143,7 +159,7 @@ kept during source integration; formal release preparation targets `4.0.6`.
 
 ### Release preflight checkpoint — 2026-11-13
 
-Current TODOs and acceptance gaps are maintained in the [release plan](../exec-plans/active/2026-11-13-release-v4.0.6.md); current compatibility rules are in [the design topic](../design/upstream-compatibility.md). Results below describe this dated checkpoint.
+Current TODOs and acceptance gaps are maintained in the [release plan](../exec-plans/completed/2026-11-13-release-v4.0.7.md); current compatibility rules are in [the design topic](../design/upstream-compatibility.md). Results below describe this dated checkpoint.
 
 - Release metadata and all five bundled changelog sections target `4.0.6`.
   `cargo check` regenerated the root package version in Cargo.lock.

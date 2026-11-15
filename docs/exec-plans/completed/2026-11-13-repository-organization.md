@@ -7,7 +7,7 @@
 - 已验证范围：`b7655a10` 之上的目录/文档/图标源路径/文档回归变更；Lint、382 项 Vitest（64 文件）、73/73 统一脚本通过。六份旧正文及完整发布/开发规则均核验承接，真实图标生成器和导航脚本已运行。
 - 证据：`.Sinos-temp/harness-validation/` 的 lint/frontend 日志、`entrypoint-results.json`、`content-transfer.json`；阶段结论见[整理 history](../../histories/repository-organization.md)。
 - 待观察：项目 hook 已注册，stdin 合约八场景与去重通过；实际宿主 SessionStart 注入需在下一次新会话、恢复、清空或压缩事件确认。
-- 下一动作：按用户当前指示接续[v4.0.6 发布计划](../active/2026-11-13-release-v4.0.6.md)，重新核对登录与 Git 状态。整理验收时工作区尚未提交；后续提交状态以活动发布计划为准。
+- 后续交付：原 v4.0.6 发布目标已接续为 [v4.0.7 发布验收](2026-11-13-release-v4.0.7.md)，于 11-15 完成正式发布。整理验收时工作区尚未提交；后续提交、CI 与产物核验见该记录。
 
 ## 目标与依赖
 
