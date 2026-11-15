@@ -8,7 +8,7 @@
 - 模块与数据流见[架构总览](docs/ARCHITECTURE.md)；按任务读取其链接的 `docs/design/` 专题。
 - **代码修改、自检及 review 必须遵守[开发与兼容规则](docs/design/development.md)**，包含剪贴板、Tauri、安装脚本和 hook 的现行硬规则。
 - **code-review 或发布必须读取[完整发布与验证规则](docs/design/release.md)**，覆盖整批改动、统一测试入口、五平台 CI、版本/提交/tag、草稿、十个安装包及五语言日志核验。质量门禁保持完整。
-- 当前未完成交付见 [v4.0.6 发布计划](docs/exec-plans/active/2026-11-13-release-v4.0.6.md)。本轮目录/文档整理与正式发布分别验收。
+- 当前未完成交付见 [v4.0.7 发布计划](docs/exec-plans/active/2026-11-13-release-v4.0.6.md)，沿用 v4.0.6 的接续记录。本轮目录/文档整理与正式发布分别验收。
 
 ## 用户可见文案
 

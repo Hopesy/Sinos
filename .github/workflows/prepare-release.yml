@@ -1,0 +1,56 @@
+name: Prepare release lockfile
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (without v)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set candidate version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          version = os.environ['RELEASE_VERSION']
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+              raise SystemExit('Expected a stable SemVer version')
+          manifest = pathlib.Path('Cargo.toml')
+          source, count = re.subn(r'(?m)^(version = ")[^"]+(".*)$', lambda match: match[1] + version + match[2], manifest.read_text(), count=1)
+          if count != 1:
+              raise SystemExit('Missing package version')
+          manifest.write_text(source)
+          config = pathlib.Path('tauri.conf.json')
+          data = json.loads(config.read_text())
+          data['version'] = version
+          config.write_text(json.dumps(data, indent=2) + '\n')
+          pathlib.Path('release-source.json').write_text(json.dumps({'version': version, 'sha': os.environ['GITHUB_SHA']}) + '\n')
+          PY
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev libdbus-1-dev librsvg2-dev libasound2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: review-ubuntu-22.04
+      - name: Generate lockfile with Cargo
+        run: cargo check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-lockfile-${{ inputs.version }}
+          path: |
+            Cargo.lock
+            release-source.json
+          if-no-files-found: error

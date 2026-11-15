@@ -28,6 +28,7 @@
    - `Cargo.toml` → `[package].version`
    - `tauri.conf.json` → `version`
    - `Cargo.lock` → 项目自身的 package version；在远程 Rust 环境运行不带 `--locked` 的 `cargo check` 自动同步，将生成的锁文件纳入 release commit，再执行锁定检查，不手改锁文件。
+   - 可手动运行 `Prepare release lockfile` 工作流并传入目标版本；下载其 `Cargo.lock` 与 `release-source.json`，核对源 SHA、版本和依赖差异后纳入本地 release commit。
 2. **完整验证（本地前端 + 远程原生）** — 本地执行前端统一入口；Rust 检查、测试、原生协议回归与安装包构建由 GitHub Actions 执行。推送后核对实际发布提交的五平台 Review 与 Release 结果，全部成功后才能公开发布。
 3. **Conventional Commit**：
    - 功能/修复 commit 用 `feat(area):` / `fix(area):`
