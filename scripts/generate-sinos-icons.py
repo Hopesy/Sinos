@@ -11,6 +11,8 @@ BRANDING = ROOT / "icons" / "branding"
 ICONS = ROOT / "icons"
 PUBLIC = ROOT / "src-ui" / "public"
 UI_ASSETS = ROOT / "src-ui" / "src" / "assets"
+WEB = ROOT / "Web-Home"
+ICO_SIZES = [(size, size) for size in (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)]
 
 
 def copy_branding_assets() -> None:
@@ -39,8 +41,6 @@ def generate_app_icons() -> None:
         "256x256.png": 256,
         "512x512.png": 512,
         "icon.png": 512,
-        "icon-source-unix.png": 1024,
-        "icon-source-windows.png": 1024,
     }
     for name, size in sizes.items():
         save_png(source, size, ICONS / name)
@@ -48,7 +48,7 @@ def generate_app_icons() -> None:
     source.save(
         ICONS / "icon.ico",
         format="ICO",
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+        sizes=ICO_SIZES,
     )
     source.save(ICONS / "icon.icns", format="ICNS")
 
@@ -64,6 +64,16 @@ def copy_web_assets() -> None:
     shutil.copy2(SOURCE / "sinos-icon-dark.png", PUBLIC / "sinos-icon-dark.png")
     shutil.copy2(SOURCE / "sinos-wordmark.svg", PUBLIC / "sinos-wordmark.svg")
     shutil.copy2(SOURCE / "sinos-wordmark-dark.png", PUBLIC / "sinos-wordmark-dark.png")
+    save_png(Image.open(SOURCE / "sinos-icon.png").convert("RGBA"), 256, PUBLIC / "remote-icon.png")
+
+    web_icons = WEB / "icons"
+    web_icons.mkdir(parents=True, exist_ok=True)
+    for target in (WEB / "favicon.svg", web_icons / "favicon.svg", web_icons / "sinos-icon.svg"):
+        shutil.copy2(SOURCE / "sinos-icon.svg", target)
+    shutil.copy2(SOURCE / "sinos-wordmark.svg", web_icons / "sinos-wordmark.svg")
+    Image.open(SOURCE / "sinos-icon.png").convert("RGBA").save(
+        web_icons / "icon.ico", format="ICO", sizes=[(size, size) for size in (16, 32, 48, 64, 128)]
+    )
 
 
 copy_branding_assets()

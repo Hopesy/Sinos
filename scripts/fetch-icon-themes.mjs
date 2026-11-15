@@ -6,7 +6,7 @@
 // (fluent has no language icons → borrows Material language glyphs).
 //
 // Covered themes: material, vscode-icons, catppuccin-mocha, devicon, fluent, symbols.
-// outline + coffee live in generate-icon-themes.mjs (self-authored art).
+// Sinos lives in generate-icon-themes.mjs; outline keeps its checked-in artwork.
 //
 // `devicon` theme id is retained for localStorage compatibility but now
 // ships Phosphor Icons `light` variants (pure line, fill="currentColor").
@@ -245,5 +245,5 @@ async function writeTheme(name, config) {
   for (const [name, config] of Object.entries(SOURCES)) {
     await writeTheme(name, config);
   }
-  console.log('\nDone. Run generate-icon-themes.mjs next for self-authored themes (coffee).');
+  console.log('\nDone. Run generate-icon-themes.mjs next for the Sinos theme.');
 })();

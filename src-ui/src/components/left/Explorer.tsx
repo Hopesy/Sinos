@@ -5,14 +5,14 @@ import { ChannelConnectionSummary } from '../agent/AgentPages';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppState } from '../../store/app-state';
-import type { IconTheme, ToolType } from '../../store/app-state';
+import type { ToolType } from '../../store/app-state';
 import { useT } from '../../i18n/useT';
 import { isMaskTintTheme } from '../../lib/personalization';
 import { ScrollPanel } from '../common/ScrollPanel';
 import { bindAutoHideScrollbar } from '../../lib/auto-hide-scrollbar';
 import { clipboardWrite } from '../../lib/clipboard';
 import { beginExplorerDrag } from '../../lib/explorer-drag';
-import { getFileIconSrc } from '../../lib/file-icons';
+import { getFileIconSrc, getIconPath } from '../../lib/file-icons';
 import { useFileStats, useDirtyDirs } from '../../lib/git-status';
 import { refreshHistory } from '../../lib/history-cache';
 import { commands, onSelfUpdateProgress } from '../../tauri';
@@ -326,14 +326,10 @@ function isImageFile(name: string): boolean {
 type ImageOpenHandler = (entry: DirEntryInfo, siblings: DirEntryInfo[], workspaceRoot: string) => void;
 
 // ─── Icon Themes ──────────────────────────────────────────────────────────────
-// Every theme ships a complete 19-SVG set under /icons/themes/<id>/.
+// Every theme ships a complete 19-SVG set, resolved by lib/file-icons.
 // No root-level fallback: adding a theme = dropping a new folder + listing it
 // in ICON_ART_THEMES. Non-theme UI assets (CLI tool logos, terminal icons,
 // etc.) live under /icons/tools/ and are unrelated to this subsystem.
-
-function getIconPath(theme: IconTheme, name: string): string {
-  return `/icons/themes/${theme}/${name}`;
-}
 
 /** Renders a theme icon. For mask-tint themes, uses a <span> with mask-image
  *  so `background-color: var(--accent)` paints the silhouette. For color

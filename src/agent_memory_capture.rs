@@ -63,7 +63,7 @@ pub(crate) fn enqueue(app: AppHandle, capture: Capture, cancel: watch::Receiver<
                     .await;
                 if result.is_err() {
                     log::warn!(
-                        "[CoffeeAgent] Background memory capture skipped; existing notes retained"
+                        "[Sinos Agent] Background memory capture skipped; existing notes retained"
                     );
                 }
             }
@@ -78,7 +78,7 @@ pub(crate) fn enqueue(app: AppHandle, capture: Capture, cancel: watch::Receiver<
         })
         .is_err()
     {
-        log::warn!("[CoffeeAgent] Background memory queue full; turn skipped");
+        log::warn!("[Sinos Agent] Background memory queue full; turn skipped");
     }
 }
 

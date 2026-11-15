@@ -62,7 +62,7 @@ export type ThemeShape =
 // Icon theme: visual style for file/folder icons in the explorer.
 // 8 themes, each with genuinely distinct folder silhouette + file icon style.
 // Fetched upstream (6): material, vscode-icons, catppuccin-mocha, devicon, fluent, symbols
-// Self-authored (2): outline (line-frame), coffee (legacy upstream icon theme)
+// App themes (2): outline (line-frame), Sinos (saved ID 'coffee' is retained).
 export type IconTheme =
   | 'outline' | 'material' | 'vscode-icons' | 'catppuccin-mocha'
   | 'devicon' | 'fluent' | 'symbols' | 'coffee';

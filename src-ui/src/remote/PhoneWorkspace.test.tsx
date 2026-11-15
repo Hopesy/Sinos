@@ -3,12 +3,16 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RemoteClient } from './client';
 import { PhoneWorkspace } from './PhoneWorkspace';
+import sinosMark from '../assets/sinos-icon.svg';
 
-const fixtures = vi.hoisted(() => ({ sessions: [{ id: 'old', tool: 'claude', cwd: '/project', running: true, paused: false, cols: 80, rows: 24, output_chunks: 0 }] }));
+const fixtures = vi.hoisted(() => {
+  const session = { id: 'old', tool: 'claude', cwd: '/project', running: true, paused: false, cols: 80, rows: 24, output_chunks: 0 };
+  return { session, sessions: [session] };
+});
 vi.mock('./useConnection', () => ({ useConnection: () => ({ state: { sessions: fixtures.sessions, device_name: 'test' }, tools: [], connection: 'online', refresh: () => {} }) }));
 vi.mock('./ChatView', () => ({ ChatView: ({ session }: { session: { id: string } }) => <input aria-label={`composer-${session.id}`} /> }));
 vi.mock('./LaunchSheet', () => ({ LaunchSheet: ({ onLaunched }: { onLaunched: (id: string) => void }) => <button onClick={() => onLaunched('new')}>Confirm launch</button> }));
-beforeEach(() => { localStorage.clear(); vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })); });
+beforeEach(() => { fixtures.sessions = [fixtures.session]; localStorage.clear(); vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('never sends a new-session prompt into the previously selected terminal while startup is pending', async () => {
   const client = {} as RemoteClient;
@@ -22,4 +26,13 @@ it('never sends a new-session prompt into the previously selected terminal while
   await act(async () => { view.rerender(<PhoneWorkspace client={client} />); });
   expect(screen.getByRole('textbox', { name: 'composer-new' })).toBeTruthy();
   expect(screen.queryByRole('textbox', { name: 'composer-old' })).toBeNull();
+});
+
+it('uses the Sinos mark in the empty workspace and session drawer', () => {
+  fixtures.sessions = [];
+  render(<PhoneWorkspace client={{} as RemoteClient} />);
+  expect(screen.getByRole('img', { name: 'Sinos CLI' }).getAttribute('src')).toBe(sinosMark);
+  fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }));
+  const drawer = screen.getByRole('dialog', { name: '会话列表' });
+  expect(drawer.querySelector('.drawer-brand img')?.getAttribute('src')).toBe(sinosMark);
 });

@@ -3,8 +3,8 @@
  *
  * Loaded right after main.js: it merges the hero copy into I18N_DICT before
  * main.js renders on DOMContentLoaded, and main.js's renderI18N() keeps it in
- * sync on language change via data-i18n. The hero uses an existing workspace
- * screenshot, cropped in CSS to omit the historical title bar.
+ * sync on language change via data-i18n. The hero uses a current Sinos workspace
+ * capture with its product title visible.
  */
 (function () {
   "use strict";

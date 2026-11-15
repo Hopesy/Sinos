@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const USER_AGENT: &str = concat!("CoffeeCLI/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("SinosCLI/", env!("CARGO_PKG_VERSION"));
 const MAX_UNIT_CHARS: usize = 8;
 const TOKENS_UNIT: &str = "Tokens";
 

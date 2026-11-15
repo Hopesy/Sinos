@@ -435,7 +435,7 @@ export function SettingsModal() {
 
                 <div className="settings-section-label">{t('theme.section.icons')}</div>
                 <div className="settings-chip-row settings-icon-row">
-                  {ICON_ART_THEMES.map(({ id, folderSrc }) => (
+                  {ICON_ART_THEMES.map(({ id, label, folderSrc }) => (
                     <button
                       key={id}
                       className={`settings-icon-chip${state.iconTheme === id ? ' active' : ''}`}
@@ -445,10 +445,10 @@ export function SettingsModal() {
                         <span
                           className="settings-icon-mask"
                           style={{ WebkitMaskImage: `url("${folderSrc}")`, maskImage: `url("${folderSrc}")` }}
-                          aria-label={id}
+                          aria-label={label}
                         />
                       ) : (
-                        <img src={folderSrc} alt={id} width="24" height="24" />
+                        <img src={folderSrc} alt={label} width="24" height="24" />
                       )}
                     </button>
                   ))}

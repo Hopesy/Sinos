@@ -248,7 +248,7 @@ export function ChatView({ client, session, online, toolName, onTitle, onCwd, in
     <div className="chat-scroll" ref={scroll} onScroll={() => { const el = scroll.current; if (el) follow(el.scrollHeight - el.scrollTop - el.clientHeight < 90); }}>
       <div className="chat-timeline" ref={timelineElement} onClickCapture={event => { if ((event.target as HTMLElement).closest('summary')) follow(false); }}>
         {read?.has_older && <button className="load-history" onClick={() => void older()} disabled={loadingOlder}>{loadingOlder ? '载入中…' : '查看更早的消息'}</button>}
-        {!timeline.length && !question && <div className="chat-empty"><div className="coffee-glyph">✳</div><h2>{read?.bound ? '从一个想法开始' : '继续你的创作'}</h2><p>{read === null ? '正在同步电脑上的会话…' : read.bound ? '告诉 AI 你想构建什么。' : '正在接续会话，消息和执行进度会显示在这里。'}</p></div>}
+        {!timeline.length && !question && <div className="chat-empty"><div className="chat-empty-glyph">✳</div><h2>{read?.bound ? '从一个想法开始' : '继续你的创作'}</h2><p>{read === null ? '正在同步电脑上的会话…' : read.bound ? '告诉 AI 你想构建什么。' : '正在接续会话，消息和执行进度会显示在这里。'}</p></div>}
         {displayTimeline.map((row, index) => {
           if (row.source === 'tools') return <ConversationToolGroup key={row.id} messages={row.messages} cwd={session.cwd} activeIds={activeTools} active={online && (working || phase === 'unknown')} />;
           if (row.source === 'message' && (row.message.role === 'tool' || row.message.role === 'reasoning')) return <ConversationTool key={`native-${row.message.id}`} message={row.message} cwd={session.cwd} active={online && (working || phase === 'unknown') && activeTools.has(row.message.id)} />;

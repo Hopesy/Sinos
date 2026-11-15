@@ -7,6 +7,7 @@
 
 import type { ThemeColor, ThemeMode, ThemeShape, IconTheme } from '../store/app-state';
 import type { I18nKey } from '../i18n/en';
+import { getIconPath } from './file-icons';
 
 // ─── Theme colours (swatch grid) ─────────────────────────────────────────────
 // One entry per colour family. Every family carries both halves of its palette:
@@ -98,16 +99,13 @@ export function isFrostShape(shape: ThemeShape): boolean {
 }
 
 // ─── File-tree icon art themes ───────────────────────────────────────────────
-export const ICON_ART_THEMES: { id: IconTheme; folderSrc: string }[] = [
-  { id: 'outline',          folderSrc: '/icons/themes/outline/folder-closed.svg'          },
-  { id: 'material',         folderSrc: '/icons/themes/material/folder-closed.svg'         },
-  { id: 'vscode-icons',     folderSrc: '/icons/themes/vscode-icons/folder-closed.svg'     },
-  { id: 'catppuccin-mocha', folderSrc: '/icons/themes/catppuccin-mocha/folder-closed.svg' },
-  { id: 'devicon',          folderSrc: '/icons/themes/devicon/folder-closed.svg'          },
-  { id: 'fluent',           folderSrc: '/icons/themes/fluent/folder-closed.svg'           },
-  { id: 'symbols',          folderSrc: '/icons/themes/symbols/folder-closed.svg'          },
-  { id: 'coffee',           folderSrc: '/icons/themes/coffee/folder-closed.svg'           },
+const ICON_ART_IDS: IconTheme[] = [
+  'outline', 'material', 'vscode-icons', 'catppuccin-mocha',
+  'devicon', 'fluent', 'symbols', 'coffee',
 ];
+export const ICON_ART_THEMES = ICON_ART_IDS.map(id => ({
+  id, label: id === 'coffee' ? 'Sinos' : id, folderSrc: getIconPath(id, 'folder-closed.svg'),
+}));
 
 // Themes whose SVGs use fill="currentColor" and should be tinted by the active
 // theme's --accent (rendered via mask-image instead of <img>).

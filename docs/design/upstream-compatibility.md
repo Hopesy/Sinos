@@ -7,6 +7,7 @@ status: accepted
 ## 持续保持的行为
 
 - 对外产品名 Sinos CLI / Sinos Agent，反馈与桌面更新使用 `Hopesy/Sinos`；版权、许可、上游与第三方来源保留。
+- 品牌图片统一来自 `icons/branding/`。桌面 ICO/ICNS/PNG 由 `scripts/generate-sinos-icons.py` 生成，文件主题由 `scripts/generate-icon-themes.mjs` 复用品牌 SVG 生成；已保存的 `coffee` 主题 ID 由 `src-ui/src/lib/file-icons.ts` 映射到 `sinos` 图片目录。旧 Store/iOS/Android 图片目录、旧生成器及 Coffee 演示媒体已清理；新增平台从现行品牌源生成资源。网站预览使用当前 Sinos 界面截图。
 - 密钥、消息 token 和保存的 SSH 密码使用 OS keyring；模型配置对前端暴露 `hasApiKey`。可选空密钥用于支持它的本地服务。
 - 桌面更新仅使用 GitHub Releases；发布产物绑定平台/tag/名称，并核验非空大小与 SHA-256。保留 Linux AppImage 回退和安装脚本双位置一致性。
 - 保留 Cloudflare 移动中继、配对/输入授权、同一 PTY 身份和回放、编辑/图片标签、启动显窗、托盘及通知。历史 coffee 配置目录、数据库键、协议标识和 hook 兼容语义稳定。

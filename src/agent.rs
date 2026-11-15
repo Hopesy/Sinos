@@ -1267,7 +1267,7 @@ async fn run_loop(
             Ok(()) => context = store.context(&guard.conversation)?,
             Err(_) if *cancel.borrow() => return Err("Cancelled".into()),
             Err(_) => {
-                log::warn!("[CoffeeAgent] History summary unavailable; original archive retained");
+                log::warn!("[Sinos Agent] History summary unavailable; original archive retained");
                 context = crate::agent_context::bounded_recent(&context);
             }
         }

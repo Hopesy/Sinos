@@ -1,7 +1,7 @@
 /*
  * Hero split layout + feature showcase.
  * Left: headline, subtitle, install/download CTA. Right: one framed stage
- * that loops the split-view recording of the real app.
+ * showing the current Sinos workspace.
  */
 
 /* ── Hero grid ─────────────────────────────────────────────────────────── */
@@ -571,7 +571,7 @@ html[data-theme='dark'] .clip-frame::before { opacity: 0.45; }
 }
 
 /* Existing workspace screenshot, with the historical title bar outside the viewport. */
-.workspace-preview { aspect-ratio: 1616 / 859; overflow: hidden; }
-.workspace-preview img { display: block; width: 100%; height: auto; margin-top: -3.1%; }
+.workspace-preview { aspect-ratio: 1468 / 707; overflow: hidden; }
+.workspace-preview img { display: block; width: 100%; height: auto; }
 .ft-row.ft-row-text { display: block; padding-block: 28px; }
 .ft-row-text .ft-text { max-width: 760px; margin-inline: auto; }

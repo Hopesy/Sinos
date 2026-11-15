@@ -208,7 +208,7 @@
 
           <h3>遠端終端機</h3>
           <p>點 <span class="ui">終端機</span> 卡片上的 <span class="ui">遠端</span>，可以連線到另一台電腦或伺服器：選 SSH 或 WebSocket，填入 <span class="ui">伺服器位址</span>、連接埠、<span class="ui">使用者名稱</span>、<span class="ui">密碼</span>，點 <span class="ui">連線</span>。最近 10 次連線會顯示成小標籤，點一下就能重新連線。</p>
-          <div class="warn"><b>注意：</b>遠端連線的密碼會以明文儲存在本機（<code>~/.coffee-cli/credentials.json</code>）。公用電腦上請不要儲存重要密碼。</div>
+          <div class="warn"><b>注意：</b>已儲存的遠端連線密碼存放在作業系統認證存放區中。請僅在可信的作業系統帳戶下儲存密碼。</div>
         </section>
 
         <section id="titlebar">
@@ -658,7 +658,7 @@
           <ul>
             <li><strong>Windows：</strong>在「設定 → 應用程式」裡解除安裝 Sinos CLI。解除安裝畫面可以勾選是否同時刪除應用程式資料。</li>
             <li><strong>macOS：</strong>把「應用程式」裡的 Sinos CLI 拖曳到垃圾桶。</li>
-            <li><strong>Linux：</strong>執行 <code>sudo apt remove coffee-cli</code> 或 <code>sudo dnf remove coffee-cli</code>。</li>
+            <li><strong>Linux：</strong>執行 <code>sudo apt remove sinos-cli</code> 或 <code>sudo dnf remove sinos-cli</code>。</li>
           </ul>
           <p>解除安裝 Sinos CLI 不會刪除你安裝的 AI 工具，也不會刪除它們的對話記錄。</p>
         </section>

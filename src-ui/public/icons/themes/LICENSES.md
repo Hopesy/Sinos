@@ -1,7 +1,8 @@
 # Icon Theme Attributions
 
-Coffee CLI ships **8** distinct file-icon themes. Six are fetched verbatim
-from upstream VS Code icon projects; two are self-authored Coffee CLI art.
+Sinos CLI ships **8** distinct file-icon themes. Six use the upstream projects
+listed below; outline retains the upstream application's artwork, and Sinos uses
+the current product mark from `icons/branding/sinos-icon.svg`.
 
 ## Fetched upstream (MIT licence)
 
@@ -24,14 +25,15 @@ Notes:
 
 See `scripts/fetch-icon-themes.mjs` for the complete URL map.
 
-## Self-authored (no third-party assets)
+## Application themes
 
 | Theme     | Style                                                      |
 | --------- | ---------------------------------------------------------- |
-| `outline` | Minimalist line-frame with coloured letter stamps          |
-| `coffee`  | Coffee CLI brand — coffee-cup folder silhouette with steam lines; espresso-tile file stamps in each language's canonical brand hue |
+| `outline` | Minimalist line-frame with coloured letter stamps; original Coffee CLI artwork, attribution retained in NOTICE |
+| `sinos`   | Neutral folders with the Sinos mark and coloured language tiles |
 
-See `scripts/generate-icon-themes.mjs` for the coffee renderer.
+See `scripts/generate-icon-themes.mjs` for the Sinos renderer. The persisted
+theme ID `coffee` resolves to `sinos` artwork so existing preferences remain valid.
 
 ## Attribution basis
 

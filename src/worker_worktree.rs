@@ -244,7 +244,7 @@ fn checked(worktree: &Worktree) -> Result<(), String> {
     let named = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("coffee-"));
     let safe = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
     let shaped = worktree.branch.split_once('/').is_some_and(|(project, rest)| safe(project) && safe(rest));
-    if inside && named && shaped && owned(Path::new(&worktree.root), &worktree.branch) { Ok(()) } else { Err("Not a Coffee worktree".into()) }
+    if inside && named && shaped && owned(Path::new(&worktree.root), &worktree.branch) { Ok(()) } else { Err("Unknown Sinos worktree".into()) }
 }
 
 /// Resolve the branch from Git rather than inferring it from the worktree directory name.

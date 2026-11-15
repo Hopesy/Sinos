@@ -18,7 +18,7 @@ Sinos CLI 是 Tauri 2 桌面工作区：Rust 管理本机 CLI、原生对话、�
 | [`src/voice_input`](../src/voice_input)、`src/usage_*` | 语音采集/服务适配、用量与余额查询 |
 | [`src-ui/android`](../src-ui/android)、[`Web-Home`](../Web-Home) | Android 壳及独立网站/用户文档 |
 | [`install`](../install)、[`.github/workflows`](../.github/workflows) | 安装脚本、五语言日志、Review / Release 与部署入口 |
-| [`icons/branding`](../icons/branding)、[`scripts/generate-sinos-icons.py`](../scripts/generate-sinos-icons.py) | 品牌源素材及图标生成；其他 scripts 维护网页语言和模型价格 |
+| [`icons/branding`](../icons/branding)、[`scripts/generate-sinos-icons.py`](../scripts/generate-sinos-icons.py) | Sinos 品牌源素材及桌面/网站/手机图标生成；`generate-icon-themes.mjs` 复用同一 SVG 生成文件主题。Android 使用 `src-ui/android` 中的 Sinos 矢量资源；其他 scripts 维护网页语言和模型价格 |
 | [`resources`](../resources)、[`licenses`](../licenses)、[`third-party`](../third-party) | 原生运行资源、被嵌入的许可证和第三方来源材料 |
 
 ## 关键数据流

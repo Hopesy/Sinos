@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect x="1" y="1" width="30" height="30" rx="6" fill="#171717" stroke="#777"/>
+  <text x="16" y="16" text-anchor="middle" dominant-baseline="central" font-family="system-ui,-apple-system,sans-serif"
+    font-size="12" font-weight="800" fill="#E0A458">TML</text>
+</svg>

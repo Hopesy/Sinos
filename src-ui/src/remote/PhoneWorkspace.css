@@ -50,7 +50,7 @@ html { font-size: 15px; }
 .tool-body pre { margin:5px 0 12px; padding:9px 10px; background:var(--m-bg); border:0; border-radius:6px; }
 .tool-edit > span,.tool-result > span { font-size:10px; }
 .tool-edit .tool-removed { border-left:2px solid var(--m-danger); }.tool-edit .tool-added { border-left:2px solid var(--m-green); }
-.chat-empty { min-height:240px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:26px 8px; }.coffee-glyph { font-size:34px; color:var(--m-muted); }.chat-empty h2 { font-size:20px; font-weight:500; margin:18px 0 9px; }.chat-empty p { white-space:pre-line; font-size:12px; line-height:1.8; color:var(--m-muted); margin:0 0 12px; }
+.chat-empty { min-height:240px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:26px 8px; }.chat-empty-glyph { font-size:34px; color:var(--m-muted); }.chat-empty h2 { font-size:20px; font-weight:500; margin:18px 0 9px; }.chat-empty p { white-space:pre-line; font-size:12px; line-height:1.8; color:var(--m-muted); margin:0 0 12px; }
 .text-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; background:none; border:0; color:var(--m-muted) !important; font-size:12px; padding:5px 8px; }
 .chat-compose-wrap { flex-shrink:0; display:flex; flex-direction:column; min-height:0; max-height:calc(100% - 40px); padding:0 12px max(7px,var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 .chat-interactions { flex:0 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--m-border) transparent; }.chat-interactions:empty { display:none; }

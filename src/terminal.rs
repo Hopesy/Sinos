@@ -207,9 +207,9 @@ fn ensure_claude_theme_auto() {
     if existing.trim().is_empty() {
         let body = "{\n  \"theme\": \"auto\"\n}\n";
         if let Err(e) = std::fs::write(&path, body) {
-            eprintln!("[Coffee] could not seed claude theme=auto: {}", e);
+            eprintln!("[Sinos CLI] could not seed claude theme=auto: {}", e);
         } else {
-            eprintln!("[Coffee] seeded ~/.claude/settings.json with theme=auto");
+            eprintln!("[Sinos CLI] seeded ~/.claude/settings.json with theme=auto");
         }
         return;
     }
@@ -234,9 +234,9 @@ fn ensure_claude_theme_auto() {
     match serde_json::to_string_pretty(&value) {
         Ok(s) => {
             if let Err(e) = std::fs::write(&path, format!("{}\n", s)) {
-                eprintln!("[Coffee] could not write claude theme=auto: {}", e);
+                eprintln!("[Sinos CLI] could not write claude theme=auto: {}", e);
             } else {
-                eprintln!("[Coffee] added theme=auto to ~/.claude/settings.json");
+                eprintln!("[Sinos CLI] added theme=auto to ~/.claude/settings.json");
             }
         }
         Err(_) => {}

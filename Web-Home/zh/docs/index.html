@@ -208,7 +208,7 @@
 
           <h3>远程终端</h3>
           <p>点 <span class="ui">终端</span> 卡片上的 <span class="ui">远程</span>，可以连接另一台电脑或服务器：选 SSH 或 WebSocket，填 <span class="ui">服务器地址</span>、端口、<span class="ui">用户名</span>、<span class="ui">密码</span>，点 <span class="ui">连接</span>。最近 10 次连接会显示成小标签，点一下就能重连。</p>
-          <div class="warn"><b>注意：</b>远程连接的密码会以明文保存在本机（<code>~/.coffee-cli/credentials.json</code>）。公用电脑上请不要保存重要密码。</div>
+          <div class="warn"><b>注意：</b>已保存的远程连接密码存放在操作系统凭据库中。请仅在可信的操作系统账户下保存密码。</div>
         </section>
 
         <section id="titlebar">
@@ -658,7 +658,7 @@
           <ul>
             <li><strong>Windows：</strong>在「设置 → 应用」里卸载 Sinos CLI。卸载界面可以勾选是否同时删除应用数据。</li>
             <li><strong>macOS：</strong>把「应用程序」里的 Sinos CLI 拖到废纸篓。</li>
-            <li><strong>Linux：</strong>运行 <code>sudo apt remove coffee-cli</code> 或 <code>sudo dnf remove coffee-cli</code>。</li>
+            <li><strong>Linux：</strong>运行 <code>sudo apt remove sinos-cli</code> 或 <code>sudo dnf remove sinos-cli</code>。</li>
           </ul>
           <p>卸载 Sinos CLI 不会删除你装的 AI 工具，也不会删除它们的对话记录。</p>
         </section>

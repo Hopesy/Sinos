@@ -131,7 +131,7 @@
 .phone-workspace .question-choices button { background:var(--m-surface); font-size:13px; }
 .phone-workspace .question-choices button[aria-current='true'] { background:var(--m-info-bg); border-color:var(--m-info); }
 .phone-workspace .question-choices button:active:not(:disabled) { background:var(--m-raised); }
-.phone-workspace .chat-empty .coffee-glyph { color:var(--m-info); background:var(--m-info-bg); width:60px; height:60px; border-radius:18px; display:grid; place-items:center; }
+.phone-workspace .chat-empty .chat-empty-glyph { color:var(--m-info); background:var(--m-info-bg); width:60px; height:60px; border-radius:18px; display:grid; place-items:center; }
 .phone-workspace .chat-empty h2 { font-size:23px; letter-spacing:-.03em; }.phone-workspace .chat-empty p { font-size:13px; }
 .phone-workspace summary:focus-visible,.phone-workspace pre:focus-visible { outline:2px solid var(--m-info); outline-offset:2px; }
 @media(max-width:360px) {

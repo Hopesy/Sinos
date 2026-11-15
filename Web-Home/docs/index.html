@@ -208,7 +208,7 @@
 
           <h3>Remote terminal</h3>
           <p>Click <span class="ui">Remote</span> on the <span class="ui">Terminal</span> card to connect to another computer or server: choose SSH or WebSocket, fill in <span class="ui">Host</span>, port, <span class="ui">Username</span> and <span class="ui">Password</span>, then click <span class="ui">Connect</span>. Your last 10 connections appear as small chips — click one to reconnect.</p>
-          <div class="warn"><b>Note:</b> passwords for remote connections are saved as plain text on this computer (<code>~/.coffee-cli/credentials.json</code>). Don't save important passwords on a shared computer.</div>
+          <div class="warn"><b>Note:</b> saved remote connection passwords are stored in your operating system's credential store. Save passwords only in an operating system account you trust.</div>
         </section>
 
         <section id="titlebar">
@@ -658,7 +658,7 @@
           <ul>
             <li><strong>Windows:</strong> uninstall Sinos CLI from "Settings → Apps". The uninstaller lets you choose whether to delete the app's data too.</li>
             <li><strong>macOS:</strong> drag Sinos CLI from Applications to the Trash.</li>
-            <li><strong>Linux:</strong> run <code>sudo apt remove coffee-cli</code> or <code>sudo dnf remove coffee-cli</code>.</li>
+            <li><strong>Linux:</strong> run <code>sudo apt remove sinos-cli</code> or <code>sudo dnf remove sinos-cli</code>.</li>
           </ul>
           <p>Uninstalling Sinos CLI doesn't remove the AI tools you installed or their conversation history.</p>
         </section>

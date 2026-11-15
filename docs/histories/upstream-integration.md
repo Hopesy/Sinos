@@ -192,6 +192,51 @@ Current TODOs and acceptance gaps are maintained in the [release plan](../exec-p
   after the user's continuation request, a full rerun passed **40/40 scripts**.
   Assertions and timeouts remained unchanged. This local result does not
   identify the earlier Release CI failure; its authenticated logs remain outstanding.
+- Committed and pushed the fix as `d3f4104c7dedb96424d4a2f23fc8c7d4f4f05ccd`
+  after the user explicitly approved the public `Hopesy/Sinos` destination.
+  [Review](https://github.com/Hopesy/Sinos/actions/runs/43399496887) and
+  [Android](https://github.com/Hopesy/Sinos/actions/runs/43399497008) were triggered.
+  Review subsequently failed: frontend's Browser interaction regression tests
+  and Windows' Native regression tests report exit code 1. Public job pages gate
+  detailed logs behind sign-in; normal `gh` authentication remains unavailable,
+  so the failing assertions and root causes are still unconfirmed. Android's
+  result remains pending verification. The remote `v4.0.6` tag was verified
+  unchanged at `55fc03a8`; no release tag was created and no Release published.
+
+### Retired Coffee brand assets — 2026-11-15
+
+- The user requested removal of remaining Coffee brand images and related entrypoints.
+  Removed unused Windows Store tiles, the old iOS/Android icon trees, duplicate
+  intermediate icon sources and the retired `rebuild-icons.py` pipeline. Its
+  active desktop ICO sizes and website favicon generation now live in the Sinos
+  generator, including all ten Windows sizes from 16 to 256 pixels. Current
+  desktop bundle icons and the active Capacitor Android vector assets remain Sinos.
+- Replaced the coffee-cup/bean file theme with 19 Sinos SVGs generated from the
+  canonical brand mark. The saved `coffee` theme ID resolves through the shared
+  file-icon helper, including Explorer, Changes and settings previews; its visible
+  label is Sinos. The mobile welcome screen and drawer now use the same product mark.
+  The mobile home-screen PNG also contained the old cup; it is now regenerated from
+  the canonical source and checked against the same-size desktop image.
+- Removed seven Coffee screenshots/animations from the website. The homepage uses
+  a capture of the current Sinos frontend with its full title visible; regenerated
+  all ten language homepages. Corrected three-language uninstall commands and the
+  inherited credential-storage description. Runtime log labels, a worktree error
+  and the quota client's User-Agent now use the Sinos name.
+- Compatibility directories, persisted IDs, native protocols, migration detectors,
+  third-party logos, copyright and upstream notices are retained. Brand source and
+  generation rules are documented in the compatibility topic.
+- Validation on the worktree above `d3f4104c`: desktop, phone and Android frontend
+  builds, Capacitor sync and ESLint passed; **386 Vitest tests / 64 files** and
+  **74/74 unified scripts** passed. The brand regression first failed on the old
+  resource path, then passed with saved-theme mapping and real isolated generation.
+  The desktop icon generator was also run in an isolated fixture; all eight bundle
+  files decoded and retired assets were not recreated. Browser checks confirmed
+  the existing theme selection, mobile logos and updated website image, with
+  inspected screenshots. Evidence: `.Sinos-temp/branding-cleanup/`.
+- The original intermittent desktop-overlay report remains under investigation.
+  This cleanup has no Windows Shell setting changes. Native execution of the
+  branding-string edits remains assigned to remote CI. No commit, push, tag or
+  publication was performed in this slice.
 
 ## Historical integration — 2026-10-31
 

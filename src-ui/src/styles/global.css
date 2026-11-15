@@ -61,7 +61,7 @@
 /* Sidebar CJK font, bundled under SIL OFL 1.1; see /fonts/OFL-NotoSansSC.txt.
    Native macOS faces precede it in --font-nav. */
 @font-face {
-    font-family: 'Coffee Navigation CJK';
+    font-family: 'Sinos Navigation CJK';
     src: url('/fonts/noto-sans-sc.woff2') format('woff2');
     font-weight: 100 900;
     font-style: normal;
@@ -222,7 +222,7 @@ textarea,
     --font: var(--font-nav);
     --font-nav: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'PingFang TC', 'Hiragino Sans', 'Hiragino Sans GB', 'Apple SD Gothic Neo',
-        'Coffee Navigation CJK', 'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
+        'Sinos Navigation CJK', 'Microsoft YaHei', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic',
         Helvetica, Arial, sans-serif,
         'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
     --font-serif: 'Lora', ui-serif, Georgia, Cambria, "Times New Roman",
