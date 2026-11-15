@@ -1,5 +1,32 @@
 # Upstream integration record
 
+## Release v4.0.7 preparation — 2026-11-15
+
+- Renewed publication authorization covers the complete delivery since `v4.0.5`:
+  the reviewed native-session/worktree/automation/voice integration, relay ownership
+  fixes and retired branding cleanup. Rechecked the retained lifecycle, credential,
+  update-source and theme-compatibility contracts against the earlier review record.
+- Authenticated CI logs identified a premature Changes preview assertion and
+  Windows child readiness failures during concurrent PowerShell startup. The preview
+  fixture now controls the pending read explicitly and waits for actual file content.
+  The three Windows Job Object regressions share an already-built Rust test child,
+  retaining real launcher descendants, busy stdin, stop deadlines and independent
+  session survival. The loading locator is scoped to the diff panel.
+- Preflight [Review](https://github.com/Hopesy/Sinos/actions/runs/43691022055)
+  passed native check, correctness/suspicious Clippy and tests on all five platforms.
+  Its frontend passed build/lint/unit/audit and 39/40 browser scripts; the loading
+  locator ambiguity was fixed in `098ea40c` and passed locally. Final tagged-SHA
+  Review and Release results remain separate acceptance gates.
+- [Remote Cargo preparation](https://github.com/Hopesy/Sinos/actions/runs/43691047516)
+  ran non-locked `cargo check` on `fe2133da` with version `4.0.7`. Its downloaded
+  lockfile changes only the root package version. No dependencies were upgraded.
+  The source receipt and all release evidence are under `.Sinos-temp/release-v4.0.7/`.
+- Local browser validation passed all 40 scripts across the full runner and four
+  targeted reruns after Windows resource exhaustion. The corrected Changes script
+  passed in the full runner. Assertions and timeouts were retained. Android CI at
+  the preflight SHA also passed. The desktop Coffee overlay report remains under
+  investigation; no causal fix is claimed by the asset cleanup.
+
 ## Source integration — 2026-11-12
 
 Integration target: Coffee-CLI `main` at
