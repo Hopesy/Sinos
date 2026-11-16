@@ -1,6 +1,11 @@
 {
  "source": "models.dev",
  "models": {
+  "chatgpt-image-latest": {
+   "input": 5,
+   "output": 10,
+   "cache_read": 1.25
+  },
   "claude-fable-5": {
    "input": 10,
    "output": 50,
@@ -437,14 +442,7 @@
   },
   "gemini-2.5-computer-use-preview-10-2025": {
    "input": 1.25,
-   "output": 10,
-   "tiers": [
-    {
-     "size": 200000,
-     "input": 2.5,
-     "output": 15
-    }
-   ]
+   "output": 10
   },
   "gemini-2.5-flash": {
    "input": 0.3,
@@ -453,7 +451,7 @@
   },
   "gemini-2.5-flash-image": {
    "input": 0.3,
-   "output": 30,
+   "output": 2.5,
    "cache_read": 0.075
   },
   "gemini-2.5-flash-lite": {
@@ -489,11 +487,11 @@
   },
   "gemini-3-pro-image": {
    "input": 2,
-   "output": 120
+   "output": 12
   },
   "gemini-3.1-flash-image": {
    "input": 0.5,
-   "output": 60
+   "output": 3
   },
   "gemini-3.1-flash-lite": {
    "input": 0.25,
@@ -502,7 +500,7 @@
   },
   "gemini-3.1-flash-lite-image": {
    "input": 0.25,
-   "output": 30
+   "output": 1.5
   },
   "gemini-3.1-flash-lite-preview": {
    "input": 0.25,
@@ -577,6 +575,16 @@
    "output": 10,
    "cache_read": 0.1
   },
+  "gemini-4-carbon": {
+   "input": 2,
+   "output": 10,
+   "cache_read": 0.1
+  },
+  "gemini-4-hydrogen": {
+   "input": 1.5,
+   "output": 7.5,
+   "cache_read": 0.075
+  },
   "gemini-embedding-001": {
    "input": 0.15,
    "output": 0
@@ -611,6 +619,14 @@
      "cache_read": 0.4
     }
    ]
+  },
+  "gemma-4-26b-a4b-it": {
+   "input": 0,
+   "output": 0
+  },
+  "gemma-4-31b-it": {
+   "input": 0,
+   "output": 0
   },
   "glm-4.5": {
    "input": 0.6,
@@ -1107,9 +1123,9 @@
    "cache_read": 1.25,
    "cache_write": 15.625
   },
-  "gpt-image-2": {
+  "gpt-image-1.5": {
    "input": 5,
-   "output": 30,
+   "output": 10,
    "cache_read": 1.25
   },
   "gpt-realtime-2.1": {
@@ -1420,9 +1436,9 @@
    "cache_read": 0.07
   },
   "mistral-large-latest": {
-   "input": 0.5,
-   "output": 1.5,
-   "cache_read": 0.05
+   "input": 0.7,
+   "output": 2.1,
+   "cache_read": 0.07
   },
   "mistral-medium-2505": {
    "input": 0.4,
